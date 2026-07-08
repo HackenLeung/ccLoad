@@ -53,7 +53,8 @@ jobs:
           ENV PORT=8080 \
               SQLITE_PATH=/app/data/ccload.db \
               GIN_MODE=release \
-              TZ=Asia/Shanghai
+              TZ=Asia/Shanghai \
+              CCLOAD_REPO=${{ github.repository }}
 
           HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
               CMD curl -fsS http://localhost:8080/health >/dev/null || exit 1
