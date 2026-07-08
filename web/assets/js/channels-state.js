@@ -18,6 +18,7 @@ let channelsTotalCount = 0;
 let allAvailableModels = [];
 let allAvailableChannelNames = [];
 let batchRefreshResultsByChannelId = new Map();
+let activeSortPresetId = localStorage.getItem('channels.sortPreset.active') || '';
 
 function normalizeSelectedChannelID(id) {
   const numericID = Number(id);

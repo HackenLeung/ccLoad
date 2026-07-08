@@ -110,6 +110,14 @@
                 </div>
               </div>
             </div>
+            <div class="filter-group channel-sort-preset-filter-group">
+              <label class="filter-label" data-i18n="channels.sortPreset">排序方案</label>
+              <div class="channel-sort-preset-control filter-control--compact">
+                <select id="sortPresetSelect" class="filter-select">
+                  <option value="" data-i18n="channels.sortPresetDefault">默认排序</option>
+                </select>
+              </div>
+            </div>
             <div class="channel-filter-summary">
               <div class="filter-info" id="filterInfo"><span id="filteredCount">0</span> / <span id="totalCount">0</span>
                 <span data-i18n="channels.channelCount">个渠道</span>
@@ -1015,6 +1023,14 @@
         <h2 class="modal-title" data-i18n="channels.sortModalTitle">渠道排序</h2>
         <button type="button" class="close-btn" data-action="close-sort-modal">&times;</button>
       </div>
+      <div class="channel-sort-preset-editor">
+        <label class="form-label" for="sortPresetNameInput" data-i18n="channels.sortPresetName">方案名称</label>
+        <div class="channel-sort-preset-name-wrap">
+          <input id="sortPresetNameInput" class="form-input" type="text"
+            data-i18n-placeholder="channels.sortPresetNamePlaceholder" placeholder="填写排序方案名称">
+          <span id="sortPresetEditorHint" class="channel-sort-preset-editor-hint"></span>
+        </div>
+      </div>
       <div class="channel-sort-modal-body">
         <!-- 排序列表容器 -->
         <div id="sortListContainer" class="channel-sort-list">
@@ -1031,6 +1047,11 @@
           <span data-i18n="channels.sortHint">拖动卡片调整顺序 · 保存后相邻优先级相差10</span>
         </div>
         <div class="channel-sort-action-buttons">
+          <button id="saveSortPresetModalBtn" type="button" class="btn btn-secondary"
+            data-action="save-sort-preset-from-modal"
+            data-i18n="channels.saveSortPreset">保存方案</button>
+          <button id="deleteSortPresetModalBtn" type="button" class="btn btn-secondary"
+            data-action="delete-sort-preset-from-modal" data-i18n="channels.deleteSortPreset" disabled>删除方案</button>
           <button type="button" class="btn btn-secondary" data-action="close-sort-modal"
             data-i18n="common.cancel">取消</button>
           <button type="button" class="btn btn-primary" data-action="save-sort-order"

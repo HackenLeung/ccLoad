@@ -3,6 +3,274 @@
 
 let sortChannels = []; // 存储排序中的渠道列表
 let draggedItem = null; // 当前拖拽的元素
+const CHANNEL_SORT_PRESETS_KEY = 'channels.sortPresets';
+const CHANNEL_SORT_PRESET_ACTIVE_KEY = 'channels.sortPreset.active';
+
+function getDefaultSortPresetLabel() {
+  return (window.t && window.t('channels.sortPresetDefault')) || '默认排序';
+}
+
+function normalizeSortPresetId(id) {
+  return String(id || '').trim();
+}
+
+function loadSortPresets() {
+  try {
+    const raw = localStorage.getItem(CHANNEL_SORT_PRESETS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((preset) => ({
+        id: normalizeSortPresetId(preset.id),
+        name: String(preset.name || '').trim(),
+        channelOrder: Array.isArray(preset.channelOrder)
+          ? preset.channelOrder.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+          : []
+      }))
+      .filter((preset) => preset.id && preset.name && preset.channelOrder.length > 0);
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveSortPresets(presets) {
+  localStorage.setItem(CHANNEL_SORT_PRESETS_KEY, JSON.stringify(Array.isArray(presets) ? presets : []));
+}
+
+function buildSortPresetId() {
+  return `preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getActiveSortPreset() {
+  const activeId = normalizeSortPresetId(activeSortPresetId);
+  if (!activeId) return null;
+  return loadSortPresets().find((preset) => preset.id === activeId) || null;
+}
+
+function setActiveSortPreset(id) {
+  activeSortPresetId = normalizeSortPresetId(id);
+  if (activeSortPresetId) {
+    localStorage.setItem(CHANNEL_SORT_PRESET_ACTIVE_KEY, activeSortPresetId);
+  } else {
+    localStorage.removeItem(CHANNEL_SORT_PRESET_ACTIVE_KEY);
+  }
+}
+
+function refreshSortPresetSelect() {
+  const select = document.getElementById('sortPresetSelect');
+
+  const presets = loadSortPresets();
+  const currentValue = normalizeSortPresetId(activeSortPresetId);
+  if (select) {
+    select.innerHTML = '';
+
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = getDefaultSortPresetLabel();
+    select.appendChild(defaultOption);
+
+    presets.forEach((preset) => {
+      const option = document.createElement('option');
+      option.value = preset.id;
+      option.textContent = preset.name;
+      select.appendChild(option);
+    });
+
+    select.value = presets.some((preset) => preset.id === currentValue) ? currentValue : '';
+    if (select.value !== currentValue) {
+      setActiveSortPreset('');
+    }
+  }
+
+  syncSortPresetEditor();
+}
+
+function syncSortPresetEditor() {
+  const preset = getActiveSortPreset();
+  const input = document.getElementById('sortPresetNameInput');
+  if (input) {
+    input.value = preset ? preset.name : '';
+    input.placeholder = preset ? preset.name : ((window.t && window.t('channels.sortPresetNamePlaceholder')) || '填写排序方案名称');
+  }
+
+  const hint = document.getElementById('sortPresetEditorHint');
+  if (hint) {
+    hint.textContent = preset
+      ? window.t('channels.sortPresetUpdateHint')
+      : window.t('channels.sortPresetCreateHint');
+  }
+
+  const saveBtn = document.getElementById('saveSortPresetModalBtn');
+  if (saveBtn) {
+    saveBtn.textContent = preset
+      ? window.t('channels.updateSortPreset')
+      : window.t('channels.createSortPreset');
+    saveBtn.disabled = !preset && !(input && input.value.trim());
+  }
+
+  const deleteBtn = document.getElementById('deleteSortPresetModalBtn');
+  if (deleteBtn) {
+    deleteBtn.disabled = !preset;
+  }
+}
+
+function getChannelIdOrder(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((channel) => Number(channel && channel.id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+}
+
+function applySortPresetOrder(list) {
+  const preset = getActiveSortPreset();
+  if (!preset || !Array.isArray(list) || list.length <= 1) return list;
+
+  const byId = new Map(list.map((channel) => [Number(channel.id), channel]));
+  const usedIds = new Set();
+  const ordered = [];
+
+  preset.channelOrder.forEach((id) => {
+    const numericId = Number(id);
+    if (!byId.has(numericId) || usedIds.has(numericId)) return;
+    ordered.push(byId.get(numericId));
+    usedIds.add(numericId);
+  });
+
+  list.forEach((channel) => {
+    const id = Number(channel && channel.id);
+    if (usedIds.has(id)) return;
+    ordered.push(channel);
+  });
+
+  return ordered;
+}
+
+function buildPriorityUpdatesFromOrder(list) {
+  return (Array.isArray(list) ? list : []).map((channel, index) => ({
+    id: channel.id,
+    priority: (list.length - index) * 10
+  }));
+}
+
+async function applyActiveSortPresetToBackend() {
+  const preset = getActiveSortPreset();
+  if (!preset) return;
+
+  const source = Array.isArray(channels) ? [...channels] : [];
+  const ordered = applySortPresetOrder(source);
+  const updates = buildPriorityUpdatesFromOrder(ordered);
+  if (updates.length === 0) return;
+
+  const select = document.getElementById('sortPresetSelect');
+  if (select) select.disabled = true;
+
+  try {
+    await fetchDataWithAuth('/admin/channels/batch-priority', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ updates })
+    });
+
+    window.showSuccess(window.t('channels.sortPresetApplied'));
+    const currentType = (filters && filters.channelType) ? filters.channelType : 'all';
+    if (typeof loadChannels === 'function') await loadChannels(currentType);
+  } catch (error) {
+    console.error('Apply sort preset failed:', error);
+    window.showError(error.message || window.t('channels.sortPresetApplyFailed'));
+  } finally {
+    if (select) select.disabled = false;
+  }
+}
+
+function getSortPresetEditorName(defaultName = '') {
+  const input = document.getElementById('sortPresetNameInput');
+  if (!input) return String(defaultName || '').trim();
+  return String(input.value || defaultName || '').trim();
+}
+
+function saveSortPresetFromOrder(channelOrder, defaultName = '') {
+  const order = Array.isArray(channelOrder)
+    ? channelOrder.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+    : [];
+  if (order.length === 0) {
+    window.showNotification(window.t('channels.sortPresetNoChannels'), 'warning');
+    return;
+  }
+
+  const name = getSortPresetEditorName(defaultName);
+  if (!name) {
+    window.showNotification(window.t('channels.sortPresetNameRequired'), 'warning');
+    const input = document.getElementById('sortPresetNameInput');
+    if (input) input.focus();
+    return;
+  }
+
+  const presets = loadSortPresets();
+  const activeId = normalizeSortPresetId(activeSortPresetId);
+  let existingIndex = activeId
+    ? presets.findIndex((preset) => preset.id === activeId)
+    : -1;
+  if (existingIndex < 0) {
+    existingIndex = presets.findIndex((preset) => preset.name === name);
+  }
+  const nextPreset = {
+    id: existingIndex >= 0 ? presets[existingIndex].id : buildSortPresetId(),
+    name,
+    channelOrder: order
+  };
+
+  if (existingIndex >= 0) {
+    presets[existingIndex] = nextPreset;
+  } else {
+    presets.push(nextPreset);
+  }
+
+  saveSortPresets(presets);
+  setActiveSortPreset(nextPreset.id);
+  refreshSortPresetSelect();
+  if (typeof filterChannels === 'function') filterChannels();
+  window.showSuccess(window.t('channels.sortPresetSaved'));
+  closeSortModal();
+}
+
+function saveCurrentSortPreset() {
+  const source = Array.isArray(filteredChannels) && filteredChannels.length > 0 ? filteredChannels : channels;
+  saveSortPresetFromOrder(getChannelIdOrder(source));
+}
+
+function saveSortPresetFromModal() {
+  if (sortChannels.length === 0) {
+    window.showNotification(window.t('channels.sortPresetNoChannels'), 'warning');
+    return;
+  }
+  saveSortPresetFromOrder(getChannelIdOrder(sortChannels));
+}
+
+function deleteActiveSortPreset() {
+  const activeId = normalizeSortPresetId(activeSortPresetId);
+  if (!activeId) return;
+  const presets = loadSortPresets();
+  const preset = presets.find((item) => item.id === activeId);
+  if (!preset) return;
+  const message = (window.t && window.t('channels.sortPresetDeleteConfirm', { name: preset.name }))
+    || `删除排序方案 "${preset.name}"?`;
+  if (!window.confirm(message)) return;
+
+  saveSortPresets(presets.filter((item) => item.id !== activeId));
+  setActiveSortPreset('');
+  refreshSortPresetSelect();
+  if (typeof filterChannels === 'function') filterChannels();
+  window.showSuccess(window.t('channels.sortPresetDeleted'));
+}
+
+function updateSortPresetSaveButtonState() {
+  const input = document.getElementById('sortPresetNameInput');
+  const saveBtn = document.getElementById('saveSortPresetModalBtn');
+  if (!input || !saveBtn) return;
+  const preset = getActiveSortPreset();
+  saveBtn.disabled = !preset && !input.value.trim();
+}
 
 // 打开排序模态框
 function showSortModal() {
@@ -17,15 +285,9 @@ function showSortModal() {
     return;
   }
 
-  // 复制渠道列表并按优先级排序(从高到低)
-  sortChannels = [...sourceChannels].sort((a, b) => {
-    // 优先级从高到低
-    if (b.priority !== a.priority) {
-      return b.priority - a.priority;
-    }
-    // 优先级相同时按ID排序
-    return a.id - b.id;
-  });
+  // 复制当前显示顺序；如果已切换排序方案，弹窗中继续基于方案顺序拖拽。
+  sortChannels = [...sourceChannels];
+  syncSortPresetEditor();
 
   // 渲染排序列表
   renderSortList();
@@ -187,13 +449,7 @@ async function saveSortOrder() {
   }
 
   // 计算新的优先级(从高到低,相差10)
-  const updates = sortChannels.map((channel, index) => {
-    const newPriority = (sortChannels.length - index) * 10;
-    return {
-      id: channel.id,
-      priority: newPriority
-    };
-  });
+  const updates = buildPriorityUpdatesFromOrder(sortChannels);
 
   try {
     const result = await fetchDataWithAuth('/admin/channels/batch-priority', {
@@ -219,6 +475,26 @@ document.addEventListener('DOMContentLoaded', function() {
   const sortBtn = document.getElementById('btn_sort');
   if (sortBtn) {
     sortBtn.addEventListener('click', showSortModal);
+  }
+
+  refreshSortPresetSelect();
+
+  const sortPresetSelect = document.getElementById('sortPresetSelect');
+  if (sortPresetSelect) {
+    sortPresetSelect.addEventListener('change', async (event) => {
+      setActiveSortPreset(event.target.value);
+      syncSortPresetEditor();
+      if (normalizeSortPresetId(event.target.value)) {
+        await applyActiveSortPresetToBackend();
+      } else {
+        filterChannels();
+      }
+    });
+  }
+
+  const sortPresetNameInput = document.getElementById('sortPresetNameInput');
+  if (sortPresetNameInput) {
+    sortPresetNameInput.addEventListener('input', updateSortPresetSaveButtonState);
   }
 
   // 点击模态框背景关闭

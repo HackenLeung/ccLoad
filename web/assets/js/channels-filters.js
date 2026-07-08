@@ -55,9 +55,13 @@ function filterChannels() {
     return a.name.localeCompare(b.name);
   });
 
-  filteredChannels = filtered; // 当前页筛选结果（服务端已过滤）
-  renderChannels(filtered);
-  updateFilterInfo(filtered.length, channelsTotalCount);
+  const ordered = (typeof applySortPresetOrder === 'function')
+    ? applySortPresetOrder(filtered)
+    : filtered;
+
+  filteredChannels = ordered; // 当前页筛选结果（服务端已过滤）
+  renderChannels(ordered);
+  updateFilterInfo(ordered.length, channelsTotalCount);
 }
 
 // Update filter info display

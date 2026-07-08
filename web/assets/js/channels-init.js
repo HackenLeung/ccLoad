@@ -156,6 +156,8 @@ function initChannelsPageActions() {
         'close-upstream-detail': () => window.UpstreamDetailModal?.close(),
         'close-sort-modal': () => closeSortModal(),
         'save-sort-order': () => saveSortOrder(),
+        'save-sort-preset-from-modal': () => saveSortPresetFromModal(),
+        'delete-sort-preset-from-modal': () => deleteActiveSortPreset(),
         'toggle-response': (actionTarget) => {
           const responseTarget = actionTarget.dataset.responseTarget;
           if (responseTarget && typeof window.toggleResponse === 'function') {
