@@ -108,8 +108,8 @@
             <button class="www-code-copy" data-i18n="www.common.copy">Copy</button>
           </div>
           <div class="www-code-content">
-            <pre><code>curl -o docker-compose.yml https://raw.githubusercontent.com/caidaoli/ccLoad/master/docker-compose.yml
-curl -o .env https://raw.githubusercontent.com/caidaoli/ccLoad/master/.env.example
+            <pre><code>curl -o docker-compose.yml https://raw.githubusercontent.com/HackenLeung/ccLoad/master/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/HackenLeung/ccLoad/master/.env.example
 
 # Required: set the admin console password
 nano .env
@@ -141,7 +141,7 @@ docker-compose logs -f ccload</code></pre>
             <h3>Space settings</h3>
             <ul class="www-check-list">
               <li>Create a Space and choose Docker as the SDK.</li>
-              <li>Use `ghcr.io/caidaoli/ccload:latest` in `Dockerfile`.</li>
+              <li>Use `ghcr.io/hackenleung/ccload:latest` in `Dockerfile`.</li>
               <li>Add `CCLOAD_PASS` in Secrets; do not put it in public files.</li>
               <li>Create an API access token in the admin console before production access.</li>
             </ul>
@@ -164,7 +164,7 @@ docker-compose logs -f ccload</code></pre>
             <button class="www-code-copy" data-i18n="www.common.copy">Copy</button>
           </div>
           <div class="www-code-content">
-            <pre><code>FROM ghcr.io/caidaoli/ccload:latest
+            <pre><code>FROM ghcr.io/hackenleung/ccload:latest
 
 ENV PORT=7860
 ENV SQLITE_PATH=/tmp/ccload.db
@@ -192,7 +192,7 @@ EXPOSE 7860</code></pre>
                 <button class="www-code-copy" data-i18n="www.common.copy">Copy</button>
               </div>
               <div class="www-code-content">
-                <pre><code>git clone https://github.com/caidaoli/ccLoad.git
+                <pre><code>git clone https://github.com/HackenLeung/ccLoad.git
 cd ccLoad
 
 export CCLOAD_PASS=your_admin_password
@@ -212,7 +212,7 @@ make build
                 <button class="www-code-copy" data-i18n="www.common.copy">Copy</button>
               </div>
               <div class="www-code-content">
-                <pre><code>wget https://github.com/caidaoli/ccLoad/releases/download/v2.x.x/ccload-linux-amd64
+                <pre><code>wget https://github.com/HackenLeung/ccLoad/releases/download/v2.x.x/ccload-linux-amd64
 chmod +x ccload-linux-amd64
 
 export CCLOAD_PASS=your_admin_password

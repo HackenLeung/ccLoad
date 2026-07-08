@@ -68,7 +68,7 @@ jobs:
 
           : "${CCLOAD_HOME:=/app}"
           : "${CCLOAD_BIN:=$CCLOAD_HOME/ccload}"
-          : "${CCLOAD_REPO:=caidaoli/ccLoad}"
+          : "${CCLOAD_REPO:=HackenLeung/ccLoad}"
           : "${CCLOAD_RELEASE_BASE_URL:=https://github.com/${CCLOAD_REPO}/releases/latest/download}"
 
           log() {

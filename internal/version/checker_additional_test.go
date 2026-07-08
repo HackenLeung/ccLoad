@@ -77,7 +77,7 @@ func TestChecker_Check_ErrorsAndSuccess(t *testing.T) {
 		c := &Checker{
 			client: &http.Client{
 				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-					return latestReleaseResp(t, req, http.StatusTooManyRequests, "https://github.com/caidaoli/ccLoad/releases/tag/v1.2.3"), nil
+					return latestReleaseResp(t, req, http.StatusTooManyRequests, "https://github.com/HackenLeung/ccLoad/releases/tag/v1.2.3"), nil
 				}),
 			},
 		}
@@ -91,7 +91,7 @@ func TestChecker_Check_ErrorsAndSuccess(t *testing.T) {
 		c := &Checker{
 			client: &http.Client{
 				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-					return latestReleaseResp(t, req, http.StatusOK, "https://github.com/caidaoli/ccLoad/releases/latest"), nil
+					return latestReleaseResp(t, req, http.StatusOK, "https://github.com/HackenLeung/ccLoad/releases/latest"), nil
 				}),
 			},
 		}
@@ -109,12 +109,12 @@ func TestChecker_Check_ErrorsAndSuccess(t *testing.T) {
 					if req.Header.Get("Accept") == "" || req.Header.Get("User-Agent") == "" {
 						t.Fatalf("expected headers set, got Accept=%q UA=%q", req.Header.Get("Accept"), req.Header.Get("User-Agent"))
 					}
-					return latestReleaseResp(t, req, http.StatusOK, "https://github.com/caidaoli/ccLoad/releases/tag/v1.2.3"), nil
+					return latestReleaseResp(t, req, http.StatusOK, "https://github.com/HackenLeung/ccLoad/releases/tag/v1.2.3"), nil
 				}),
 			},
 		}
 		c.check()
-		if c.latestVersion != "v1.2.3" || c.releaseURL != "https://github.com/caidaoli/ccLoad/releases/tag/v1.2.3" {
+		if c.latestVersion != "v1.2.3" || c.releaseURL != "https://github.com/HackenLeung/ccLoad/releases/tag/v1.2.3" {
 			t.Fatalf("unexpected state: latest=%q url=%q", c.latestVersion, c.releaseURL)
 		}
 		if c.hasUpdate {
@@ -130,12 +130,12 @@ func TestChecker_Check_ErrorsAndSuccess(t *testing.T) {
 		c := &Checker{
 			client: &http.Client{
 				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-					return latestReleaseResp(t, req, http.StatusOK, "https://github.com/caidaoli/ccLoad/releases/tag/v2.0.0"), nil
+					return latestReleaseResp(t, req, http.StatusOK, "https://github.com/HackenLeung/ccLoad/releases/tag/v2.0.0"), nil
 				}),
 			},
 		}
 		c.check()
-		if !c.hasUpdate || c.latestVersion != "v2.0.0" || c.releaseURL != "https://github.com/caidaoli/ccLoad/releases/tag/v2.0.0" {
+		if !c.hasUpdate || c.latestVersion != "v2.0.0" || c.releaseURL != "https://github.com/HackenLeung/ccLoad/releases/tag/v2.0.0" {
 			t.Fatalf("unexpected state: hasUpdate=%v latest=%q url=%q", c.hasUpdate, c.latestVersion, c.releaseURL)
 		}
 	})
@@ -145,7 +145,7 @@ func TestChecker_Check_ErrorsAndSuccess(t *testing.T) {
 		c := &Checker{
 			client: &http.Client{
 				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-					return latestReleaseResp(t, req, http.StatusOK, "https://github.com/caidaoli/ccLoad/releases/tag/v1.9.9"), nil
+					return latestReleaseResp(t, req, http.StatusOK, "https://github.com/HackenLeung/ccLoad/releases/tag/v1.9.9"), nil
 				}),
 			},
 		}
@@ -171,7 +171,7 @@ func TestStartChecker_RunsCheckOnce(t *testing.T) {
 	checker.client = &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			atomic.AddInt32(&calls, 1)
-			resp := latestReleaseResp(t, req, http.StatusOK, "https://github.com/caidaoli/ccLoad/releases/tag/v2.0.0")
+			resp := latestReleaseResp(t, req, http.StatusOK, "https://github.com/HackenLeung/ccLoad/releases/tag/v2.0.0")
 			resp.Body = &signalReadCloser{
 				rc: resp.Body,
 				onClose: func() {

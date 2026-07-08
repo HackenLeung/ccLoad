@@ -229,7 +229,7 @@ func TestMergeResponseBody_DeduplicatesCodexToolCallLifecycle(t *testing.T) {
 func TestMergeResponseBody_DeduplicatesCodexToolCallWhenOutputIndexChanges(t *testing.T) {
 	t.Parallel()
 
-	arguments := `{"projectPath":"/Users/caidaoli/Share/Source/go/ccLoad","query":"models endpoint","maxFiles":12}`
+	arguments := `{"projectPath":"/Users/HackenLeung/Share/Source/go/ccLoad","query":"models endpoint","maxFiles":12}`
 	escapedArguments := strings.ReplaceAll(arguments, `"`, `\"`)
 	raw := strings.Join([]string{
 		`data: {"type":"response.output_item.added","output_index":8,"item":{"id":"fc_1","type":"function_call","status":"in_progress","arguments":"","call_id":"call_1","name":"codegraph_explore"}}`,
@@ -248,7 +248,7 @@ func TestMergeResponseBody_DeduplicatesCodexToolCallWhenOutputIndexChanges(t *te
 	if strings.Count(parts.Tools, "### codegraph_explore") != 1 {
 		t.Fatalf("tool heading should render once, got:\n%s", parts.Tools)
 	}
-	if strings.Count(parts.Tools, `"projectPath": "/Users/caidaoli/Share/Source/go/ccLoad"`) != 1 {
+	if strings.Count(parts.Tools, `"projectPath": "/Users/HackenLeung/Share/Source/go/ccLoad"`) != 1 {
 		t.Fatalf("tool arguments should render once, got:\n%s", parts.Tools)
 	}
 }
@@ -268,7 +268,7 @@ func TestMergeResponseBody_DeduplicatesDocs5ToolCalls(t *testing.T) {
 	if strings.Count(parts.Tools, "### codegraph_explore") != 1 {
 		t.Fatalf("codegraph_explore should render once, got tools:\n%s", parts.Tools)
 	}
-	if strings.Count(parts.Tools, `"projectPath": "/Users/caidaoli/Share/Source/go/ccLoad"`) != 1 {
+	if strings.Count(parts.Tools, `"projectPath": "/Users/HackenLeung/Share/Source/go/ccLoad"`) != 1 {
 		t.Fatalf("codegraph_explore arguments should render once, got tools:\n%s", parts.Tools)
 	}
 }

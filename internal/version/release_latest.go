@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	githubLatestReleaseURL = "https://github.com/caidaoli/ccLoad/releases/latest"
+	githubLatestReleaseURL = "https://github.com/HackenLeung/ccLoad/releases/latest"
 	releaseTagPathMarker   = "/releases/tag/"
 )
 

@@ -94,7 +94,7 @@
           <div class="www-footer-bottom">
             <p>
               © 2025 ccLoad ·
-              <a href="https://github.com/caidaoli/ccLoad/blob/master/LICENSE" target="_blank" rel="noopener" style="color: inherit; text-decoration: underline;">
+              <a href="https://github.com/HackenLeung/ccLoad/blob/master/LICENSE" target="_blank" rel="noopener" style="color: inherit; text-decoration: underline;">
                 MIT License
               </a>
             </p>

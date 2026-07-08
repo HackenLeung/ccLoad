@@ -41,7 +41,7 @@
         <a href="#quickstart" class="www-btn www-btn-primary" data-i18n="www.home.hero.getStarted">
           Get Started
         </a>
-        <a href="https://github.com/caidaoli/ccLoad" target="_blank" rel="noopener" class="www-btn www-btn-secondary">
+        <a href="https://github.com/HackenLeung/ccLoad" target="_blank" rel="noopener" class="www-btn www-btn-secondary">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
           </svg>
@@ -277,8 +277,8 @@
             </div>
             <div class="www-code-content">
               <pre><code># Download docker-compose.yml and the .env template
-curl -o docker-compose.yml https://raw.githubusercontent.com/caidaoli/ccLoad/master/docker-compose.yml
-curl -o .env https://raw.githubusercontent.com/caidaoli/ccLoad/master/.env.example
+curl -o docker-compose.yml https://raw.githubusercontent.com/HackenLeung/ccLoad/master/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/HackenLeung/ccLoad/master/.env.example
 
 # Edit .env and set the admin password
 nano .env  # set CCLOAD_PASS=your_password
@@ -303,7 +303,7 @@ docker-compose up -d
               <pre><code>1. Sign in to Hugging Face: https://huggingface.co
 2. Create a new Space: New Space -> Docker -> SDK: Docker
 3. Create Dockerfile:
-   FROM ghcr.io/caidaoli/ccload:latest
+   FROM ghcr.io/hackenleung/ccload:latest
 4. Configure environment variables (Settings -> Variables):
    CCLOAD_PASS=your_admin_password
 5. Wait for the build to finish (about 2-3 minutes)
@@ -321,7 +321,7 @@ docker-compose up -d
             </div>
             <div class="www-code-content">
               <pre><code># Clone the repository
-git clone https://github.com/caidaoli/ccLoad.git
+git clone https://github.com/HackenLeung/ccLoad.git
 cd ccLoad
 
 # Set environment variables
@@ -347,10 +347,10 @@ make build
             </div>
             <div class="www-code-content">
               <pre><code># Download the binary for your platform from GitHub Releases
-# https://github.com/caidaoli/ccLoad/releases
+# https://github.com/HackenLeung/ccLoad/releases
 
 # Linux/macOS example
-wget https://github.com/caidaoli/ccLoad/releases/download/v2.x.x/ccload-linux-amd64
+wget https://github.com/HackenLeung/ccLoad/releases/download/v2.x.x/ccload-linux-amd64
 chmod +x ccload-linux-amd64
 
 # Set environment variables and run

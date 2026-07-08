@@ -44,20 +44,20 @@ func TestReleaseAssetNameAndDownloadURL(t *testing.T) {
 
 	release := GitHubRelease{
 		TagName: "v2.44.0",
-		HTMLURL: "https://github.com/caidaoli/ccLoad/releases/tag/v2.44.0",
+		HTMLURL: "https://github.com/HackenLeung/ccLoad/releases/tag/v2.44.0",
 	}
 	assetURL, err := releaseDownloadURL(release, name)
 	if err != nil {
 		t.Fatalf("releaseDownloadURL(asset): %v", err)
 	}
-	if assetURL != "https://github.com/caidaoli/ccLoad/releases/download/v2.44.0/ccload-linux-amd64" {
+	if assetURL != "https://github.com/HackenLeung/ccLoad/releases/download/v2.44.0/ccload-linux-amd64" {
 		t.Fatalf("asset download URL = %q", assetURL)
 	}
 	checksumURL, err := releaseDownloadURL(release, "checksums.txt")
 	if err != nil {
 		t.Fatalf("releaseDownloadURL(checksums): %v", err)
 	}
-	if checksumURL != "https://github.com/caidaoli/ccLoad/releases/download/v2.44.0/checksums.txt" {
+	if checksumURL != "https://github.com/HackenLeung/ccLoad/releases/download/v2.44.0/checksums.txt" {
 		t.Fatalf("checksum download URL = %q", checksumURL)
 	}
 
@@ -74,7 +74,7 @@ func TestFetchLatestReleaseReadsUnfollowedRedirectLocation(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		http.Redirect(w, r, "/caidaoli/ccLoad/releases/tag/v2.44.0", http.StatusFound)
+		http.Redirect(w, r, "/HackenLeung/ccLoad/releases/tag/v2.44.0", http.StatusFound)
 	}))
 	defer server.Close()
 
@@ -90,7 +90,7 @@ func TestFetchLatestReleaseReadsUnfollowedRedirectLocation(t *testing.T) {
 	if release.TagName != "v2.44.0" {
 		t.Fatalf("TagName = %q", release.TagName)
 	}
-	wantURL := server.URL + "/caidaoli/ccLoad/releases/tag/v2.44.0"
+	wantURL := server.URL + "/HackenLeung/ccLoad/releases/tag/v2.44.0"
 	if release.HTMLURL != wantURL {
 		t.Fatalf("HTMLURL = %q, want %q", release.HTMLURL, wantURL)
 	}
@@ -139,13 +139,13 @@ func TestUpdateOnceReplacesPendingVersionWithNewerDownloadedRelease(t *testing.T
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/latest":
-			http.Redirect(w, r, "/caidaoli/ccLoad/releases/tag/"+latest, http.StatusFound)
-		case "/caidaoli/ccLoad/releases/tag/v1.0.1", "/caidaoli/ccLoad/releases/tag/v1.0.2":
+			http.Redirect(w, r, "/HackenLeung/ccLoad/releases/tag/"+latest, http.StatusFound)
+		case "/HackenLeung/ccLoad/releases/tag/v1.0.1", "/HackenLeung/ccLoad/releases/tag/v1.0.2":
 			_, _ = fmt.Fprintf(w, "<html><title>%s</title></html>", latest)
-		case "/caidaoli/ccLoad/releases/download/v1.0.1/ccload-linux-amd64", "/caidaoli/ccLoad/releases/download/v1.0.2/ccload-linux-amd64":
+		case "/HackenLeung/ccLoad/releases/download/v1.0.1/ccload-linux-amd64", "/HackenLeung/ccLoad/releases/download/v1.0.2/ccload-linux-amd64":
 			tag := filepath.Base(filepath.Dir(r.URL.Path))
 			_, _ = w.Write(binaries[tag])
-		case "/caidaoli/ccLoad/releases/download/v1.0.1/checksums.txt", "/caidaoli/ccLoad/releases/download/v1.0.2/checksums.txt":
+		case "/HackenLeung/ccLoad/releases/download/v1.0.1/checksums.txt", "/HackenLeung/ccLoad/releases/download/v1.0.2/checksums.txt":
 			tag := filepath.Base(filepath.Dir(r.URL.Path))
 			sum := sha256.Sum256(binaries[tag])
 			_, _ = fmt.Fprintf(w, "%s  ccload-linux-amd64\n", hex.EncodeToString(sum[:]))
