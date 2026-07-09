@@ -67,11 +67,127 @@ function setInlineKeyTableDataFromAPI(apiKeys) {
   }
 }
 
-function calculateVisibleRange(totalItems) {
-  const { ROW_HEIGHT, BUFFER_SIZE, CONTAINER_HEIGHT } = VIRTUAL_SCROLL_CONFIG;
-  const { scrollTop } = virtualScrollState;
+function getKeyTableContainer() {
+  return document.querySelector('#inlineKeyTableBody')?.closest('.inline-table-container') || null;
+}
 
-  const visibleRowCount = Math.ceil(CONTAINER_HEIGHT / ROW_HEIGHT);
+function getKeyTableViewportHeight(container = getKeyTableContainer()) {
+  if (!container) return VIRTUAL_SCROLL_CONFIG.CONTAINER_HEIGHT;
+  return container.clientHeight > 0 ? container.clientHeight : VIRTUAL_SCROLL_CONFIG.CONTAINER_HEIGHT;
+}
+
+const CHANNEL_EDITOR_TABLE_LAYOUT = {
+  KEY_MIN_ROWS: 1,
+  KEY_MAX_ROWS: 8,
+  MODEL_MIN_ROWS: 3,
+  MODEL_MAX_ROWS: 12,
+  DEFAULT_ROW_HEIGHT: 36
+};
+
+let channelEditorLayoutResizeBound = false;
+let channelEditorLayoutRafId = null;
+
+function clampChannelEditorRows(value, min, max) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return min;
+  return Math.min(max, Math.max(min, Math.ceil(numberValue)));
+}
+
+function getChannelEditorCSSPixelValue(styles, propertyName, fallback) {
+  const value = parseFloat(styles.getPropertyValue(propertyName));
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function getVisibleKeyCountForLayout() {
+  if (typeof getVisibleKeyIndices === 'function') {
+    return getVisibleKeyIndices().length;
+  }
+  return Array.isArray(inlineKeyTableData) ? inlineKeyTableData.length : 0;
+}
+
+function getVisibleModelCountForLayout() {
+  if (typeof getVisibleModelIndices === 'function') {
+    return getVisibleModelIndices().length;
+  }
+  return Array.isArray(redirectTableData) ? redirectTableData.length : 0;
+}
+
+function ensureChannelEditorLayoutResizeSync() {
+  if (channelEditorLayoutResizeBound || typeof window === 'undefined') return;
+  window.addEventListener('resize', scheduleChannelEditorTableSizingSync, { passive: true });
+  channelEditorLayoutResizeBound = true;
+}
+
+function scheduleChannelEditorTableSizingSync() {
+  if (channelEditorLayoutRafId) return;
+  const run = () => {
+    channelEditorLayoutRafId = null;
+    syncChannelEditorTableSizing();
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    channelEditorLayoutRafId = requestAnimationFrame(run);
+    return;
+  }
+  run();
+}
+
+function syncChannelEditorTableSizing() {
+  const body = document.querySelector('#channelModal .channel-editor-body');
+  const keyGroup = document.querySelector('#channelModal .channel-editor-group--keys');
+  const modelGroup = document.querySelector('#channelModal .channel-editor-group--models');
+  if (!body || !keyGroup || !modelGroup) return;
+
+  ensureChannelEditorLayoutResizeSync();
+  const bodyStyles = window.getComputedStyle(body);
+  const rowHeight = getChannelEditorCSSPixelValue(
+    bodyStyles,
+    '--channel-editor-table-row-height',
+    CHANNEL_EDITOR_TABLE_LAYOUT.DEFAULT_ROW_HEIGHT
+  );
+
+  const visibleKeyCount = getVisibleKeyCountForLayout();
+  let keyRows = clampChannelEditorRows(
+    visibleKeyCount || CHANNEL_EDITOR_TABLE_LAYOUT.KEY_MIN_ROWS,
+    CHANNEL_EDITOR_TABLE_LAYOUT.KEY_MIN_ROWS,
+    CHANNEL_EDITOR_TABLE_LAYOUT.KEY_MAX_ROWS
+  );
+  body.style.setProperty('--channel-editor-key-visible-rows', String(keyRows));
+
+  const visibleModelCount = getVisibleModelCountForLayout();
+  const naturalModelRows = clampChannelEditorRows(
+    Math.max(visibleModelCount, CHANNEL_EDITOR_TABLE_LAYOUT.MODEL_MIN_ROWS),
+    CHANNEL_EDITOR_TABLE_LAYOUT.MODEL_MIN_ROWS,
+    CHANNEL_EDITOR_TABLE_LAYOUT.MODEL_MAX_ROWS
+  );
+
+  body.style.setProperty('--channel-editor-model-visible-rows', String(naturalModelRows));
+
+  const modelTable = modelGroup.querySelector('.inline-table-container');
+  if (modelTable && rowHeight > 0) {
+    const overflow = modelTable.getBoundingClientRect().bottom - body.getBoundingClientRect().bottom;
+    if (overflow > 0 && keyRows > CHANNEL_EDITOR_TABLE_LAYOUT.KEY_MIN_ROWS) {
+      keyRows = clampChannelEditorRows(
+        keyRows - Math.ceil(overflow / rowHeight),
+        CHANNEL_EDITOR_TABLE_LAYOUT.KEY_MIN_ROWS,
+        CHANNEL_EDITOR_TABLE_LAYOUT.KEY_MAX_ROWS
+      );
+      body.style.setProperty('--channel-editor-key-visible-rows', String(keyRows));
+    }
+  }
+
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => refreshVirtualKeyRows());
+  } else {
+    refreshVirtualKeyRows();
+  }
+}
+
+function calculateVisibleRange(totalItems, container = getKeyTableContainer()) {
+  const { ROW_HEIGHT, BUFFER_SIZE } = VIRTUAL_SCROLL_CONFIG;
+  const { scrollTop } = virtualScrollState;
+  const viewportHeight = getKeyTableViewportHeight(container);
+
+  const visibleRowCount = Math.ceil(viewportHeight / ROW_HEIGHT);
   const startIndex = Math.floor(scrollTop / ROW_HEIGHT);
 
   const visibleStart = Math.max(0, startIndex - BUFFER_SIZE);
@@ -207,6 +323,21 @@ function createKeyRow(index) {
   return row;
 }
 
+function refreshVirtualKeyRows(container = getKeyTableContainer()) {
+  const tbody = document.getElementById('inlineKeyTableBody');
+  if (!tbody || !container || !virtualScrollState.enabled || !virtualScrollState.filteredIndices.length) return;
+
+  virtualScrollState.scrollTop = container.scrollTop;
+  const { visibleStart, visibleEnd } = calculateVisibleRange(virtualScrollState.filteredIndices.length, container);
+
+  if (visibleStart !== virtualScrollState.visibleStart ||
+    visibleEnd !== virtualScrollState.visibleEnd) {
+    virtualScrollState.visibleStart = visibleStart;
+    virtualScrollState.visibleEnd = visibleEnd;
+    renderVirtualRows(tbody, visibleStart, visibleEnd, virtualScrollState.filteredIndices);
+  }
+}
+
 function handleVirtualScroll(event) {
   const container = event.target;
   virtualScrollState.scrollTop = container.scrollTop;
@@ -216,35 +347,40 @@ function handleVirtualScroll(event) {
   }
 
   virtualScrollState.rafId = requestAnimationFrame(() => {
-    const { visibleStart, visibleEnd } = calculateVisibleRange(virtualScrollState.filteredIndices.length);
-
-    if (visibleStart !== virtualScrollState.visibleStart ||
-      visibleEnd !== virtualScrollState.visibleEnd) {
-      virtualScrollState.visibleStart = visibleStart;
-      virtualScrollState.visibleEnd = visibleEnd;
-
-      const tbody = document.getElementById('inlineKeyTableBody');
-      renderVirtualRows(tbody, visibleStart, visibleEnd, virtualScrollState.filteredIndices);
-    }
+    refreshVirtualKeyRows(container);
   });
 }
 
 function initVirtualScroll() {
-  const tableContainer = document.querySelector('#inlineKeyTableBody').closest('.inline-table-container');
+  const tableContainer = getKeyTableContainer();
   if (tableContainer) {
     tableContainer.removeEventListener('scroll', handleVirtualScroll);
     tableContainer.addEventListener('scroll', handleVirtualScroll, { passive: true });
+
+    if (virtualScrollState.resizeObserver) {
+      virtualScrollState.resizeObserver.disconnect();
+      virtualScrollState.resizeObserver = null;
+    }
+    if (typeof ResizeObserver === 'function') {
+      virtualScrollState.resizeObserver = new ResizeObserver(() => refreshVirtualKeyRows(tableContainer));
+      virtualScrollState.resizeObserver.observe(tableContainer);
+    }
+    requestAnimationFrame(() => refreshVirtualKeyRows(tableContainer));
   }
 }
 
 function cleanupVirtualScroll() {
-  const tableContainer = document.querySelector('#inlineKeyTableBody').closest('.inline-table-container');
+  const tableContainer = getKeyTableContainer();
   if (tableContainer) {
     tableContainer.removeEventListener('scroll', handleVirtualScroll);
   }
   if (virtualScrollState.rafId) {
     cancelAnimationFrame(virtualScrollState.rafId);
     virtualScrollState.rafId = null;
+  }
+  if (virtualScrollState.resizeObserver) {
+    virtualScrollState.resizeObserver.disconnect();
+    virtualScrollState.resizeObserver = null;
   }
 }
 
@@ -455,10 +591,12 @@ function renderInlineKeyTable() {
     cleanupVirtualScroll();
     virtualScrollState.enabled = false;
     if (virtualScrollHint) virtualScrollHint.style.display = 'none';
+    syncChannelEditorTableSizing();
     return;
   }
 
   const visibleIndices = getVisibleKeyIndices();
+  syncChannelEditorTableSizing();
 
   if (visibleIndices.length === 0) {
     let filterMessage;
@@ -470,6 +608,7 @@ function renderInlineKeyTable() {
     cleanupVirtualScroll();
     virtualScrollState.enabled = false;
     if (virtualScrollHint) virtualScrollHint.style.display = 'none';
+    syncChannelEditorTableSizing();
     return;
   }
 
