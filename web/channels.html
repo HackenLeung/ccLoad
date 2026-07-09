@@ -1061,6 +1061,23 @@
     </div>
   </div>
 
+  <!-- 删除排序方案确认框 -->
+  <div id="sortPresetDeleteConfirmModal" class="modal">
+    <div class="modal-content confirm-modal">
+      <div class="modal-header modal-header--compact">
+        <h2 class="modal-title" data-i18n="channels.deleteSortPresetTitle">删除当前排序方案</h2>
+        <button type="button" class="close-btn" id="sortPresetDeleteConfirmClose">&times;</button>
+      </div>
+      <p id="sortPresetDeleteConfirmMessage"></p>
+      <div class="confirm-actions confirm-actions--end">
+        <button type="button" class="btn btn-secondary" id="sortPresetDeleteConfirmCancel"
+          data-i18n="common.cancel">取消</button>
+        <button type="button" class="btn btn-danger" id="sortPresetDeleteConfirmOk"
+          data-i18n="channels.deleteSortPreset">删除方案</button>
+      </div>
+    </div>
+  </div>
+
 
   <!-- HTML模板定义 (分离HTML与JS) -->
   <template id="tpl-key-row">

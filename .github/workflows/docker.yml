@@ -7,6 +7,11 @@ on:
         description: '手动指定镜像标签'
         required: false
         default: 'latest'
+  workflow_run:
+    workflows:
+      - Build and Release
+    types:
+      - completed
 
 env:
   REGISTRY: ghcr.io
@@ -14,6 +19,7 @@ env:
 
 jobs:
   build:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

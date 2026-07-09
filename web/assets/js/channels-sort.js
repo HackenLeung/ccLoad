@@ -247,7 +247,57 @@ function saveSortPresetFromModal() {
   saveSortPresetFromOrder(getChannelIdOrder(sortChannels));
 }
 
-function deleteActiveSortPreset() {
+function showSortPresetDeleteConfirm(message) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('sortPresetDeleteConfirmModal');
+    const messageEl = document.getElementById('sortPresetDeleteConfirmMessage');
+    const closeBtn = document.getElementById('sortPresetDeleteConfirmClose');
+    const cancelBtn = document.getElementById('sortPresetDeleteConfirmCancel');
+    const okBtn = document.getElementById('sortPresetDeleteConfirmOk');
+    if (!modal || !messageEl || !cancelBtn || !okBtn) {
+      resolve(false);
+      return;
+    }
+
+    messageEl.textContent = message;
+    modal.classList.add('show');
+    okBtn.focus();
+
+    const cleanup = () => {
+      modal.classList.remove('show');
+      okBtn.removeEventListener('click', onConfirm);
+      cancelBtn.removeEventListener('click', onCancel);
+      if (closeBtn) closeBtn.removeEventListener('click', onCancel);
+      modal.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKeydown, true);
+    };
+
+    const finish = (confirmed) => {
+      cleanup();
+      resolve(confirmed);
+    };
+    const onConfirm = () => finish(true);
+    const onCancel = () => finish(false);
+    const onBackdrop = (event) => {
+      if (event.target === modal) finish(false);
+    };
+    const onKeydown = (event) => {
+      if (event.key !== 'Escape' && event.key !== 'Enter') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === 'Escape') finish(false);
+      if (event.key === 'Enter') finish(true);
+    };
+
+    okBtn.addEventListener('click', onConfirm);
+    cancelBtn.addEventListener('click', onCancel);
+    if (closeBtn) closeBtn.addEventListener('click', onCancel);
+    modal.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKeydown, true);
+  });
+}
+
+async function deleteActiveSortPreset() {
   const activeId = normalizeSortPresetId(activeSortPresetId);
   if (!activeId) return;
   const presets = loadSortPresets();
@@ -255,7 +305,7 @@ function deleteActiveSortPreset() {
   if (!preset) return;
   const message = (window.t && window.t('channels.sortPresetDeleteConfirm', { name: preset.name }))
     || `删除排序方案 "${preset.name}"?`;
-  if (!window.confirm(message)) return;
+  if (!(await showSortPresetDeleteConfirm(message))) return;
 
   saveSortPresets(presets.filter((item) => item.id !== activeId));
   setActiveSortPreset('');
