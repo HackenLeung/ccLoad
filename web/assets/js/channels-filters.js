@@ -55,13 +55,9 @@ function filterChannels() {
     return a.name.localeCompare(b.name);
   });
 
-  const ordered = (typeof applySortPresetOrder === 'function')
-    ? applySortPresetOrder(filtered)
-    : filtered;
-
-  filteredChannels = ordered; // 当前页筛选结果（服务端已过滤）
-  renderChannels(ordered);
-  updateFilterInfo(ordered.length, channelsTotalCount);
+  filteredChannels = filtered; // 当前页筛选结果（服务端已过滤），顺序即后端 priority
+  renderChannels(filtered);
+  updateFilterInfo(filtered.length, channelsTotalCount);
 }
 
 // Update filter info display
@@ -179,13 +175,12 @@ function setupFilterListeners() {
   const clearSearchBtn = document.getElementById('clearSearchBtn');
   if (clearSearchBtn) {
     clearSearchBtn.addEventListener('click', () => {
-      // 重置所有筛选条件
+      // 重置筛选条件（保留当前类型标签——类型内排序才有意义）
       filters.search = '';
       filters.searchExact = false;
       filters.status = 'all';
       filters.model = 'all';
       filters.modelExact = false;
-      filters.channelType = 'all';
       channelsCurrentPage = 1;
 
       // 重置渠道名称 combobox
@@ -207,10 +202,6 @@ function setupFilterListeners() {
       // 重置状态下拉框
       const statusFilterEl = document.getElementById('statusFilter');
       if (statusFilterEl) statusFilterEl.value = 'all';
-
-      // 重置渠道类型下拉框
-      const channelTypeFilterEl = document.getElementById('channelTypeFilter');
-      if (channelTypeFilterEl) channelTypeFilterEl.value = 'all';
 
       if (typeof saveChannelsFilters === 'function') saveChannelsFilters();
       loadChannels(filters.channelType);

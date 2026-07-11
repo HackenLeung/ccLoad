@@ -267,11 +267,10 @@ async function handleChannelSaveSuccess({ isNewChannel, newChannelType, savedCha
   let nextType = currentType || 'all';
 
   // 新增渠道时，如果类型与当前筛选器不匹配，切换到新渠道的类型
-  if (isNewChannel && hasFilters && currentType !== 'all' && currentType !== newChannelType) {
+  if (isNewChannel && hasFilters && currentType !== newChannelType) {
     filters.channelType = newChannelType;
     nextType = newChannelType;
-    const typeFilter = document.getElementById('channelTypeFilter');
-    if (typeFilter) typeFilter.value = newChannelType;
+    if (typeof setActiveChannelTypeTab === 'function') setActiveChannelTypeTab(newChannelType);
   }
   if (isNewChannel) {
     channelsCurrentPage = 1;
@@ -303,6 +302,7 @@ function initChannelEditorActions() {
         'close-channel-modal': () => invokeChannelEditorAction('closeModal'),
         'add-inline-url': () => invokeChannelEditorAction('addInlineURL'),
         'batch-delete-urls': () => invokeChannelEditorAction('batchDeleteSelectedURLs'),
+        'add-inline-key': () => invokeChannelEditorAction('addInlineKey'),
         'open-key-import-modal': () => invokeChannelEditorAction('openKeyImportModal'),
         'open-key-export-modal': () => invokeChannelEditorAction('openKeyExportModal'),
         'toggle-inline-key-visibility': () => invokeChannelEditorAction('toggleInlineKeyVisibility'),
@@ -508,9 +508,13 @@ async function fetchEditableChannelKeys(id) {
   }
 }
 
-function closeModal() {
-  if (channelFormDirty && !confirm(window.t('channels.unsavedChanges'))) {
-    return;
+async function closeModal() {
+  if (channelFormDirty) {
+    const confirmed = await showConfirmDialog({
+      title: window.t('channels.unsavedChangesTitle'),
+      message: window.t('channels.unsavedChanges')
+    });
+    if (!confirmed) return;
   }
   document.getElementById('channelModal').classList.remove('show');
   editingChannelId = null;
@@ -1951,29 +1955,17 @@ function batchDeleteSelectedModels() {
   }, 50);
 }
 
-function mergeModelRowsWithFetchedModels(currentRows, fetchedModels) {
-  const existingModelKeys = new Set();
+function normalizeFetchedModelRows(fetchedModels) {
+  const seenModelKeys = new Set();
   const rows = [];
-  (currentRows || []).forEach(row => {
-    const model = (row?.model || '').trim();
-    if (!model) return;
-    const modelKey = model.toLowerCase();
-    if (existingModelKeys.has(modelKey)) return;
-    existingModelKeys.add(modelKey);
-    rows.push({
-      model,
-      redirect_model: (row?.redirect_model || '').trim()
-    });
-  });
 
-  let added = 0;
   for (const entry of fetchedModels || []) {
     const modelName = (typeof entry === 'string' ? entry : entry?.model || '').trim();
     if (!modelName) continue;
 
     const modelKey = modelName.toLowerCase();
-    if (existingModelKeys.has(modelKey)) continue;
-    existingModelKeys.add(modelKey);
+    if (seenModelKeys.has(modelKey)) continue;
+    seenModelKeys.add(modelKey);
 
     const fetchedRedirect = (typeof entry === 'object' && entry?.redirect_model)
       ? String(entry.redirect_model).trim()
@@ -1982,10 +1974,52 @@ function mergeModelRowsWithFetchedModels(currentRows, fetchedModels) {
       model: modelName,
       redirect_model: fetchedRedirect
     });
+  }
+
+  return rows;
+}
+
+function normalizeCurrentModelRows(currentRows) {
+  const seenModelKeys = new Set();
+  const rows = [];
+
+  (currentRows || []).forEach(row => {
+    const model = (row?.model || '').trim();
+    if (!model) return;
+    const modelKey = model.toLowerCase();
+    if (seenModelKeys.has(modelKey)) return;
+    seenModelKeys.add(modelKey);
+    rows.push({
+      model,
+      redirect_model: (row?.redirect_model || '').trim()
+    });
+  });
+
+  return { rows, seenModelKeys };
+}
+
+function mergeModelRowsWithFetchedModels(currentRows, fetchedModels) {
+  const current = normalizeCurrentModelRows(currentRows);
+  const fetchedRows = normalizeFetchedModelRows(fetchedModels);
+
+  if (fetchedRows.length > 0 && fetchedRows.length < current.rows.length) {
+    const fetchedKeys = new Set(fetchedRows.map(row => row.model.toLowerCase()));
+    const removed = current.rows.filter(row => !fetchedKeys.has(row.model.toLowerCase())).length;
+    return { rows: fetchedRows, added: 0, removed, mode: 'replace' };
+  }
+
+  const existingModelKeys = new Set(current.seenModelKeys);
+  const rows = [...current.rows];
+  let added = 0;
+  for (const row of fetchedRows) {
+    const modelKey = row.model.toLowerCase();
+    if (existingModelKeys.has(modelKey)) continue;
+    existingModelKeys.add(modelKey);
+    rows.push(row);
     added++;
   }
 
-  return { rows, added, removed: 0 };
+  return { rows, added, removed: 0, mode: 'merge' };
 }
 
 function areModelRowsEqual(left, right) {
@@ -2057,10 +2091,19 @@ async function fetchModelsFromAPI() {
     if (!areModelRowsEqual(previousRows, redirectTableData)) markChannelFormDirty();
 
     const source = data.source === 'api' ? window.t('channels.fetchModelsSource.api') : window.t('channels.fetchModelsSource.predefined');
+    const successMessageKey = replacement.mode === 'replace'
+      ? 'channels.fetchModelsReplaceSuccess'
+      : 'channels.fetchModelsSuccess';
+    const successMessage = window.t(successMessageKey, {
+      source,
+      total: redirectTableData.length,
+      added: replacement.added,
+      removed: replacement.removed
+    });
     if (window.showSuccess) {
-      window.showSuccess(window.t('channels.fetchModelsSuccess', { source, total: redirectTableData.length, added: replacement.added }));
+      window.showSuccess(successMessage);
     } else {
-      alert(window.t('channels.fetchModelsSuccess', { source, total: redirectTableData.length, added: replacement.added }));
+      alert(successMessage);
     }
 
   } catch (error) {

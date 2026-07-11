@@ -77,7 +77,7 @@ function getKeyTableViewportHeight(container = getKeyTableContainer()) {
 }
 
 const CHANNEL_EDITOR_TABLE_LAYOUT = {
-  KEY_MIN_ROWS: 1,
+  KEY_MIN_ROWS: 2,
   KEY_MAX_ROWS: 8,
   MODEL_MIN_ROWS: 3,
   MODEL_MAX_ROWS: 12,
@@ -844,6 +844,28 @@ function copyKeyToClipboard(index) {
   }).catch(() => {
     if (window.showError) window.showError(window.t('channels.keyCopyFailed'));
   });
+}
+
+function addInlineKey() {
+  const newIndex = inlineKeyTableData.length;
+  inlineKeyTableData.push(makeInlineKeyRow());
+  selectedKeyIndices.clear();
+  renderInlineKeyTable();
+  markChannelFormDirty();
+
+  setTimeout(() => {
+    const tableContainer = getKeyTableContainer();
+    if (tableContainer) {
+      tableContainer.scrollTop = tableContainer.scrollHeight;
+      if (virtualScrollState.enabled) {
+        virtualScrollState.scrollTop = tableContainer.scrollTop;
+        handleVirtualScroll({ target: tableContainer });
+      }
+    }
+
+    const input = document.querySelector(`.inline-key-input[data-index="${newIndex}"]`);
+    if (input) input.focus();
+  }, 0);
 }
 
 function deleteInlineKey(index) {

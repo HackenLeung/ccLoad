@@ -6,10 +6,6 @@ let draggedItem = null; // 当前拖拽的元素
 const CHANNEL_SORT_PRESETS_KEY = 'channels.sortPresets';
 const CHANNEL_SORT_PRESET_ACTIVE_KEY = 'channels.sortPreset.active';
 
-function getDefaultSortPresetLabel() {
-  return (window.t && window.t('channels.sortPresetDefault')) || '默认排序';
-}
-
 function normalizeSortPresetId(id) {
   return String(id || '').trim();
 }
@@ -57,17 +53,17 @@ function setActiveSortPreset(id) {
 }
 
 function refreshSortPresetSelect() {
-  const select = document.getElementById('sortPresetSelect');
+  const select = document.getElementById('sortPresetLoadSelect');
 
   const presets = loadSortPresets();
   const currentValue = normalizeSortPresetId(activeSortPresetId);
   if (select) {
     select.innerHTML = '';
 
-    const defaultOption = document.createElement('option');
-    defaultOption.value = '';
-    defaultOption.textContent = getDefaultSortPresetLabel();
-    select.appendChild(defaultOption);
+    const placeholderOption = document.createElement('option');
+    placeholderOption.value = '';
+    placeholderOption.textContent = (window.t && window.t('channels.sortPresetLoadPlaceholder')) || '选择已保存的方案…';
+    select.appendChild(placeholderOption);
 
     presets.forEach((preset) => {
       const option = document.createElement('option');
@@ -120,9 +116,22 @@ function getChannelIdOrder(list) {
     .filter((id) => Number.isFinite(id) && id > 0);
 }
 
-function applySortPresetOrder(list) {
-  const preset = getActiveSortPreset();
-  if (!preset || !Array.isArray(list) || list.length <= 1) return list;
+function pinSortChannel(channelId) {
+  const numericId = Number(channelId);
+  if (!Number.isFinite(numericId) || numericId <= 0 || sortChannels.length <= 1) return;
+
+  const index = sortChannels.findIndex((channel) => Number(channel && channel.id) === numericId);
+  if (index <= 0) return;
+
+  const [channel] = sortChannels.splice(index, 1);
+  sortChannels.unshift(channel);
+  renderSortList();
+}
+
+// 按方案的 channelOrder 重排列表（纯函数，不写后端）：命中的按方案顺序在前，
+// 其余（方案未收录的新渠道）保持原相对顺序追加到末尾。
+function orderListByPreset(list, preset) {
+  if (!preset || !Array.isArray(list) || list.length <= 1) return Array.isArray(list) ? [...list] : [];
 
   const byId = new Map(list.map((channel) => [Number(channel.id), channel]));
   const usedIds = new Set();
@@ -151,36 +160,18 @@ function buildPriorityUpdatesFromOrder(list) {
   }));
 }
 
-async function applyActiveSortPresetToBackend() {
+// 载入方案：仅在弹窗内把拖拽列表按方案顺序重排，不写后端。
+function loadSortPresetIntoModal(id) {
+  const normalizedId = normalizeSortPresetId(id);
+  setActiveSortPreset(normalizedId);
+
   const preset = getActiveSortPreset();
-  if (!preset) return;
-
-  const source = Array.isArray(channels) ? [...channels] : [];
-  const ordered = applySortPresetOrder(source);
-  const updates = buildPriorityUpdatesFromOrder(ordered);
-  if (updates.length === 0) return;
-
-  const select = document.getElementById('sortPresetSelect');
-  if (select) select.disabled = true;
-
-  try {
-    await fetchDataWithAuth('/admin/channels/batch-priority', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ updates })
-    });
-
-    window.showSuccess(window.t('channels.sortPresetApplied'));
-    const currentType = (filters && filters.channelType) ? filters.channelType : 'all';
-    if (typeof loadChannels === 'function') await loadChannels(currentType);
-  } catch (error) {
-    console.error('Apply sort preset failed:', error);
-    window.showError(error.message || window.t('channels.sortPresetApplyFailed'));
-  } finally {
-    if (select) select.disabled = false;
+  if (preset) {
+    sortChannels = orderListByPreset(sortChannels, preset);
+    renderSortList();
   }
+
+  syncSortPresetEditor();
 }
 
 function getSortPresetEditorName(defaultName = '') {
@@ -229,14 +220,8 @@ function saveSortPresetFromOrder(channelOrder, defaultName = '') {
   saveSortPresets(presets);
   setActiveSortPreset(nextPreset.id);
   refreshSortPresetSelect();
-  if (typeof filterChannels === 'function') filterChannels();
   window.showSuccess(window.t('channels.sortPresetSaved'));
-  closeSortModal();
-}
-
-function saveCurrentSortPreset() {
-  const source = Array.isArray(filteredChannels) && filteredChannels.length > 0 ? filteredChannels : channels;
-  saveSortPresetFromOrder(getChannelIdOrder(source));
+  // 保存方案是弹窗内的次要动作，不关闭弹窗，也不写后端——用户可继续拖拽或点「保存排序」应用。
 }
 
 function saveSortPresetFromModal() {
@@ -247,56 +232,6 @@ function saveSortPresetFromModal() {
   saveSortPresetFromOrder(getChannelIdOrder(sortChannels));
 }
 
-function showSortPresetDeleteConfirm(message) {
-  return new Promise((resolve) => {
-    const modal = document.getElementById('sortPresetDeleteConfirmModal');
-    const messageEl = document.getElementById('sortPresetDeleteConfirmMessage');
-    const closeBtn = document.getElementById('sortPresetDeleteConfirmClose');
-    const cancelBtn = document.getElementById('sortPresetDeleteConfirmCancel');
-    const okBtn = document.getElementById('sortPresetDeleteConfirmOk');
-    if (!modal || !messageEl || !cancelBtn || !okBtn) {
-      resolve(false);
-      return;
-    }
-
-    messageEl.textContent = message;
-    modal.classList.add('show');
-    okBtn.focus();
-
-    const cleanup = () => {
-      modal.classList.remove('show');
-      okBtn.removeEventListener('click', onConfirm);
-      cancelBtn.removeEventListener('click', onCancel);
-      if (closeBtn) closeBtn.removeEventListener('click', onCancel);
-      modal.removeEventListener('click', onBackdrop);
-      document.removeEventListener('keydown', onKeydown, true);
-    };
-
-    const finish = (confirmed) => {
-      cleanup();
-      resolve(confirmed);
-    };
-    const onConfirm = () => finish(true);
-    const onCancel = () => finish(false);
-    const onBackdrop = (event) => {
-      if (event.target === modal) finish(false);
-    };
-    const onKeydown = (event) => {
-      if (event.key !== 'Escape' && event.key !== 'Enter') return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.key === 'Escape') finish(false);
-      if (event.key === 'Enter') finish(true);
-    };
-
-    okBtn.addEventListener('click', onConfirm);
-    cancelBtn.addEventListener('click', onCancel);
-    if (closeBtn) closeBtn.addEventListener('click', onCancel);
-    modal.addEventListener('click', onBackdrop);
-    document.addEventListener('keydown', onKeydown, true);
-  });
-}
-
 async function deleteActiveSortPreset() {
   const activeId = normalizeSortPresetId(activeSortPresetId);
   if (!activeId) return;
@@ -305,12 +240,17 @@ async function deleteActiveSortPreset() {
   if (!preset) return;
   const message = (window.t && window.t('channels.sortPresetDeleteConfirm', { name: preset.name }))
     || `删除排序方案 "${preset.name}"?`;
-  if (!(await showSortPresetDeleteConfirm(message))) return;
+  const confirmed = await showConfirmDialog({
+    title: window.t('channels.deleteSortPresetTitle'),
+    message,
+    okText: window.t('channels.deleteSortPreset'),
+    danger: true
+  });
+  if (!confirmed) return;
 
   saveSortPresets(presets.filter((item) => item.id !== activeId));
   setActiveSortPreset('');
   refreshSortPresetSelect();
-  if (typeof filterChannels === 'function') filterChannels();
   window.showSuccess(window.t('channels.sortPresetDeleted'));
 }
 
@@ -335,9 +275,10 @@ function showSortModal() {
     return;
   }
 
-  // 复制当前显示顺序；如果已切换排序方案，弹窗中继续基于方案顺序拖拽。
+  // 每次打开都以当前后端顺序为准，清空已载入方案——方案是可选的起点，不是隐式状态。
   sortChannels = [...sourceChannels];
-  syncSortPresetEditor();
+  setActiveSortPreset('');
+  refreshSortPresetSelect();
 
   // 渲染排序列表
   renderSortList();
@@ -529,16 +470,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
   refreshSortPresetSelect();
 
-  const sortPresetSelect = document.getElementById('sortPresetSelect');
-  if (sortPresetSelect) {
-    sortPresetSelect.addEventListener('change', async (event) => {
-      setActiveSortPreset(event.target.value);
-      syncSortPresetEditor();
-      if (normalizeSortPresetId(event.target.value)) {
-        await applyActiveSortPresetToBackend();
-      } else {
-        filterChannels();
-      }
+  const sortPresetLoadSelect = document.getElementById('sortPresetLoadSelect');
+  if (sortPresetLoadSelect) {
+    sortPresetLoadSelect.addEventListener('change', (event) => {
+      loadSortPresetIntoModal(event.target.value);
     });
   }
 
@@ -547,13 +482,4 @@ document.addEventListener('DOMContentLoaded', function() {
     sortPresetNameInput.addEventListener('input', updateSortPresetSaveButtonState);
   }
 
-  // 点击模态框背景关闭
-  const sortModal = document.getElementById('sortModal');
-  if (sortModal) {
-    sortModal.addEventListener('click', function(e) {
-      if (e.target === sortModal) {
-        closeSortModal();
-      }
-    });
-  }
 });

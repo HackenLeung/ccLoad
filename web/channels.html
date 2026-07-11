@@ -71,17 +71,14 @@
           </div>
         </header>
 
+        <!-- 渠道类型标签切换 -->
+        <div id="channelTypeTabs" class="channel-type-tab-bar" role="tablist">
+          <!-- 动态渲染：renderChannelTypeTabs() -->
+        </div>
+
         <!-- Filter Bar -->
         <div class="filter-bar">
           <div class="filter-controls channels-filter-controls">
-            <!-- 渠道类型筛选 -->
-            <div class="filter-group">
-              <label class="filter-label" data-i18n="channels.filterChannelType">渠道类型</label>
-              <select id="channelTypeFilter" class="filter-select filter-control--compact">
-                <!-- 动态加载渠道类型选项 -->
-              </select>
-            </div>
-
             <div class="filter-group">
               <label class="filter-label" data-i18n="channels.filterStatus">状态</label>
               <select id="statusFilter" class="filter-select filter-control--compact">
@@ -108,14 +105,6 @@
                     spellcheck="false" />
                   <div id="searchInputDropdown" class="filter-dropdown" role="listbox" aria-label="渠道名称"></div>
                 </div>
-              </div>
-            </div>
-            <div class="filter-group channel-sort-preset-filter-group">
-              <label class="filter-label" data-i18n="channels.sortPreset">排序方案</label>
-              <div class="channel-sort-preset-control filter-control--compact">
-                <select id="sortPresetSelect" class="filter-select">
-                  <option value="" data-i18n="channels.sortPresetDefault">默认排序</option>
-                </select>
               </div>
             </div>
             <div class="channel-filter-summary">
@@ -431,6 +420,14 @@
               </div>
             </div>
             <div class="channel-editor-section-actions channel-editor-section-actions--keys">
+              <button type="button" class="btn btn-secondary btn-sm channel-editor-action-btn" data-action="add-inline-key"
+                data-i18n-title="channels.addKeyTitle" title="添加API Key">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M8 3.5V12.5M3.5 8H12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                </svg>
+                <span data-i18n="channels.addKey">添加</span>
+              </button>
               <button type="button" class="btn btn-secondary btn-sm channel-editor-action-btn" data-action="open-key-import-modal">
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M8 3.5V12M8 12L5 9M8 12L11 9" stroke="currentColor" stroke-width="1.5"
@@ -1024,10 +1021,26 @@
         <button type="button" class="close-btn" data-action="close-sort-modal">&times;</button>
       </div>
       <div class="channel-sort-preset-editor">
+        <label class="form-label" for="sortPresetLoadSelect" data-i18n="channels.sortPresetLoad">载入方案</label>
+        <div class="channel-sort-preset-load-row">
+          <select id="sortPresetLoadSelect" class="form-input">
+            <option value="" data-i18n="channels.sortPresetLoadPlaceholder">选择已保存的方案…</option>
+          </select>
+          <button id="deleteSortPresetModalBtn" type="button" class="btn btn-secondary"
+            data-action="delete-sort-preset-from-modal" data-i18n="channels.deleteSortPreset" disabled>删除</button>
+        </div>
         <label class="form-label" for="sortPresetNameInput" data-i18n="channels.sortPresetName">方案名称</label>
-        <div class="channel-sort-preset-name-wrap">
-          <input id="sortPresetNameInput" class="form-input" type="text"
-            data-i18n-placeholder="channels.sortPresetNamePlaceholder" placeholder="填写排序方案名称">
+        <div class="channel-sort-preset-name-row">
+          <div class="channel-sort-preset-name-wrap">
+            <input id="sortPresetNameInput" class="form-input" type="text"
+              data-i18n-placeholder="channels.sortPresetNamePlaceholder" placeholder="填写排序方案名称">
+          </div>
+          <button id="saveSortPresetModalBtn" type="button" class="btn btn-secondary"
+            data-action="save-sort-preset-from-modal"
+            data-i18n="channels.saveSortPreset">保存方案</button>
+        </div>
+        <div class="channel-sort-preset-hint-row">
+          <span></span>
           <span id="sortPresetEditorHint" class="channel-sort-preset-editor-hint"></span>
         </div>
       </div>
@@ -1047,11 +1060,6 @@
           <span data-i18n="channels.sortHint">拖动卡片调整顺序 · 保存后相邻优先级相差10</span>
         </div>
         <div class="channel-sort-action-buttons">
-          <button id="saveSortPresetModalBtn" type="button" class="btn btn-secondary"
-            data-action="save-sort-preset-from-modal"
-            data-i18n="channels.saveSortPreset">保存方案</button>
-          <button id="deleteSortPresetModalBtn" type="button" class="btn btn-secondary"
-            data-action="delete-sort-preset-from-modal" data-i18n="channels.deleteSortPreset" disabled>删除方案</button>
           <button type="button" class="btn btn-secondary" data-action="close-sort-modal"
             data-i18n="common.cancel">取消</button>
           <button type="button" class="btn btn-primary" data-action="save-sort-order"
@@ -1061,19 +1069,19 @@
     </div>
   </div>
 
-  <!-- 删除排序方案确认框 -->
-  <div id="sortPresetDeleteConfirmModal" class="modal">
+  <!-- 通用确认框（界面风格，替代原生 confirm） -->
+  <div id="genericConfirmModal" class="modal">
     <div class="modal-content confirm-modal">
       <div class="modal-header modal-header--compact">
-        <h2 class="modal-title" data-i18n="channels.deleteSortPresetTitle">删除当前排序方案</h2>
-        <button type="button" class="close-btn" id="sortPresetDeleteConfirmClose">&times;</button>
+        <h2 class="modal-title" id="genericConfirmTitle"></h2>
+        <button type="button" class="close-btn" id="genericConfirmClose">&times;</button>
       </div>
-      <p id="sortPresetDeleteConfirmMessage"></p>
+      <p id="genericConfirmMessage"></p>
       <div class="confirm-actions confirm-actions--end">
-        <button type="button" class="btn btn-secondary" id="sortPresetDeleteConfirmCancel"
+        <button type="button" class="btn btn-secondary" id="genericConfirmCancel"
           data-i18n="common.cancel">取消</button>
-        <button type="button" class="btn btn-danger" id="sortPresetDeleteConfirmOk"
-          data-i18n="channels.deleteSortPreset">删除方案</button>
+        <button type="button" class="btn btn-primary" id="genericConfirmOk"
+          data-i18n="common.confirm">确认</button>
       </div>
     </div>
   </div>
@@ -1329,6 +1337,15 @@
           <span class="sort-item-priority-label" data-i18n="channels.currentPriority">当前优先级:</span>
           <strong>{{priority}}</strong>
           {{{statusBadge}}}
+          <button type="button" class="sort-item-pin-btn" data-action="pin-sort-channel"
+            data-channel-id="{{id}}" data-i18n-title="channels.pinSortChannelTitle" title="置顶渠道"
+            aria-label="置顶渠道">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true" focusable="false">
+              <path d="M8 3V13M8 3L4.5 6.5M8 3L11.5 6.5" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>

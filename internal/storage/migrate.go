@@ -337,7 +337,7 @@ func initDefaultSettings(ctx context.Context, db *sql.DB, dialect Dialect) error
 		{"gemini_non_stream_timeout", "0", "duration", "Gemini非流式请求超时(秒,0=使用全局non_stream_timeout)", "0"},
 		{"model_fuzzy_match", "false", "bool", "模型匹配失败时，使用子串模糊匹配(多匹配时选最新版本)", "false"},
 		{"channel_test_content", "sonnet 4.0的发布日期是什么", "string", "渠道测试默认内容", "sonnet 4.0的发布日期是什么"},
-		{"channel_check_interval_hours", "5", "float", "渠道定时检测间隔(小时,支持小数如0.5=30分钟,0=关闭,修改后重启生效)", "5"},
+		{"channel_check_interval_hours", "0", "float", "渠道定时检测间隔(小时,支持小数如0.5=30分钟,0=关闭,修改后重启生效)", "0"},
 		{"auto_update_interval_hours", "12", "int", "自动更新检测间隔(小时整数,0=关闭,启用时最低1小时)", "12"},
 		{"log_channel_click_action", "edit", "string", "日志页点击渠道名行为(edit=打开编辑器,navigate=跳转到渠道管理定位)", "edit"},
 		{"channel_stats_range", "today", "string", "渠道管理费用统计范围", "today"},
@@ -425,7 +425,7 @@ func initDefaultSettings(ctx context.Context, db *sql.DB, dialect Dialect) error
 			keyCol = "`key`"
 		}
 		//nolint:gosec // G201: keyCol 仅为 "key" 或 "`key`"，由内部逻辑控制
-		typeSQL := fmt.Sprintf("UPDATE system_settings SET value_type = 'float', description = '渠道定时检测间隔(小时,支持小数如0.5=30分钟,0=关闭,修改后重启生效)', default_value = '5' WHERE %s = 'channel_check_interval_hours' AND value_type = 'int'", keyCol)
+		typeSQL := fmt.Sprintf("UPDATE system_settings SET value_type = 'float', description = '渠道定时检测间隔(小时,支持小数如0.5=30分钟,0=关闭,修改后重启生效)', default_value = '0' WHERE %s = 'channel_check_interval_hours' AND value_type = 'int'", keyCol)
 		if _, err := db.ExecContext(ctx, typeSQL); err != nil {
 			return fmt.Errorf("migrate channel_check_interval_hours type: %w", err)
 		}

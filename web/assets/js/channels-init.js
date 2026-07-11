@@ -51,6 +51,68 @@ function loadChannelsFilters() {
   return null;
 }
 
+// ==================== 渠道类型标签切换器 ====================
+// 渠道页专用（不复用共享 initChannelTypeFilter：后者含"全部"项，供 logs/stats/trend 使用）。
+// 后端路由本就按类型隔离 priority，这里让 UI 只显示单一类型，使类型内排序真实可读。
+let channelTypeTabList = [];       // [{value, display_name, description}]
+let channelTypeTabOnChange = null; // 切换回调
+
+function getFirstChannelTypeValue() {
+  return (channelTypeTabList[0] && channelTypeTabList[0].value) || 'anthropic';
+}
+
+// 将历史遗留/非法的类型（含 'all'）归一到一个合法类型
+function normalizeChannelTabType(type) {
+  const t = String(type || '').trim();
+  if (t && t !== 'all' && channelTypeTabList.some((x) => x.value === t)) return t;
+  return getFirstChannelTypeValue();
+}
+
+async function renderChannelTypeTabs(containerId, activeType, onChange) {
+  const container = document.getElementById(containerId);
+  if (!container) return normalizeChannelTabType(activeType);
+  channelTypeTabList = (await window.ChannelTypeManager.getChannelTypes()) || [];
+  channelTypeTabOnChange = onChange;
+  const active = normalizeChannelTabType(activeType);
+  paintChannelTypeTabs(active);
+  return active;
+}
+
+function paintChannelTypeTabs(activeType) {
+  const container = document.getElementById('channelTypeTabs');
+  if (!container) return;
+  const active = normalizeChannelTabType(activeType);
+  container.innerHTML = '';
+  channelTypeTabList.forEach((type) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'channel-type-tab' + (type.value === active ? ' active' : '');
+    btn.dataset.channelType = type.value;
+    btn.textContent = type.display_name;
+    if (type.description) btn.title = type.description;
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-selected', type.value === active ? 'true' : 'false');
+    btn.addEventListener('click', () => {
+      if (btn.classList.contains('active')) return;
+      setActiveChannelTypeTab(type.value);
+      if (typeof channelTypeTabOnChange === 'function') channelTypeTabOnChange(type.value);
+    });
+    container.appendChild(btn);
+  });
+}
+
+// 仅更新标签高亮态（不触发回调），供外部（如新增渠道后切换类型）调用
+function setActiveChannelTypeTab(type) {
+  const active = normalizeChannelTabType(type);
+  const container = document.getElementById('channelTypeTabs');
+  if (!container) return;
+  container.querySelectorAll('.channel-type-tab').forEach((btn) => {
+    const on = btn.dataset.channelType === active;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+}
+
 function resetChannelSearchFilter() {
   filters.search = '';
   filters.searchExact = false;
@@ -158,6 +220,7 @@ function initChannelsPageActions() {
         'save-sort-order': () => saveSortOrder(),
         'save-sort-preset-from-modal': () => saveSortPresetFromModal(),
         'delete-sort-preset-from-modal': () => deleteActiveSortPreset(),
+        'pin-sort-channel': (actionTarget) => pinSortChannel(actionTarget.dataset.channelId),
         'toggle-response': (actionTarget) => {
           const responseTarget = actionTarget.dataset.responseTarget;
           if (responseTarget && typeof window.toggleResponse === 'function') {
@@ -224,9 +287,10 @@ window.initPageBootstrap({
       loadChannelStatsRange()
     ]);
     const targetChannelType = targetChannel?.channel_type || null;
-    const initialType = targetChannelType || (savedFilters?.channelType) || 'all';
+    // 原始候选类型（可能为 'all' 或历史遗留值）；实际生效类型在标签渲染后归一
+    const initialTypeRaw = targetChannelType || (savedFilters?.channelType) || '';
 
-    filters.channelType = initialType;
+    filters.channelType = initialTypeRaw;
     const urlChannelId = new URLSearchParams(location.search).get('id');
     if (urlChannelId) {
       filters.status = 'all';
@@ -275,9 +339,9 @@ window.initPageBootstrap({
       saveChannelsFilters();
     }
 
-    // 并行化第二批：依赖 initialType 的请求 + stats（channelStatsRange 已在第一批设置）
-    await Promise.all([
-      window.initChannelTypeFilter('channelTypeFilter', initialType, (type) => {
+    // 并行化第二批：渲染类型标签（含归一化）+ stats，之后用归一后的类型加载列表
+    const [initialType] = await Promise.all([
+      renderChannelTypeTabs('channelTypeTabs', initialTypeRaw, (type) => {
         filters.channelType = type;
         filters.model = 'all';
         filters.modelExact = false;
@@ -297,14 +361,20 @@ window.initPageBootstrap({
         loadChannelsFilterOptions(type, filters.status);
         loadChannels(type);
       }),
-      loadChannelsFilterOptions(initialType, filters.status),
-      loadChannels(initialType),
       loadChannelStats()
+    ]);
+    // initialType 已是归一后的合法类型（不含 'all'）
+    filters.channelType = initialType;
+    saveChannelsFilters();
+    await Promise.all([
+      loadChannelsFilterOptions(initialType, filters.status),
+      loadChannels(initialType)
     ]);
     highlightFromHash();
     window.addEventListener('hashchange', highlightFromHash);
 
     window.i18n.onLocaleChange(() => {
+      paintChannelTypeTabs(filters.channelType);
       renderChannels();
       updateModelOptions();
       updateChannelsPagination();
@@ -329,7 +399,6 @@ document.addEventListener('keydown', (e) => {
     const modelImportModal = document.getElementById('modelImportModal');
     const keyImportModal = document.getElementById('keyImportModal');
     const keyExportModal = document.getElementById('keyExportModal');
-    const sortModal = document.getElementById('sortModal');
     const deleteModal = document.getElementById('deleteModal');
     const testModal = document.getElementById('testModal');
     const channelModal = document.getElementById('channelModal');
@@ -342,8 +411,6 @@ document.addEventListener('keydown', (e) => {
       closeKeyImportModal();
     } else if (keyExportModal && keyExportModal.classList.contains('show')) {
       closeKeyExportModal();
-    } else if (sortModal && sortModal.classList.contains('show')) {
-      closeSortModal();
     } else if (deleteModal && deleteModal.classList.contains('show')) {
       closeDeleteModal();
     } else if (testModal && testModal.classList.contains('show')) {
