@@ -295,7 +295,12 @@ async function saveAllSettings() {
 }
 
 async function resetSetting(key) {
-  if (!confirm(t('settings.msg.confirmReset', { key }))) return;
+  const confirmed = await window.showConfirmDialog({
+    title: t('common.confirm'),
+    message: t('settings.msg.confirmReset', { key }),
+    danger: true
+  });
+  if (!confirmed) return;
 
   try {
     const result = await fetchDataWithAuth(`/admin/settings/${key}/reset`, { method: 'POST' });

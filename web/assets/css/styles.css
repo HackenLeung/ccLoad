@@ -2457,13 +2457,22 @@ body {
 .confirm-modal {
   text-align: center;
   width: auto !important;
-  max-width: 460px !important;
+  max-width: 480px !important;
   min-width: 300px;
 }
 
-.confirm-modal p {
+.confirm-modal p,
+.confirm-modal .generic-dialog-message {
   margin: 20px 0;
   color: var(--neutral-600);
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+  line-height: 1.55;
+}
+
+.generic-dialog-modal {
+  z-index: 1100;
 }
 
 .confirm-actions {

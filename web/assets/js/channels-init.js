@@ -269,6 +269,7 @@ window.initPageBootstrap({
     setupFilterListeners();
     setupImportExport();
     setupKeyImportPreview();
+    setupQuickConnImportPreview();
     setupModelImportPreview();
     if (typeof initChannelFormDirtyTracking === 'function') {
       initChannelFormDirtyTracking();

@@ -822,8 +822,12 @@
     }
 
     async function deleteToken(id) {
-      
-      if (!confirm(t('tokens.msg.deleteConfirm'))) return;
+      const confirmed = await window.showConfirmDialog({
+        title: t('common.confirm'),
+        message: t('tokens.msg.deleteConfirm'),
+        danger: true
+      });
+      if (!confirmed) return;
       try {
         await fetchDataWithAuth(`${API_BASE}/auth-tokens/${id}`, {
           method: 'DELETE'

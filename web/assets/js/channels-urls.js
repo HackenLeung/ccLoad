@@ -344,13 +344,16 @@ function deleteInlineURL(index) {
   markChannelFormDirty();
 }
 
-function batchDeleteSelectedURLs() {
+async function batchDeleteSelectedURLs() {
   const count = selectedURLIndices.size;
   if (count === 0) return;
 
-  if (!confirm(window.t('channels.confirmBatchDeleteUrls', { count }))) {
-    return;
-  }
+  const confirmed = await window.showConfirmDialog({
+    title: window.t('common.confirm'),
+    message: window.t('channels.confirmBatchDeleteUrls', { count }),
+    danger: true
+  });
+  if (!confirmed) return;
 
   const indices = Array.from(selectedURLIndices).sort((a, b) => b - a);
   indices.forEach(index => {
@@ -371,7 +374,7 @@ function batchDeleteSelectedURLs() {
 
 async function testInlineURL(index, buttonElement) {
   if (!editingChannelId) {
-    alert(window.t('channels.cannotGetChannelId'));
+    await window.showAlertDialog({ message: window.t('channels.cannotGetChannelId') });
     return;
   }
 
@@ -379,20 +382,20 @@ async function testInlineURL(index, buttonElement) {
     .map(r => r.model)
     .filter(m => m && m.trim());
   if (models.length === 0) {
-    alert(window.t('channels.configModelsFirst'));
+    await window.showAlertDialog({ message: window.t('channels.configModelsFirst') });
     return;
   }
 
   const firstModel = models[0];
   const url = normalizeInlineURLValue(inlineURLTableData[index]);
   if (!url) {
-    alert(window.t('channels.fillApiUrlFirst'));
+    await window.showAlertDialog({ message: window.t('channels.fillApiUrlFirst') });
     return;
   }
 
   const firstKey = (getValidInlineKeyRows()[0] || {}).api_key || '';
   if (!firstKey) {
-    alert(window.t('channels.emptyKeyCannotTest'));
+    await window.showAlertDialog({ message: window.t('channels.emptyKeyCannotTest') });
     return;
   }
 
@@ -560,5 +563,267 @@ async function toggleURLDisabled(btn) {
     window.showNotification(e.message, 'error');
   } finally {
     btn.disabled = false;
+  }
+}
+
+
+// ============================================================
+// 快捷录入：NewAPI channel_conn JSON -> URL + Key
+// ============================================================
+
+function extractQuickConnObjectFields(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const url = String(
+    obj.url || obj.base_url || obj.baseUrl || obj.api_url || obj.apiUrl || ''
+  ).trim();
+  const key = String(
+    obj.key || obj.api_key || obj.apiKey || obj.token || obj.secret || ''
+  ).trim();
+  if (!url && !key) return null;
+  return { url, key };
+}
+
+function dedupeQuickConnEntries(entries) {
+  const seen = new Set();
+  const result = [];
+  entries.forEach((entry) => {
+    if (!entry) return;
+    const sig = `${entry.url || ''}\n${entry.key || ''}`;
+    if (seen.has(sig)) return;
+    seen.add(sig);
+    result.push(entry);
+  });
+  return result;
+}
+
+function parseQuickConnEntries(input) {
+  const text = String(input || '').trim();
+  if (!text) return [];
+
+  const results = [];
+  const pushParsed = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(pushParsed);
+      return;
+    }
+    const entry = extractQuickConnObjectFields(value);
+    if (entry) results.push(entry);
+  };
+
+  try {
+    pushParsed(JSON.parse(text));
+    if (results.length > 0) return dedupeQuickConnEntries(results);
+  } catch (_) {
+    // fall through
+  }
+
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  lines.forEach((line) => {
+    try {
+      pushParsed(JSON.parse(line));
+    } catch (_) {
+      // ignore non-json line
+    }
+  });
+  if (results.length > 0) return dedupeQuickConnEntries(results);
+
+  const objectMatches = text.match(/\{[\s\S]*?\}/g) || [];
+  objectMatches.forEach((chunk) => {
+    try {
+      pushParsed(JSON.parse(chunk));
+    } catch (_) {
+      // ignore
+    }
+  });
+
+  return dedupeQuickConnEntries(results);
+}
+
+function summarizeQuickConnEntries(entries) {
+  const urls = new Set();
+  const keys = new Set();
+  (entries || []).forEach((entry) => {
+    if (entry.url) urls.add(entry.url);
+    if (entry.key) keys.add(entry.key);
+  });
+  return { urlCount: urls.size, keyCount: keys.size };
+}
+
+function applyQuickConnEntries(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  let addedUrls = 0;
+  let addedKeys = 0;
+  let skippedUrls = 0;
+  let skippedKeys = 0;
+
+  const existingUrlSet = new Set(
+    (typeof getValidInlineURLs === 'function' ? getValidInlineURLs() : [])
+      .map((u) => stripInlineExactURLMarker(u))
+      .filter(Boolean)
+  );
+  const onlyEmptyUrls = inlineURLTableData.every((u) => !stripInlineExactURLMarker(u));
+  if (onlyEmptyUrls) {
+    inlineURLTableData = [];
+  }
+
+  list.forEach((entry) => {
+    if (!entry || !entry.url) return;
+    const clean = stripInlineExactURLMarker(entry.url);
+    if (!clean) return;
+    if (existingUrlSet.has(clean)) {
+      skippedUrls += 1;
+      return;
+    }
+    const nextValue = normalizeInlineURLValue(clean);
+    const emptyIdx = inlineURLTableData.findIndex((u) => !stripInlineExactURLMarker(u));
+    if (emptyIdx >= 0) {
+      inlineURLTableData[emptyIdx] = nextValue;
+    } else {
+      inlineURLTableData.push(nextValue);
+    }
+    existingUrlSet.add(clean);
+    addedUrls += 1;
+  });
+  if (inlineURLTableData.length === 0) {
+    inlineURLTableData = [''];
+  }
+
+  const existingKeySet = new Set(
+    (typeof getInlineKeyValues === 'function' ? getInlineKeyValues() : [])
+      .map((k) => String(k || '').trim())
+      .filter(Boolean)
+  );
+  const onlyEmptyKeys = inlineKeyTableData.every((row) => {
+    const key = row && typeof row === 'object' ? row.api_key : row;
+    return !String(key || '').trim();
+  });
+  if (onlyEmptyKeys) {
+    inlineKeyTableData = [];
+  }
+
+  list.forEach((entry) => {
+    if (!entry || !entry.key) return;
+    const key = String(entry.key).trim();
+    if (!key) return;
+    if (existingKeySet.has(key)) {
+      skippedKeys += 1;
+      return;
+    }
+    const emptyIdx = inlineKeyTableData.findIndex((row) => {
+      const value = row && typeof row === 'object' ? row.api_key : row;
+      return !String(value || '').trim();
+    });
+    if (emptyIdx >= 0) {
+      inlineKeyTableData[emptyIdx] = makeInlineKeyRow(key);
+    } else {
+      inlineKeyTableData.push(makeInlineKeyRow(key));
+    }
+    existingKeySet.add(key);
+    addedKeys += 1;
+  });
+  if (inlineKeyTableData.length === 0) {
+    inlineKeyTableData = [makeInlineKeyRow()];
+  }
+
+  const nameInput = document.getElementById('channelName');
+  if (nameInput && !String(nameInput.value || '').trim()) {
+    const firstUrl = list.find((entry) => entry && entry.url)?.url;
+    if (firstUrl) {
+      try {
+        const host = new URL(firstUrl).hostname;
+        if (host) nameInput.value = host;
+      } catch (_) {
+        // ignore invalid URL
+      }
+    }
+  }
+
+  if (typeof renderInlineURLTable === 'function') renderInlineURLTable();
+  if (typeof renderInlineKeyTable === 'function') renderInlineKeyTable();
+  if (typeof scheduleChannelDuplicateHintCheck === 'function') {
+    scheduleChannelDuplicateHintCheck();
+  }
+  if (addedUrls > 0 || addedKeys > 0) {
+    markChannelFormDirty();
+  }
+
+  return { addedUrls, addedKeys, skippedUrls, skippedKeys };
+}
+
+function openQuickConnImportModal() {
+  const modal = document.getElementById('quickConnImportModal');
+  const textarea = document.getElementById('quickConnImportTextarea');
+  const preview = document.getElementById('quickConnImportPreviewContent');
+  if (!modal || !textarea) return;
+  textarea.value = '';
+  if (preview) preview.classList.add('hidden');
+  modal.classList.add('show');
+  setTimeout(() => textarea.focus(), 100);
+}
+
+function closeQuickConnImportModal() {
+  const modal = document.getElementById('quickConnImportModal');
+  if (modal) modal.classList.remove('show');
+}
+
+function updateQuickConnImportPreview() {
+  const textarea = document.getElementById('quickConnImportTextarea');
+  const preview = document.getElementById('quickConnImportPreviewContent');
+  const urlCountEl = document.getElementById('quickConnUrlCount');
+  const keyCountEl = document.getElementById('quickConnKeyCount');
+  if (!textarea || !preview) return;
+
+  const entries = parseQuickConnEntries(textarea.value);
+  const summary = summarizeQuickConnEntries(entries);
+  if (summary.urlCount > 0 || summary.keyCount > 0) {
+    if (urlCountEl) urlCountEl.textContent = String(summary.urlCount);
+    if (keyCountEl) keyCountEl.textContent = String(summary.keyCount);
+    preview.classList.remove('hidden');
+  } else {
+    preview.classList.add('hidden');
+  }
+}
+
+function setupQuickConnImportPreview() {
+  const textarea = document.getElementById('quickConnImportTextarea');
+  if (!textarea || textarea.dataset.bound === '1') return;
+  textarea.addEventListener('input', updateQuickConnImportPreview);
+  textarea.dataset.bound = '1';
+}
+
+async function confirmQuickConnImport() {
+  const textarea = document.getElementById('quickConnImportTextarea');
+  if (!textarea) return;
+
+  const input = textarea.value.trim();
+  if (!input) {
+    await window.showAlertDialog({ message: window.t('channels.quickConnEmpty') });
+    return;
+  }
+
+  const entries = parseQuickConnEntries(input);
+  if (entries.length === 0) {
+    await window.showAlertDialog({ message: window.t('channels.quickConnInvalid') });
+    return;
+  }
+
+  const result = applyQuickConnEntries(entries);
+  closeQuickConnImportModal();
+
+  if (result.addedUrls === 0 && result.addedKeys === 0) {
+    if (window.showNotification) {
+      window.showNotification(window.t('channels.quickConnNoNew'), 'warning');
+    }
+    return;
+  }
+
+  const msg = window.t('channels.quickConnSuccess', {
+    urls: result.addedUrls,
+    keys: result.addedKeys
+  });
+  if (window.showNotification) {
+    window.showNotification(msg, 'success');
+  } else if (window.showSuccess) {
+    window.showSuccess(msg);
   }
 }

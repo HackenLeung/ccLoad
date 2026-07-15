@@ -714,7 +714,7 @@ function updateInlineKeyNote(index, value) {
 
 async function testSingleKey(keyIndex, testButton) {
   if (!editingChannelId) {
-    alert(window.t('channels.cannotGetChannelId'));
+    await window.showAlertDialog({ message: window.t('channels.cannotGetChannelId') });
     return;
   }
 
@@ -723,7 +723,7 @@ async function testSingleKey(keyIndex, testButton) {
     .map(r => r.model)
     .filter(m => m && m.trim());
   if (models.length === 0) {
-    alert(window.t('channels.configModelsFirst'));
+    await window.showAlertDialog({ message: window.t('channels.configModelsFirst') });
     return;
   }
 
@@ -731,7 +731,7 @@ async function testSingleKey(keyIndex, testButton) {
   const apiKey = getInlineKeyValue(keyIndex);
 
   if (!apiKey || !apiKey.trim()) {
-    alert(window.t('channels.emptyKeyCannotTest'));
+    await window.showAlertDialog({ message: window.t('channels.emptyKeyCannotTest') });
     return;
   }
 
@@ -868,34 +868,39 @@ function addInlineKey() {
   }, 0);
 }
 
-function deleteInlineKey(index) {
+async function deleteInlineKey(index) {
   if (inlineKeyTableData.length === 1) {
-    alert(window.t('channels.keepOneKey'));
+    await window.showAlertDialog({ message: window.t('channels.keepOneKey') });
     return;
   }
 
-  if (confirm(window.t('channels.confirmDeleteKey', { index: index + 1 }))) {
-    const tableContainer = document.querySelector('#inlineKeyTableBody').closest('.inline-table-container');
-    const scrollTop = tableContainer ? tableContainer.scrollTop : 0;
+  const confirmed = await window.showConfirmDialog({
+    title: window.t('common.confirm'),
+    message: window.t('channels.confirmDeleteKey', { index: index + 1 }),
+    danger: true
+  });
+  if (!confirmed) return;
 
-    inlineKeyTableData.splice(index, 1);
+  const tableContainer = document.querySelector('#inlineKeyTableBody').closest('.inline-table-container');
+  const scrollTop = tableContainer ? tableContainer.scrollTop : 0;
 
-    currentChannelKeyCooldowns = currentChannelKeyCooldowns
-      .filter(kc => kc.key_index !== index)
-      .map(kc => kc.key_index > index ? { ...kc, key_index: kc.key_index - 1 } : kc);
+  inlineKeyTableData.splice(index, 1);
 
-    selectedKeyIndices.clear();
-    updateBatchDeleteButton();
+  currentChannelKeyCooldowns = currentChannelKeyCooldowns
+    .filter(kc => kc.key_index !== index)
+    .map(kc => kc.key_index > index ? { ...kc, key_index: kc.key_index - 1 } : kc);
 
-    renderInlineKeyTable();
-    markChannelFormDirty();
+  selectedKeyIndices.clear();
+  updateBatchDeleteButton();
 
-    setTimeout(() => {
-      if (tableContainer) {
-        tableContainer.scrollTop = Math.min(scrollTop, tableContainer.scrollHeight - tableContainer.clientHeight);
-      }
-    }, 50);
-  }
+  renderInlineKeyTable();
+  markChannelFormDirty();
+
+  setTimeout(() => {
+    if (tableContainer) {
+      tableContainer.scrollTop = Math.min(scrollTop, tableContainer.scrollHeight - tableContainer.clientHeight);
+    }
+  }, 50);
 }
 
 function toggleKeySelection(index, checked) {
@@ -962,18 +967,21 @@ function updateSelectAllCheckbox() {
     visibleIndices.some(index => selectedKeyIndices.has(index));
 }
 
-function batchDeleteSelectedKeys() {
+async function batchDeleteSelectedKeys() {
   const count = selectedKeyIndices.size;
   if (count === 0) return;
 
   if (inlineKeyTableData.length - count < 1) {
-    alert(window.t('channels.keepOneKey'));
+    await window.showAlertDialog({ message: window.t('channels.keepOneKey') });
     return;
   }
 
-  if (!confirm(window.t('channels.confirmBatchDeleteKeys', { count }))) {
-    return;
-  }
+  const confirmed = await window.showConfirmDialog({
+    title: window.t('common.confirm'),
+    message: window.t('channels.confirmBatchDeleteKeys', { count }),
+    danger: true
+  });
+  if (!confirmed) return;
 
   const tableContainer = document.querySelector('#inlineKeyTableBody').closest('.inline-table-container');
   const scrollTop = tableContainer ? tableContainer.scrollTop : 0;
@@ -1032,19 +1040,19 @@ function getVisibleKeyIndices() {
     .filter(index => index !== null);
 }
 
-function confirmInlineKeyImport() {
+async function confirmInlineKeyImport() {
   const textarea = document.getElementById('keyImportTextarea');
   const input = textarea.value.trim();
 
   if (!input) {
-    alert(window.t('channels.enterAtLeastOneKey'));
+    await window.showAlertDialog({ message: window.t('channels.enterAtLeastOneKey') });
     return;
   }
 
   const newKeys = parseKeys(input);
 
   if (newKeys.length === 0) {
-    alert(window.t('channels.noValidKeyParsed'));
+    await window.showAlertDialog({ message: window.t('channels.noValidKeyParsed') });
     return;
   }
 

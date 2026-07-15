@@ -28,64 +28,7 @@ function normalizeSelectedChannelID(id) {
   return String(Math.trunc(numericID));
 }
 
-// 通用界面确认框（替代原生 confirm）：返回 Promise<boolean>。
-// options: { title, message, okText, cancelText, danger }
-function showConfirmDialog(options = {}) {
-  return new Promise((resolve) => {
-    const modal = document.getElementById('genericConfirmModal');
-    const titleEl = document.getElementById('genericConfirmTitle');
-    const messageEl = document.getElementById('genericConfirmMessage');
-    const closeBtn = document.getElementById('genericConfirmClose');
-    const cancelBtn = document.getElementById('genericConfirmCancel');
-    const okBtn = document.getElementById('genericConfirmOk');
-    if (!modal || !messageEl || !cancelBtn || !okBtn) {
-      // 兜底：无 DOM 时退回原生 confirm，避免流程卡死
-      resolve(window.confirm(options.message || ''));
-      return;
-    }
-
-    const t = (key, fallback) => (window.t ? window.t(key) : fallback) || fallback;
-    if (titleEl) titleEl.textContent = options.title || t('common.confirm', '确认');
-    messageEl.textContent = options.message || '';
-    okBtn.textContent = options.okText || t('common.confirm', '确认');
-    cancelBtn.textContent = options.cancelText || t('common.cancel', '取消');
-    okBtn.classList.toggle('btn-danger', options.danger === true);
-    okBtn.classList.toggle('btn-primary', options.danger !== true);
-
-    modal.classList.add('show');
-    okBtn.focus();
-
-    const cleanup = () => {
-      modal.classList.remove('show');
-      okBtn.removeEventListener('click', onConfirm);
-      cancelBtn.removeEventListener('click', onCancel);
-      if (closeBtn) closeBtn.removeEventListener('click', onCancel);
-      modal.removeEventListener('click', onBackdrop);
-      document.removeEventListener('keydown', onKeydown, true);
-    };
-    const finish = (confirmed) => {
-      cleanup();
-      resolve(confirmed);
-    };
-    const onConfirm = () => finish(true);
-    const onCancel = () => finish(false);
-    const onBackdrop = (event) => {
-      if (event.target === modal) finish(false);
-    };
-    const onKeydown = (event) => {
-      if (event.key !== 'Escape' && event.key !== 'Enter') return;
-      event.preventDefault();
-      event.stopPropagation();
-      finish(event.key === 'Enter');
-    };
-
-    okBtn.addEventListener('click', onConfirm);
-    cancelBtn.addEventListener('click', onCancel);
-    if (closeBtn) closeBtn.addEventListener('click', onCancel);
-    modal.addEventListener('click', onBackdrop);
-    document.addEventListener('keydown', onKeydown, true);
-  });
-}
+// 通用确认/提示框由 ui.js 提供：window.showConfirmDialog / window.showAlertDialog
 
 // Filter state
 let filters = {

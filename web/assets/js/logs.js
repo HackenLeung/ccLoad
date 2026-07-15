@@ -2131,7 +2131,11 @@ function displayKeyTestResult(result) {
 async function deleteKeyFromLog(channelId, channelName, maskedApiKey, apiKeyHash = '') {
   if (!channelId || !maskedApiKey) return;
 
-  const confirmDel = confirm(`确定删除渠道“${channelName || ('#' + channelId)}”中的此Key (${maskedApiKey}) 吗？`);
+  const confirmDel = await window.showConfirmDialog({
+    title: window.t ? window.t('common.confirm') : '确认',
+    message: `确定删除渠道“${channelName || ('#' + channelId)}”中的此Key (${maskedApiKey}) 吗？`,
+    danger: true
+  });
   if (!confirmDel) return;
 
   try {
@@ -2140,11 +2144,13 @@ async function deleteKeyFromLog(channelId, channelName, maskedApiKey, apiKeyHash
     const { keyIndex, matchCount, method } = await resolveKeyIndexForLogEntry(apiKeys, maskedApiKey, apiKeyHash);
     if (keyIndex === null) {
       if (matchCount > 1) {
-        alert(method === 'hash'
-          ? '匹配到多个同哈希 Key，为避免误删已阻止操作，请到渠道管理页手动删除。'
-          : '匹配到多个同掩码 Key，为避免误删已阻止操作，请到渠道管理页手动删除。');
+        await window.showAlertDialog({
+          message: method === 'hash'
+            ? '匹配到多个同哈希 Key，为避免误删已阻止操作，请到渠道管理页手动删除。'
+            : '匹配到多个同掩码 Key，为避免误删已阻止操作，请到渠道管理页手动删除。'
+        });
       } else {
-        alert('未能匹配到该Key，请检查渠道配置。');
+        await window.showAlertDialog({ message: '未能匹配到该Key，请检查渠道配置。' });
       }
       return;
     }
@@ -2152,15 +2158,27 @@ async function deleteKeyFromLog(channelId, channelName, maskedApiKey, apiKeyHash
     // 删除Key
     const delResult = await fetchDataWithAuth(`/admin/channels/${channelId}/keys/${keyIndex}`, { method: 'DELETE' });
 
-    alert(`已删除 Key #${keyIndex + 1} (${maskedApiKey})`);
+    if (window.showSuccess) {
+      window.showSuccess(`已删除 Key #${keyIndex + 1} (${maskedApiKey})`);
+    } else {
+      await window.showAlertDialog({ message: `已删除 Key #${keyIndex + 1} (${maskedApiKey})` });
+    }
 
     // 如果没有剩余Key，询问是否删除渠道
     if (delResult && delResult.remaining_keys === 0) {
-      const delChannel = confirm('该渠道已无可用Key，是否删除整个渠道？');
+      const delChannel = await window.showConfirmDialog({
+        title: window.t ? window.t('common.confirm') : '确认',
+        message: '该渠道已无可用Key，是否删除整个渠道？',
+        danger: true
+      });
       if (delChannel) {
         const chResp = await fetchAPIWithAuth(`/admin/channels/${channelId}`, { method: 'DELETE' });
         if (!chResp.success) throw new Error(chResp.error || '删除渠道失败');
-        alert('渠道已删除');
+        if (window.showSuccess) {
+          window.showSuccess('渠道已删除');
+        } else {
+          await window.showAlertDialog({ message: '渠道已删除' });
+        }
       }
     }
 
@@ -2168,7 +2186,11 @@ async function deleteKeyFromLog(channelId, channelName, maskedApiKey, apiKeyHash
     load();
   } catch (e) {
     console.error('删除Key失败', e);
-    alert(e.message || '删除Key失败');
+    if (window.showError) {
+      window.showError(e.message || '删除Key失败');
+    } else {
+      await window.showAlertDialog({ message: e.message || '删除Key失败' });
+    }
   }
 }
 

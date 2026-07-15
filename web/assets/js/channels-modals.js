@@ -301,6 +301,9 @@ function initChannelEditorActions() {
       click: {
         'close-channel-modal': () => invokeChannelEditorAction('closeModal'),
         'add-inline-url': () => invokeChannelEditorAction('addInlineURL'),
+        'open-quick-conn-import-modal': () => invokeChannelEditorAction('openQuickConnImportModal'),
+        'close-quick-conn-import-modal': () => invokeChannelEditorAction('closeQuickConnImportModal'),
+        'confirm-quick-conn-import': () => invokeChannelEditorAction('confirmQuickConnImport'),
         'batch-delete-urls': () => invokeChannelEditorAction('batchDeleteSelectedURLs'),
         'add-inline-key': () => invokeChannelEditorAction('addInlineKey'),
         'open-key-import-modal': () => invokeChannelEditorAction('openKeyImportModal'),
@@ -635,12 +638,16 @@ function scheduleChannelDuplicateHintCheck() {
   }
 }
 
-function confirmDuplicateChannel(dupes) {
+async function confirmDuplicateChannel(dupes) {
   const list = dupes.map(d => {
     const urls = d.url.split('\n').filter(u => u.trim());
     return `• ${d.name}（${d.channel_type}）\n  ${urls.join('\n  ')}`;
   }).join('\n\n');
-  return confirm(window.t('channels.duplicateChannelFound', { list }));
+  return window.showConfirmDialog({
+    title: window.t('common.confirm'),
+    message: window.t('channels.duplicateChannelFound', { list }),
+    danger: false
+  });
 }
 
 function setChannelSavePending(pending) {
@@ -654,14 +661,14 @@ async function saveChannel(event) {
 
   const validURLs = getValidInlineURLs();
   if (validURLs.length === 0) {
-    alert(window.t('channels.fillApiUrlFirst'));
+    await window.showAlertDialog({ message: window.t('channels.fillApiUrlFirst') });
     return;
   }
 
   const validKeyRows = getValidInlineKeyRows();
   const validKeys = validKeyRows.map(row => row.api_key);
   if (validKeyRows.length === 0) {
-    alert(window.t('channels.atLeastOneKey'));
+    await window.showAlertDialog({ message: window.t('channels.atLeastOneKey') });
     return;
   }
 
@@ -691,7 +698,7 @@ async function saveChannel(event) {
     if (window.showError) {
       window.showError(msg);
     } else {
-      alert(msg);
+      await window.showAlertDialog({ message: msg });
     }
     return;
   }
@@ -733,7 +740,7 @@ async function saveChannel(event) {
   try {
     if (!editingChannelId) {
       const dupes = await checkChannelDuplicate(channelType, validURLs);
-      if (dupes.length > 0 && !confirmDuplicateChannel(dupes)) return;
+      if (dupes.length > 0 && !(await confirmDuplicateChannel(dupes))) return;
     }
 
     const resp = editingChannelId
@@ -1203,8 +1210,13 @@ async function batchRefreshSelectedChannels(mode) {
     return;
   }
 
-  if (mode === 'replace' && !confirm(window.t('channels.batchRefreshReplaceConfirm', { count: channelIDs.length }))) {
-    return;
+  if (mode === 'replace') {
+    const confirmed = await window.showConfirmDialog({
+      title: window.t('common.confirm'),
+      message: window.t('channels.batchRefreshReplaceConfirm', { count: channelIDs.length }),
+      danger: true
+    });
+    if (!confirmed) return;
   }
 
   if (typeof clearAllBatchRefreshResults === 'function') {
@@ -1924,13 +1936,16 @@ function updateSelectAllModelsCheckbox() {
 /**
  * 批量删除选中的模型
  */
-function batchDeleteSelectedModels() {
+async function batchDeleteSelectedModels() {
   const count = selectedModelIndices.size;
   if (count === 0) return;
 
-  if (!confirm(window.t('channels.confirmBatchDeleteModels', { count }))) {
-    return;
-  }
+  const confirmed = await window.showConfirmDialog({
+    title: window.t('common.confirm'),
+    message: window.t('channels.confirmBatchDeleteModels', { count }),
+    danger: true
+  });
+  if (!confirmed) return;
 
   const tableContainer = document.querySelector('#redirectTableBody').closest('.inline-table-container');
   const scrollTop = tableContainer ? tableContainer.scrollTop : 0;
@@ -2040,7 +2055,7 @@ async function fetchModelsFromAPI() {
     if (window.showError) {
       window.showError(window.t('channels.fillApiUrlFirst'));
     } else {
-      alert(window.t('channels.fillApiUrlFirst'));
+      await window.showAlertDialog({ message: window.t('channels.fillApiUrlFirst') });
     }
     return;
   }
@@ -2049,7 +2064,7 @@ async function fetchModelsFromAPI() {
     if (window.showError) {
       window.showError(window.t('channels.addAtLeastOneKey'));
     } else {
-      alert(window.t('channels.addAtLeastOneKey'));
+      await window.showAlertDialog({ message: window.t('channels.addAtLeastOneKey') });
     }
     return;
   }
@@ -2103,7 +2118,7 @@ async function fetchModelsFromAPI() {
     if (window.showSuccess) {
       window.showSuccess(successMessage);
     } else {
-      alert(successMessage);
+      await window.showAlertDialog({ message: successMessage });
     }
 
   } catch (error) {
@@ -2112,7 +2127,7 @@ async function fetchModelsFromAPI() {
     if (window.showError) {
       window.showError(window.t('channels.fetchModelsFailed', { error: error.message }));
     } else {
-      alert(window.t('channels.fetchModelsFailed', { error: error.message }));
+      await window.showAlertDialog({ message: window.t('channels.fetchModelsFailed', { error: error.message }) });
     }
   }
 }
@@ -2146,7 +2161,7 @@ function addCommonModels() {
     if (window.showWarning) {
       window.showWarning(window.t('channels.noPresetModels', { type: channelType }));
     } else {
-      alert(window.t('channels.noPresetModels', { type: channelType }));
+      window.showAlertDialog({ message: window.t('channels.noPresetModels', { type: channelType }) });
     }
     return;
   }

@@ -703,7 +703,12 @@
   }
 
   async function onLogout() {
-    if (!confirm(t('confirm.logout'))) return;
+    const ok = await showConfirmDialog({
+      title: t('common.confirm'),
+      message: t('confirm.logout'),
+      danger: true
+    });
+    if (!ok) return;
 
     // 先清理本地Token，避免后续请求触发token检查
     const token = localStorage.getItem('ccload_token');
@@ -773,6 +778,132 @@
   // 供其他模块订阅活动请求数据（全站唯一轮询源，避免重复请求）
   window.onActiveRequestsData = onActiveRequestsData;
   window.getChartTheme = getChartTheme;
+
+
+  // ============================================================
+  // 通用确认/提示弹窗（替代原生 alert / confirm）
+  // ============================================================
+  let dialogChain = Promise.resolve();
+
+  function dialogT(key, fallback) {
+    if (typeof window.t === 'function') {
+      const value = window.t(key);
+      if (value && value !== key) return value;
+    }
+    return fallback;
+  }
+
+  function ensureDialogModal() {
+    let modal = document.getElementById('genericConfirmModal');
+    if (modal) return modal;
+
+    modal = document.createElement('div');
+    modal.id = 'genericConfirmModal';
+    modal.className = 'modal generic-dialog-modal';
+    modal.innerHTML = `
+      <div class="modal-content confirm-modal">
+        <div class="modal-header modal-header--compact">
+          <h2 class="modal-title" id="genericConfirmTitle"></h2>
+          <button type="button" class="close-btn" id="genericConfirmClose" aria-label="Close">&times;</button>
+        </div>
+        <p id="genericConfirmMessage" class="generic-dialog-message"></p>
+        <div class="confirm-actions confirm-actions--end">
+          <button type="button" class="btn btn-secondary" id="genericConfirmCancel"></button>
+          <button type="button" class="btn btn-primary" id="genericConfirmOk"></button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  function showConfirmDialog(options = {}) {
+    const run = () => new Promise((resolve) => {
+      const modal = ensureDialogModal();
+      const titleEl = document.getElementById('genericConfirmTitle');
+      const messageEl = document.getElementById('genericConfirmMessage');
+      const closeBtn = document.getElementById('genericConfirmClose');
+      const cancelBtn = document.getElementById('genericConfirmCancel');
+      const okBtn = document.getElementById('genericConfirmOk');
+      if (!modal || !messageEl || !cancelBtn || !okBtn) {
+        resolve(window.confirm(options.message || ''));
+        return;
+      }
+
+      const isAlert = options.mode === 'alert' || options.alert === true;
+      if (titleEl) {
+        titleEl.textContent = options.title
+          || (isAlert ? dialogT('common.info', '提示') : dialogT('common.confirm', '确认'));
+      }
+      messageEl.textContent = options.message || '';
+      messageEl.style.whiteSpace = 'pre-wrap';
+      messageEl.style.wordBreak = 'break-word';
+      okBtn.textContent = options.okText || dialogT('common.confirm', '确认');
+      cancelBtn.textContent = options.cancelText || dialogT('common.cancel', '取消');
+      cancelBtn.style.display = isAlert ? 'none' : '';
+      okBtn.classList.toggle('btn-danger', options.danger === true);
+      okBtn.classList.toggle('btn-primary', options.danger !== true);
+      modal.classList.toggle('generic-dialog-modal--alert', isAlert);
+      modal.style.zIndex = '1100';
+
+      modal.classList.add('show');
+      okBtn.focus();
+
+      const cleanup = () => {
+        modal.classList.remove('show');
+        okBtn.removeEventListener('click', onConfirm);
+        cancelBtn.removeEventListener('click', onCancel);
+        if (closeBtn) closeBtn.removeEventListener('click', onCancel);
+        modal.removeEventListener('click', onBackdrop);
+        document.removeEventListener('keydown', onKeydown, true);
+      };
+      const finish = (confirmed) => {
+        cleanup();
+        resolve(confirmed);
+      };
+      const onConfirm = () => finish(true);
+      const onCancel = () => finish(false);
+      const onBackdrop = (event) => {
+        if (event.target === modal) finish(false);
+      };
+      const onKeydown = (event) => {
+        if (event.key !== 'Escape' && event.key !== 'Enter') return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.key === 'Escape') {
+          finish(false);
+          return;
+        }
+        finish(true);
+      };
+
+      okBtn.addEventListener('click', onConfirm);
+      cancelBtn.addEventListener('click', onCancel);
+      if (closeBtn) closeBtn.addEventListener('click', onCancel);
+      modal.addEventListener('click', onBackdrop);
+      document.addEventListener('keydown', onKeydown, true);
+    });
+
+    const next = dialogChain.then(run, run);
+    dialogChain = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  function showAlertDialog(options = {}) {
+    if (typeof options === 'string') {
+      options = { message: options };
+    }
+    return showConfirmDialog({
+      ...options,
+      mode: 'alert',
+      title: options.title || dialogT('common.info', '提示'),
+      okText: options.okText || dialogT('common.confirm', '确认'),
+      danger: options.danger === true
+    }).then(() => true);
+  }
+
+  window.showConfirmDialog = showConfirmDialog;
+  window.showAlertDialog = showAlertDialog;
 
   // 通知系统（全局复用，DRY）
   function ensureNotifyHost() {
