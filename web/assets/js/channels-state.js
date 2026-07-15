@@ -20,6 +20,14 @@ let allAvailableChannelNames = [];
 let batchRefreshResultsByChannelId = new Map();
 let activeSortPresetId = localStorage.getItem('channels.sortPreset.active') || '';
 
+function isTokenChannelsReadOnly() {
+  return Boolean(window.WebAuth && window.WebAuth.isAPITokenRole(localStorage));
+}
+
+function channelsReadURL(adminPath, dashboardPath) {
+  return isTokenChannelsReadOnly() ? dashboardPath : adminPath;
+}
+
 function normalizeSelectedChannelID(id) {
   const numericID = Number(id);
   if (!Number.isFinite(numericID) || numericID <= 0) {

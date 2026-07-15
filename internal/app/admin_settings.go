@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 
@@ -221,8 +222,11 @@ func validateSettingValue(key, valueType, value string) error {
 		if err != nil {
 			return fmt.Errorf("not a valid number")
 		}
+		if math.IsNaN(floatVal) || math.IsInf(floatVal, 0) {
+			return fmt.Errorf("must be a finite number")
+		}
 		switch key {
-		case "channel_check_interval_hours":
+		case "channel_check_interval_hours", "model_catalog_sync_interval_hours":
 			if floatVal < 0 {
 				return fmt.Errorf("%s must be >= 0", key)
 			}

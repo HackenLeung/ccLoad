@@ -683,7 +683,7 @@ func (t *CodexTester) Build(cfg *model.Config, apiKey string, req *TestChannelRe
 	h.Set("Content-Type", "application/json")
 	h.Set("Authorization", "Bearer "+apiKey)
 	h.Set("X-Api-Key", apiKey)
-	h.Set("User-Agent", "codex-tui/0.137.0 (Mac OS 26.5.1; arm64) iTerm.app/3.7.0beta3 (codex-tui; 0.137.0)")
+	h.Set("User-Agent", "codex-tui/0.144.1 (Mac OS 26.5.2; arm64) iTerm.app/3.7.0beta6 (codex-tui; 0.144.1)")
 	h.Set("Originator", "codex-tui")
 	h.Set("Session-Id", sessionID)
 	h.Set("Thread-Id", sessionID)
@@ -966,7 +966,7 @@ func (t *AnthropicTester) Build(cfg *model.Config, apiKey string, req *TestChann
 	h.Set("Content-Type", "application/json")
 	h.Set("Authorization", "Bearer "+apiKey)
 	// Claude Code CLI headers
-	h.Set("User-Agent", "claude-cli/2.1.97 (external, cli)")
+	h.Set("User-Agent", "claude-cli/2.1.209 (external, cli)")
 	h.Set("x-app", "cli")
 	h.Set("anthropic-version", "2023-06-01")
 	h.Set("anthropic-beta", "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24")

@@ -34,7 +34,7 @@ func TestMigrate_SQLite_FullFlow(t *testing.T) {
 
 	// 验证核心表存在
 	tables := []string{"channels", "api_keys", "channel_models", "auth_tokens",
-		"system_settings", "admin_sessions", "logs", "schema_migrations"}
+		"system_settings", "web_sessions", "logs", "schema_migrations"}
 	for _, tbl := range tables {
 		var name string
 		err := db.QueryRowContext(ctx,
@@ -63,6 +63,27 @@ func TestMigrate_SQLite_FullFlow(t *testing.T) {
 	}
 	if val != "7" {
 		t.Errorf("log_retention_days=%q, want %q", val, "7")
+	}
+}
+
+func TestMigrateSQLite_SeedsModelCatalogSyncIntervalSetting(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if err := migrate(ctx, db, DialectSQLite); err != nil {
+		t.Fatalf("migrate failed: %v", err)
+	}
+
+	var value, valueType, defaultValue string
+	if err := db.QueryRowContext(ctx, `
+		SELECT value, value_type, default_value
+		FROM system_settings
+		WHERE "key" = ?
+	`, "model_catalog_sync_interval_hours").Scan(&value, &valueType, &defaultValue); err != nil {
+		t.Fatalf("get model_catalog_sync_interval_hours: %v", err)
+	}
+	if value != "6" || valueType != "float" || defaultValue != "6" {
+		t.Fatalf("setting = value:%q type:%q default:%q, want value:6 type:float default:6", value, valueType, defaultValue)
 	}
 }
 

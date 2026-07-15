@@ -1,3 +1,16 @@
+// 保持公共 UI 在独立加载或旧缓存混用时可用；完整实现由 web-auth.js 覆盖。
+window.WebAuth = window.WebAuth || {
+  ROLE_KEY: 'ccload_web_role',
+  clearWebSession(storage) {
+    storage.removeItem('ccload_token');
+    storage.removeItem('ccload_token_expiry');
+    storage.removeItem('ccload_web_role');
+  },
+  getWebRole() { return 'admin'; },
+  isAPITokenRole() { return false; },
+  filterNavigation(keys) { return [...keys]; }
+};
+
 // ============================================================
 // Token认证工具（统一API调用，替代Cookie Session）
 // ============================================================
@@ -30,8 +43,7 @@
 
     // 检查Token过期（静默跳转，不显示错误提示）
     if (!token || (expiry && Date.now() > parseInt(expiry))) {
-      localStorage.removeItem('ccload_token');
-      localStorage.removeItem('ccload_token_expiry');
+      window.WebAuth.clearWebSession(localStorage);
       window.location.href = getLoginUrl();
       throw new Error('Token expired');
     }
@@ -46,8 +58,7 @@
 
     // 处理401未授权（静默跳转，不显示错误提示）
     if (response.status === 401) {
-      localStorage.removeItem('ccload_token');
-      localStorage.removeItem('ccload_token_expiry');
+      window.WebAuth.clearWebSession(localStorage);
       window.location.href = getLoginUrl();
       throw new Error('Unauthorized');
     }
@@ -57,6 +68,8 @@
 
   // 导出到全局作用域
   window.fetchWithAuth = fetchWithAuth;
+  window.getWebRole = () => window.WebAuth.getWebRole(localStorage);
+  window.isAPITokenRole = () => window.WebAuth.isAPITokenRole(localStorage);
 })();
 
 // ============================================================
@@ -367,7 +380,7 @@
   let _activeWrap = null;        // .brand-icon-wrap 元素
   let _activeBadge = null;       // .brand-badge 元素
   let _faviconBase = null;       // 预加载的 favicon 底图 Image
-  let _origFaviconHref = null;   // 原始 favicon href（用于归零恢复）
+  let _origFaviconLinks = null;  // 页面初始 favicon 集合快照（用于完整恢复）
   let _lastBadgeCount = -1;      // 去重：仅数量变化时重绘 favicon
   const _activeDataListeners = [];  // 订阅者回调列表
   let _lastActiveData = null;       // 最近一次推送的数据（新订阅者立即获得，规避时序竞争）
@@ -386,17 +399,73 @@
     return count > 9 ? '9+' : String(count);
   }
 
-  function getFaviconLink() {
-    let link = document.querySelector('link[rel~="icon"]');
-    if (!link) {
-      link = document.createElement('link');
-      link.rel = 'icon';
-      document.head.appendChild(link);
+  function listFaviconLinks() {
+    if (typeof document.querySelectorAll === 'function') {
+      return Array.from(document.querySelectorAll('link[rel~="icon"]'));
     }
-    if (_origFaviconHref === null) {
-      _origFaviconHref = link.getAttribute('href') || '/web/favicon.svg';
+    const link = typeof document.querySelector === 'function'
+      ? document.querySelector('link[rel~="icon"]')
+      : null;
+    return link ? [link] : [];
+  }
+
+  function snapshotFaviconLink(link) {
+    const href = (link && (link.getAttribute('href') || link.href)) || '';
+    const rel = (link && (link.getAttribute('rel') || link.rel)) || 'icon';
+    const type = link ? (link.getAttribute('type') || link.type || '') : '';
+    const sizes = link ? (link.getAttribute('sizes') || link.sizes || '') : '';
+    return { rel, href, type, sizes };
+  }
+
+  function rememberOriginalFavicons() {
+    if (_origFaviconLinks !== null) return;
+    const links = listFaviconLinks().filter((link) => link.getAttribute('data-dynamic-favicon') !== '1');
+    _origFaviconLinks = links.map(snapshotFaviconLink);
+    if (_origFaviconLinks.length === 0) {
+      _origFaviconLinks = [{ rel: 'icon', href: '/web/favicon.svg', type: 'image/svg+xml', sizes: '' }];
     }
+  }
+
+  function removeFaviconLinks(links) {
+    for (const link of links) {
+      if (!link) continue;
+      if (typeof link.remove === 'function') {
+        link.remove();
+        continue;
+      }
+      if (link.parentNode && typeof link.parentNode.removeChild === 'function') {
+        link.parentNode.removeChild(link);
+      }
+    }
+  }
+
+  function createFaviconLink(descriptor, dynamic = false) {
+    const link = document.createElement('link');
+    link.rel = descriptor.rel || 'icon';
+    if (dynamic) link.setAttribute('data-dynamic-favicon', '1');
+    if (descriptor.type) link.setAttribute('type', descriptor.type);
+    else link.removeAttribute('type');
+    if (descriptor.sizes) link.setAttribute('sizes', descriptor.sizes);
+    else link.removeAttribute('sizes');
+    link.href = descriptor.href;
+    document.head.appendChild(link);
     return link;
+  }
+
+  function replaceFaviconSet(descriptors, dynamic = false) {
+    const existing = listFaviconLinks();
+    removeFaviconLinks(existing);
+    for (const descriptor of descriptors) {
+      createFaviconLink(descriptor, dynamic);
+    }
+  }
+
+  function replaceDynamicFavicon(href, type) {
+    rememberOriginalFavicons();
+    replaceFaviconSet([
+      { rel: 'shortcut icon', href, type, sizes: '' },
+      { rel: 'icon', href, type, sizes: '' }
+    ], true);
   }
 
   // 预加载 favicon 底图（首次异步，之后同步回调）
@@ -441,14 +510,15 @@
     ctx.fillText(text, cx, cy + 1);
 
     try {
-      const link = getFaviconLink();
-      link.removeAttribute('type'); // dataURL 是 PNG，移除原 image/x-icon 声明，交给浏览器内容嗅探
-      link.href = canvas.toDataURL('image/png');
+      replaceDynamicFavicon(canvas.toDataURL('image/png'), 'image/png');
     } catch (_) { /* 编码失败：保持原 favicon */ }
   }
 
   function restoreFavicon() {
-    if (_origFaviconHref !== null) getFaviconLink().href = _origFaviconHref;
+    rememberOriginalFavicons();
+    replaceFaviconSet(_origFaviconLinks || [
+      { rel: 'icon', href: '/web/favicon.svg', type: 'image/svg+xml', sizes: '' }
+    ], false);
   }
 
   function redrawActiveFavicon() {
@@ -604,8 +674,10 @@
         h('div', { class: 'brand-text' }, 'Claude Code & Codex Proxy')
       ])
     ]);
+    const role = window.getWebRole();
+    const visibleNavKeys = new Set(window.WebAuth.filterNavigation(NAVS.map((item) => item.key), role));
     const nav = h('nav', { class: 'topnav' }, [
-      ...NAVS.map(n => h('a', {
+      ...NAVS.filter((item) => visibleNavKeys.has(item.key)).map(n => h('a', {
         class: `topnav-link ${n.key === active ? 'active' : ''}`,
         href: n.href,
         'data-nav-key': n.key
@@ -712,8 +784,7 @@
 
     // 先清理本地Token，避免后续请求触发token检查
     const token = localStorage.getItem('ccload_token');
-    localStorage.removeItem('ccload_token');
-    localStorage.removeItem('ccload_token_expiry');
+    window.WebAuth.clearWebSession(localStorage);
 
     // 如果有token，尝试调用后端登出接口（使用普通fetch，不触发token检查）
     if (token) {
@@ -754,6 +825,7 @@
 
   window.initTopbar = function initTopbar(activeKey) {
     document.body.classList.add('top-layout');
+    document.body.classList.toggle('web-role-api-token', window.isAPITokenRole());
     const app = document.querySelector('.app-container') || document.body;
     // 隐藏侧边栏与移动按钮
     const sidebar = document.getElementById('sidebar');
@@ -772,7 +844,7 @@
     initVersionDisplay();
 
     // 启动活动请求指示器轮询
-    if (isLoggedIn()) startActiveRequestsPolling();
+    if (isLoggedIn() && !window.isAPITokenRole()) startActiveRequestsPolling();
   }
 
   // 供其他模块订阅活动请求数据（全站唯一轮询源，避免重复请求）
@@ -1153,6 +1225,13 @@
     const run = typeof options.run === 'function' ? options.run : () => {};
 
     const execute = async () => {
+	  const session = await window.fetchDataWithAuth('/dashboard/session');
+	  if (session && session.role) localStorage.setItem(window.WebAuth.ROLE_KEY, session.role);
+	  const restrictedPages = new Set(['channels', 'tokens', 'settings']);
+	  if (window.isAPITokenRole() && restrictedPages.has(options.topbarKey)) {
+	    window.location.replace('/web/index.html');
+	    return;
+	  }
       if (options.translate !== false && window.i18n && typeof window.i18n.translatePage === 'function') {
         window.i18n.translatePage();
       }
@@ -1296,6 +1375,10 @@
   async function initAuthTokenFilter(options = {}) {
     const selectId = options.selectId;
     if (!selectId) return [];
+
+    if (window.isAPITokenRole()) {
+      return [];
+    }
 
     if (Array.isArray(options.preloadedTokens)) {
       fillAuthTokenSelect(selectId, options.preloadedTokens, options.loadOptions);
@@ -1543,6 +1626,7 @@
   const AUTO_REFRESH_CACHE_TTL_MS = 60 * 1000;
 
   async function fetchAutoRefreshIntervalSec() {
+    if (window.isAPITokenRole()) return 0;
     try {
       const cached = window.sessionStorage?.getItem(AUTO_REFRESH_CACHE_KEY);
       if (cached) {
@@ -2418,6 +2502,7 @@
 
   async function loadAuthTokensIntoSelect(selectId, opts) {
     const o = opts || {};
+	if (window.isAPITokenRole()) return [];
     try {
       const data = await fetchDataWithAuth('/admin/auth-tokens');
       const tokens = (data && data.tokens) || [];

@@ -157,6 +157,109 @@ func TestCalculateCost_CerebrasModelIDs(t *testing.T) {
 	}
 }
 
+// Ollama/OpenRouter 上游常用 gpt-oss:120b 写法；渠道「重定向目标」会落到此 ID。
+// 定价表 canonical 为 gpt-oss-120b，冒号变体必须能命中，否则 cost=0 且触发定价缺失告警。
+func TestCalculateCost_GPTOSSColonAlias(t *testing.T) {
+	base := CalculateCostDetailed("gpt-oss-120b", 156, 131, 0, 0, 0)
+	if base <= 0 {
+		t.Fatalf("canonical gpt-oss-120b 应有定价, got %v", base)
+	}
+	for _, model := range []string{"gpt-oss:120b", "GPT-OSS:120b", "gpt-oss:20b"} {
+		cost := CalculateCostDetailed(model, 156, 131, 0, 0, 0)
+		if cost <= 0 {
+			t.Errorf("%s 应继承连字符定价, got %v", model, cost)
+		}
+	}
+	// 120b 冒号变体与 canonical 同价
+	got := CalculateCostDetailed("gpt-oss:120b", 156, 131, 0, 0, 0)
+	if !floatEquals(got, base, 1e-12) {
+		t.Fatalf("gpt-oss:120b cost=%v want same as gpt-oss-120b %v", got, base)
+	}
+	// 精确条目 gpt-oss-120b:exacto 不得被冒号归一化破坏
+	exacto := CalculateCostDetailed("gpt-oss-120b:exacto", 1000, 1000, 0, 0, 0)
+	canonical := CalculateCostDetailed("gpt-oss-120b", 1000, 1000, 0, 0, 0)
+	if floatEquals(exacto, canonical, 1e-12) {
+		t.Fatalf("gpt-oss-120b:exacto 应保留独立定价, got same as canonical %v", exacto)
+	}
+	if exacto <= 0 {
+		t.Fatalf("gpt-oss-120b:exacto 应有定价, got %v", exacto)
+	}
+}
+
+func TestResolveBillingModel_FallsBackToRequestWhenActualUnpriced(t *testing.T) {
+	// 上游 ID 无定价、客户端请求名有定价时，按第一列（请求模型）计费
+	got := ResolveBillingModel("upstream-local-tag-xyz", "gpt-oss-120b")
+	if got != "gpt-oss-120b" {
+		t.Fatalf("ResolveBillingModel = %q, want gpt-oss-120b", got)
+	}
+	// 上游有定价时优先上游（重定向可能换价）
+	got = ResolveBillingModel("gpt-oss-120b", "claude-sonnet-4-5")
+	if got != "gpt-oss-120b" {
+		t.Fatalf("priced actual should win, got %q", got)
+	}
+	// 仅 actual
+	got = ResolveBillingModel("gpt-oss-120b", "")
+	if got != "gpt-oss-120b" {
+		t.Fatalf("got %q", got)
+	}
+	// actual 空则 request
+	got = ResolveBillingModel("", "gpt-oss-120b")
+	if got != "gpt-oss-120b" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// 渠道「模型配置」常见短名 + Ollama 冒号重定向目标，必须与 canonical 定价一致。
+// 截图场景：第一列请求名 / 第二列 redirect_model 都会被拿去计费。
+func TestCalculateCost_ChannelRedirectModelAliases(t *testing.T) {
+	const in, out = 1000, 1000
+	cases := []struct {
+		name      string
+		variants  []string
+		canonical string
+	}{
+		{
+			name:      "gpt-oss-120b",
+			variants:  []string{"gpt-oss-120b", "gpt-oss:120b"},
+			canonical: "gpt-oss-120b",
+		},
+		{
+			name:      "qwen3-vl-235b",
+			variants:  []string{"qwen3-vl-235b", "qwen3-vl:235b"},
+			canonical: "qwen3-vl-235b-a22b-instruct",
+		},
+		{
+			name:      "qwen3-coder-480b",
+			variants:  []string{"qwen3-coder-480b", "qwen3-coder:480b"},
+			canonical: "qwen3-coder-480b-a35b-instruct",
+		},
+		{
+			name:      "qwen3-vl-235b-instruct",
+			variants:  []string{"qwen3-vl-235b-instruct", "qwen3-vl:235b-instruct"},
+			canonical: "qwen3-vl-235b-a22b-instruct",
+		},
+		{
+			name:      "qwen3-coder-next",
+			variants:  []string{"qwen3-coder-next", "qwen3-coder:next"},
+			canonical: "qwen3-coder-next",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want := CalculateCostDetailed(tc.canonical, in, out, 0, 0, 0)
+			if want <= 0 {
+				t.Fatalf("canonical %s 应有定价, got %v", tc.canonical, want)
+			}
+			for _, model := range tc.variants {
+				got := CalculateCostDetailed(model, in, out, 0, 0, 0)
+				if !floatEquals(got, want, 1e-12) {
+					t.Errorf("%s cost=%v want %v (canonical %s)", model, got, want, tc.canonical)
+				}
+			}
+		})
+	}
+}
+
 func TestCalculateCost_UnknownModel(t *testing.T) {
 	// 未知模型应返回0
 	cost := CalculateCostDetailed("unknown-model-xyz", 1000, 1000, 0, 0, 0)
@@ -261,6 +364,40 @@ func TestCalculateCost_OpenAIModels(t *testing.T) {
 		if !floatEquals(cost, tc.expectedCost, 0.000001) {
 			t.Errorf("%s: 成本 = %.6f, 期望 %.6f", tc.model, cost, tc.expectedCost)
 		}
+	}
+}
+
+func TestCalculateCost_GPT56TieredPricing(t *testing.T) {
+	RestoreEmbeddedModelCatalog()
+	t.Cleanup(RestoreEmbeddedModelCatalog)
+
+	testCases := []struct {
+		name         string
+		model        string
+		inputTokens  int
+		outputTokens int
+		cacheRead    int
+		cacheWrite   int
+		expected     float64
+	}{
+		{name: "sol boundary", model: "gpt-5.6-sol", inputTokens: 272_000, outputTokens: 1_000, expected: 1.39},
+		{name: "sol above boundary", model: "gpt-5.6", inputTokens: 272_001, outputTokens: 1_000, expected: 2.76501},
+		{name: "terra boundary", model: "gpt-5.6-terra", inputTokens: 272_000, outputTokens: 1_000, expected: 0.695},
+		{name: "terra above boundary", model: "gpt-5.6-terra", inputTokens: 272_001, outputTokens: 1_000, expected: 1.382505},
+		{name: "luna boundary", model: "gpt-5.6-luna", inputTokens: 272_000, outputTokens: 1_000, expected: 0.278},
+		{name: "luna above boundary", model: "gpt-5.6-luna", inputTokens: 272_001, outputTokens: 1_000, expected: 0.553002},
+		{name: "sol cache crosses boundary", model: "gpt-5.6-sol", inputTokens: 100_000, outputTokens: 1_000, cacheRead: 200_000, expected: 1.245},
+		{name: "terra cache crosses boundary", model: "gpt-5.6-terra", inputTokens: 100_000, outputTokens: 1_000, cacheRead: 200_000, expected: 0.6225},
+		{name: "luna cache crosses boundary and write uses high tier", model: "gpt-5.6-luna", inputTokens: 100_000, cacheRead: 200_000, cacheWrite: 1_000, expected: 0.2425},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cost := CalculateCostDetailed(tc.model, tc.inputTokens, tc.outputTokens, tc.cacheRead, tc.cacheWrite, 0)
+			if !floatEquals(cost, tc.expected, 0.000001) {
+				t.Fatalf("cost = %.6f, expected %.6f", cost, tc.expected)
+			}
+		})
 	}
 }
 
@@ -1394,5 +1531,103 @@ func TestCalculateFastModeCost_ZeroTokens(t *testing.T) {
 	cost := CalculateFastModeCost(0, 0, 0, 0, 0)
 	if cost != 0.0 {
 		t.Errorf("零token应返回0, 实际 %.6f", cost)
+	}
+}
+
+func TestInstalledModelCatalogCalculatesRemoteTierPrices(t *testing.T) {
+	RestoreEmbeddedModelCatalog()
+	t.Cleanup(RestoreEmbeddedModelCatalog)
+
+	snapshot := &ModelCatalogSnapshot{
+		Version: ModelCatalogSchemaVersion,
+		Models: []ModelCatalogEntry{
+			{
+				ID: "gpt-next", Provider: "openai",
+				Pricing: ModelPricing{InputPrice: 2, OutputPrice: 8, CacheReadPrice: 0.2, HasCacheReadPrice: true},
+			},
+			{
+				ID: "gpt-5", Provider: "openai",
+				Pricing: ModelPricing{InputPrice: 4, OutputPrice: 8, CacheReadPrice: 0.4, HasCacheReadPrice: true},
+			},
+			{
+				ID: "gpt-tiered", Provider: "openai",
+				Pricing: ModelPricing{TokenPricingTiers: []TokenPricingTier{
+					{MaxInputTokens: 272000, InputPrice: 1, OutputPrice: 2, CacheReadPrice: 0.1, HasCacheReadPrice: true},
+					{MaxInputTokens: 0, InputPrice: 3, OutputPrice: 6, CacheReadPrice: 0.3, HasCacheReadPrice: true},
+				}},
+			},
+		},
+	}
+	if err := InstallModelCatalog(snapshot, "models.dev"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := CalculateCostDetailed("gpt-next", 1_000_000, 1_000_000, 1_000_000, 0, 0); got != 10.2 {
+		t.Fatalf("new model cost = %v, want 10.2", got)
+	}
+	if got := CalculateCostDetailed("gpt-5", 1_000_000, 1_000_000, 1_000_000, 0, 0); got != 12.4 {
+		t.Fatalf("overridden model cost = %v, want 12.4", got)
+	}
+	if got := CalculateCostDetailed("gpt-tiered", 300_000, 1_000_000, 1_000_000, 0, 0); got != 7.2 {
+		t.Fatalf("high tier cache-read cost = %v, want 7.2", got)
+	}
+}
+
+func TestInstalledModelCatalogPreservesEmbeddedSemanticsForPartialRemotePricing(t *testing.T) {
+	RestoreEmbeddedModelCatalog()
+	t.Cleanup(RestoreEmbeddedModelCatalog)
+
+	snapshot := &ModelCatalogSnapshot{
+		Version: ModelCatalogSchemaVersion,
+		Models: []ModelCatalogEntry{
+			{
+				ID: "grok-4.5", Provider: "xai",
+				Pricing: ModelPricing{InputPrice: 1, OutputPrice: 2},
+			},
+			{
+				ID: "qwen3-max", Provider: "alibaba",
+				Pricing: ModelPricing{InputPrice: 1, OutputPrice: 2},
+			},
+		},
+	}
+	if err := InstallModelCatalog(snapshot, "models.dev"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := CalculateCostDetailed("grok-4.5", 100_000, 100_000, 0, 0, 0); !floatEquals(got, 0.3, 0.000000001) {
+		t.Fatalf("remote base prices cost = %v, want 0.3", got)
+	}
+	if got := CalculateCostDetailed("grok-4.5", 0, 0, 300_000, 0, 0); !floatEquals(got, 0.3, 0.000000001) {
+		t.Fatalf("legacy high-context cache cost = %v, want 0.3", got)
+	}
+	if got := CalculateCostDetailed("qwen3-max", 64_000, 0, 0, 0, 0); !floatEquals(got, 0.1536, 0.000000001) {
+		t.Fatalf("embedded token tier cost = %v, want 0.1536", got)
+	}
+}
+
+func TestInstalledModelCatalogPrioritizesRemoteExactAlias(t *testing.T) {
+	RestoreEmbeddedModelCatalog()
+	t.Cleanup(RestoreEmbeddedModelCatalog)
+
+	snapshot := &ModelCatalogSnapshot{
+		Version: ModelCatalogSchemaVersion,
+		Models: []ModelCatalogEntry{{
+			ID: "gpt-5.1", Provider: "openai",
+			Pricing: ModelPricing{TokenPricingTiers: []TokenPricingTier{
+				{MaxInputTokens: 272_000, InputPrice: 7, OutputPrice: 11, CacheReadPrice: 1.3, HasCacheReadPrice: true},
+				{MaxInputTokens: 0, InputPrice: 17, OutputPrice: 19, CacheReadPrice: 2.3, HasCacheReadPrice: true},
+			}},
+		}},
+	}
+	if err := InstallModelCatalog(snapshot, "models.dev"); err != nil {
+		t.Fatal(err)
+	}
+
+	const want = 26.4
+	for _, model := range []string{"gpt-5.1", "gpt-5.1-2026-07-10"} {
+		got := CalculateCostDetailed(model, 300_000, 1_000_000, 1_000_000, 0, 0)
+		if !floatEquals(got, want, 0.000000001) {
+			t.Errorf("model=%q cost = %v, want %v", model, got, want)
+		}
 	}
 }

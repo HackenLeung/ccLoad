@@ -76,12 +76,14 @@ type Server struct {
 	maxConcurrency int           // 最大并发数（默认1000）
 
 	// 优雅关闭机制
-	baseCtx        context.Context    // server生命周期context，Shutdown时取消
-	baseCancel     context.CancelFunc // 取消baseCtx
-	shutdownCh     chan struct{}      // 关闭信号channel
-	shutdownDone   chan struct{}      // Shutdown完成信号（幂等）
-	isShuttingDown atomic.Bool        // shutdown标志，防止向已关闭channel写入
-	wg             sync.WaitGroup     // 等待所有后台goroutine结束
+	baseCtx                 context.Context    // server生命周期context，Shutdown时取消
+	baseCancel              context.CancelFunc // 取消baseCtx
+	shutdownCh              chan struct{}      // 关闭信号channel
+	shutdownDone            chan struct{}      // Shutdown完成信号（幂等）
+	isShuttingDown          atomic.Bool        // shutdown标志，防止向已关闭channel写入
+	modelCatalogSyncMu      sync.Mutex         // 串行化模型目录启动和关闭，保护 WaitGroup
+	modelCatalogSyncStarted atomic.Bool
+	wg                      sync.WaitGroup // 等待所有后台goroutine结束
 
 	// [OPT] P3: 渠道类型缓存（TTL 30s）
 	channelTypesCache     map[int64]string
@@ -260,6 +262,41 @@ func NewServer(store storage.Store) *Server {
 
 	return s
 
+}
+
+// StartModelCatalogSync 加载本地快照，并在启用时同步官方模型目录。
+func (s *Server) StartModelCatalogSync() {
+	if s == nil || s.configService == nil {
+		return
+	}
+	s.modelCatalogSyncMu.Lock()
+	defer s.modelCatalogSyncMu.Unlock()
+	if s.isShuttingDown.Load() || !s.modelCatalogSyncStarted.CompareAndSwap(false, true) {
+		return
+	}
+
+	intervalHours := normalizeModelCatalogSyncIntervalHours(
+		s.configService.GetFloat("model_catalog_sync_interval_hours", defaultModelCatalogSyncHours),
+	)
+	syncer := NewModelCatalogSyncer(
+		&http.Client{Timeout: modelCatalogRequestTimeout},
+		modelsDevCatalogURL,
+		modelCatalogCachePath(),
+	)
+	if err := syncer.LoadCache(); err != nil {
+		log.Printf("[WARN] 模型目录缓存加载失败: %v", err)
+	}
+	if intervalHours == 0 {
+		return
+	}
+
+	interval := time.Duration(intervalHours * float64(time.Hour))
+	if interval <= 0 {
+		log.Printf("[WARN] 无效的模型目录同步间隔: %v 小时", intervalHours)
+		return
+	}
+	s.wg.Add(1)
+	go s.runModelCatalogSyncLoop(syncer, interval)
 }
 
 type channelTypeTimeoutConfig struct {
@@ -756,7 +793,7 @@ func (s *Server) SetupRoutes(r *gin.Engine) {
 
 	// 公开访问的API（首页仪表盘数据）
 	// [SECURITY NOTE] /public/* 端点故意不做认证，用于首页展示。
-	// 如需隐藏运营数据，可添加 s.authService.RequireTokenAuth() 中间件。
+	// 认证仪表盘使用 /dashboard/summary；该公开端点保留给未登录首页集成。
 	public := r.Group("/public", ZstdMiddleware())
 	{
 		public.GET("/summary", s.HandlePublicSummary)
@@ -770,7 +807,7 @@ func (s *Server) SetupRoutes(r *gin.Engine) {
 
 	// 需要身份验证的admin APIs（使用Token认证）
 	admin := r.Group("/admin", ZstdMiddleware())
-	admin.Use(s.authService.RequireTokenAuth())
+	admin.Use(s.authService.RequireAdminAuth())
 	{
 		// 渠道管理
 		admin.GET("/channels", s.HandleChannels)
@@ -828,6 +865,26 @@ func (s *Server) SetupRoutes(r *gin.Engine) {
 		admin.POST("/settings/:key/reset", s.AdminResetSetting)
 		admin.POST("/settings/batch", s.AdminBatchUpdateSettings)
 	}
+
+	// Web 仪表盘只读 API。API Token 会话由服务端强制绑定 auth_token_id。
+	dashboard := r.Group("/dashboard", ZstdMiddleware())
+	dashboard.Use(s.authService.RequireWebAuth())
+	{
+		dashboard.GET("/session", s.authService.HandleWebSession)
+		dashboard.GET("/summary", s.HandlePublicSummary)
+		dashboard.GET("/logs", s.HandleErrors)
+		dashboard.GET("/logs/bootstrap", s.HandleLogsBootstrap)
+		dashboard.GET("/metrics", s.HandleMetrics)
+		dashboard.GET("/stats", s.HandleStats)
+		dashboard.GET("/stats/filter-options", s.HandleStatsFilterOptions)
+		dashboard.GET("/models", s.HandleGetModels)
+		dashboard.GET("/channels", s.HandleDashboardChannels)
+		dashboard.GET("/channels/filter-options", s.HandleDashboardChannelFilterOptions)
+	}
+	dashboardProxy := r.Group("/dashboard")
+	dashboardProxy.Use(s.authService.RequireWebAuth(), s.authService.RequireWebAPITokenProxyAuth(), captureDashboardProxyMetadata())
+	dashboardProxy.Any("/v1/*path", s.HandleProxyRequest)
+	dashboardProxy.Any("/v1beta/*path", s.HandleProxyRequest)
 
 	// 静态文件服务（带版本号和缓存控制）
 	// - HTML：不缓存，动态替换 __VERSION__ 占位符
@@ -966,7 +1023,9 @@ func (s *Server) HandleChannelKeys(c *gin.Context) {
 // 参数ctx用于控制最大等待时间，超时后强制退出
 // 返回值：nil表示成功，context.DeadlineExceeded表示超时
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.modelCatalogSyncMu.Lock()
 	if s.isShuttingDown.Swap(true) {
+		s.modelCatalogSyncMu.Unlock()
 		select {
 		case <-s.shutdownDone:
 			return nil
@@ -974,6 +1033,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+	s.modelCatalogSyncMu.Unlock()
 	defer close(s.shutdownDone)
 
 	log.Print("🛑 正在关闭Server，等待后台任务完成...")

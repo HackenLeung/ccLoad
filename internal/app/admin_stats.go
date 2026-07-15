@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -30,7 +31,55 @@ func (s *Server) HandleErrors(c *gin.Context) {
 		return
 	}
 
+	if isAPITokenWebRequest(c) {
+		channels, err := s.tokenLogChannels(c.Request.Context(), logs)
+		if err != nil {
+			log.Printf("[ERROR] 加载 API Token 日志脱敏元数据失败: %v", err)
+			RespondErrorMsg(c, http.StatusInternalServerError, "读取日志脱敏元数据失败")
+			return
+		}
+		RespondJSONWithCount(c, http.StatusOK, projectTokenLogs(logs, channels), total)
+		return
+	}
 	RespondJSONWithCount(c, http.StatusOK, logs, total)
+}
+
+func (s *Server) tokenLogChannels(ctx context.Context, logs []*model.LogEntry) (map[int64]tokenLogChannelMetadata, error) {
+	needed := make(map[int64]struct{})
+	for _, entry := range logs {
+		if entry != nil && entry.ChannelID > 0 {
+			needed[entry.ChannelID] = struct{}{}
+		}
+	}
+	channels := make(map[int64]tokenLogChannelMetadata, len(needed))
+	if len(needed) == 0 {
+		return channels, nil
+	}
+	configs, err := s.store.ListConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	apiKeysByChannel, err := s.store.GetAllAPIKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, cfg := range configs {
+		if _, ok := needed[cfg.ID]; !ok {
+			continue
+		}
+		metadata := tokenLogChannelMetadata{
+			ChannelType:  cfg.ChannelType,
+			APIKeyHashes: make(map[string]struct{}, len(apiKeysByChannel[cfg.ID])),
+		}
+		for _, apiKey := range apiKeysByChannel[cfg.ID] {
+			if apiKey != nil && apiKey.APIKey != "" {
+				metadata.APIKeys = append(metadata.APIKeys, apiKey.APIKey)
+				metadata.APIKeyHashes[util.HashAPIKey(apiKey.APIKey)] = struct{}{}
+			}
+		}
+		channels[cfg.ID] = metadata
+	}
+	return channels, nil
 }
 
 // HandleMetrics 获取聚合指标数据
@@ -53,7 +102,6 @@ func (s *Server) HandleMetrics(c *gin.Context) {
 		RespondError(c, http.StatusInternalServerError, err)
 		return
 	}
-
 	RespondJSON(c, http.StatusOK, pts)
 }
 
@@ -74,6 +122,9 @@ func (s *Server) HandleStats(c *gin.Context) {
 		RespondError(c, http.StatusInternalServerError, err)
 		return
 	}
+	if isAPITokenWebRequest(c) {
+		stats = projectTokenStats(stats)
+	}
 
 	// 计算时间跨度（秒），用于前端计算RPM和QPS
 	durationSeconds := endTime.Sub(startTime).Seconds()
@@ -88,7 +139,6 @@ func (s *Server) HandleStats(c *gin.Context) {
 		return
 	}
 
-	// 计算健康时间线（固定48个时间点，当日显示最近4小时）
 	channelHealth := s.fillHealthTimeline(c.Request.Context(), stats, startTime, endTime, &lf, isToday)
 
 	RespondJSON(c, http.StatusOK, gin.H{
@@ -100,12 +150,21 @@ func (s *Server) HandleStats(c *gin.Context) {
 	})
 }
 
+func projectTokenStats(stats []model.StatsEntry) []model.StatsEntry {
+	projected := make([]model.StatsEntry, len(stats))
+	copy(projected, stats)
+	for i := range projected {
+		projected[i].LastRequestMessage = ""
+	}
+	return projected
+}
+
 // HandlePublicSummary 获取基础统计摘要(公开端点,无需认证)
 // GET /public/summary?range=today
 // 按渠道类型分组统计，Claude和Codex类型包含Token和成本信息
 //
 // [SECURITY NOTE] 该端点故意设计为公开访问，用于首页仪表盘展示。
-// 如需隐藏运营数据，可在 server.go:SetupRoutes 中添加 RequireTokenAuth 中间件。
+// 认证仪表盘使用 /dashboard/summary，并由 Web 身份强制作用域。
 func (s *Server) HandlePublicSummary(c *gin.Context) {
 	params := ParsePaginationParams(c)
 	startTime, endTime := params.GetTimeRange()
@@ -113,6 +172,12 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 	// 判断是否为本日（本日才计算最近一分钟）
 	isToday := params.Range == "today" || params.Range == ""
 	ctx := c.Request.Context()
+	var logFilter *model.LogFilter
+	if _, ok := WebIdentityFromContext(c); ok {
+		filter := BuildLogFilter(c)
+		filter.LogSource = model.LogSourceProxy
+		logFilter = &filter
+	}
 
 	// [OPT] P1: 并行执行三个独立查询
 	var (
@@ -130,13 +195,13 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 	// 查询1: 基础统计（使用 Lite 版本跳过 fillStatsRPM）
 	go func() {
 		defer wg.Done()
-		stats, statsErr = s.statsCache.GetStatsLite(ctx, startTime, endTime, nil)
+		stats, statsErr = s.statsCache.GetStatsLite(ctx, startTime, endTime, logFilter)
 	}()
 
 	// 查询2: RPM统计
 	go func() {
 		defer wg.Done()
-		rpmStats, rpmErr = s.statsCache.GetRPMStats(ctx, startTime, endTime, nil, isToday)
+		rpmStats, rpmErr = s.statsCache.GetRPMStats(ctx, startTime, endTime, logFilter, isToday)
 	}()
 
 	// 查询3: 渠道类型映射（带缓存）
@@ -349,7 +414,8 @@ func (s *Server) HandleGetModels(c *gin.Context) {
 	since, until := params.GetTimeRange()
 
 	channelType := c.Query("channel_type")
-	logFilter := &model.LogFilter{LogSource: model.LogSourceProxy}
+	logFilter := BuildLogFilter(c)
+	logFilter.LogSource = model.LogSourceProxy
 
 	var (
 		models                 []string
@@ -359,10 +425,10 @@ func (s *Server) HandleGetModels(c *gin.Context) {
 	)
 
 	wg.Go(func() {
-		models, modelsErr = s.store.GetDistinctModels(c.Request.Context(), since, until, channelType, logFilter)
+		models, modelsErr = s.store.GetDistinctModels(c.Request.Context(), since, until, channelType, &logFilter)
 	})
 	wg.Go(func() {
-		channels, channelsErr = s.store.GetDistinctChannels(c.Request.Context(), since, until, channelType, logFilter)
+		channels, channelsErr = s.store.GetDistinctChannels(c.Request.Context(), since, until, channelType, &logFilter)
 	})
 	wg.Wait()
 
@@ -373,6 +439,12 @@ func (s *Server) HandleGetModels(c *gin.Context) {
 	if channelsErr != nil {
 		RespondError(c, http.StatusInternalServerError, channelsErr)
 		return
+	}
+	if models == nil {
+		models = make([]string, 0)
+	}
+	if channels == nil {
+		channels = make([]model.ChannelNameID, 0)
 	}
 
 	RespondJSON(c, http.StatusOK, ModelsChannelsResponse{Models: models, Channels: channels})

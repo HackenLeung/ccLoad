@@ -18,6 +18,7 @@
   <script defer src="/web/assets/locales/en.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/i18n.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/highlight.min.js?v=__VERSION__"></script>
+  <script defer src="/web/assets/js/web-auth.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/ui.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/marked.min.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/purify.min.js?v=__VERSION__"></script>
@@ -61,7 +62,7 @@
                   title="从CSV导入渠道">
                   <span data-i18n="channels.importCsv">导入 CSV</span>
                 </button>
-                <button type="button" data-action="show-add-modal" class="btn btn-primary channel-page-action-btn"
+                <button id="addChannelBtn" type="button" data-action="show-add-modal" class="btn btn-primary channel-page-action-btn"
                   data-i18n-title="channels.addChannelTitle" title="添加新渠道">
                   <span data-i18n="channels.addChannel">+ 添加渠道</span>
                 </button>

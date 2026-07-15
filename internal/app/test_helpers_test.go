@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,6 +47,46 @@ type testHTTPResponseWriter struct {
 	ready          chan struct{}
 	readyOnce      sync.Once
 	mu             sync.Mutex
+}
+
+type dataThenBlockReadCloser struct {
+	closeOnce sync.Once
+	data      []byte
+	offset    int
+	maxChunk  int
+	closed    chan struct{}
+}
+
+func newDataThenBlockReadCloser(data []byte, maxChunk int) *dataThenBlockReadCloser {
+	return &dataThenBlockReadCloser{
+		data:     data,
+		maxChunk: maxChunk,
+		closed:   make(chan struct{}),
+	}
+}
+
+func (r *dataThenBlockReadCloser) Read(p []byte) (int, error) {
+	if r.offset < len(r.data) {
+		n := len(r.data) - r.offset
+		if r.maxChunk > 0 && n > r.maxChunk {
+			n = r.maxChunk
+		}
+		if n > len(p) {
+			n = len(p)
+		}
+		copy(p, r.data[r.offset:r.offset+n])
+		r.offset += n
+		return n, nil
+	}
+	<-r.closed
+	return 0, errors.New("read closed")
+}
+
+func (r *dataThenBlockReadCloser) Close() error {
+	r.closeOnce.Do(func() {
+		close(r.closed)
+	})
+	return nil
 }
 
 var (
@@ -384,7 +425,8 @@ func newTestAuthService(t testing.TB) *AuthService {
 		authTokenCostLimits: make(map[string]tokenCostLimit),
 		authTokenMaxConns:   make(map[string]int),
 		authTokenActiveReqs: make(map[string]int),
-		validTokens:         make(map[string]time.Time),
+		authTokenHashes:     make(map[int64]string),
+		validTokens:         make(map[string]model.WebSession),
 		lastUsedCh:          make(chan string, 256),
 		done:                make(chan struct{}),
 	}
@@ -398,6 +440,7 @@ func injectAPIToken(svc *AuthService, token string, expiresAt int64, tokenID int
 	svc.authTokensMux.Lock()
 	svc.authTokens[tokenHash] = expiresAt
 	svc.authTokenIDs[tokenHash] = tokenID
+	svc.authTokenHashes[tokenID] = tokenHash
 	svc.authTokensMux.Unlock()
 }
 
@@ -405,7 +448,7 @@ func injectAPIToken(svc *AuthService, token string, expiresAt int64, tokenID int
 func injectAdminToken(svc *AuthService, token string, expiry time.Time) {
 	tokenHash := model.HashToken(token)
 	svc.tokensMux.Lock()
-	svc.validTokens[tokenHash] = expiry
+	svc.validTokens[tokenHash] = model.WebSession{TokenHash: tokenHash, Role: model.WebRoleAdmin, ExpiresAt: expiry}
 	svc.tokensMux.Unlock()
 }
 

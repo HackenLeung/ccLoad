@@ -52,7 +52,7 @@ func migrate(ctx context.Context, db *sql.DB, dialect Dialect) error {
 		schema.DefineChannelURLStatesTable,
 		schema.DefineAuthTokensTable,
 		schema.DefineSystemSettingsTable,
-		schema.DefineAdminSessionsTable,
+		schema.DefineWebSessionsTable,
 		schema.DefineLogsTable,
 		schema.DefineDebugLogsTable,
 	}
@@ -203,6 +203,11 @@ func migrate(ctx context.Context, db *sql.DB, dialect Dialect) error {
 		}
 	}
 
+	// 旧管理员会话不携带身份作用域，不能迁移为新的 Web 会话。
+	if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS admin_sessions"); err != nil {
+		return fmt.Errorf("drop obsolete admin_sessions table: %w", err)
+	}
+
 	// effective_cost_usd 的历史回填依赖 logs.cost_multiplier，必须等 logs 增量迁移完成后再执行。
 	if err := ensureAuthTokensEffectiveCost(ctx, db, dialect); err != nil {
 		return fmt.Errorf("migrate auth_tokens effective_cost: %w", err)
@@ -338,6 +343,7 @@ func initDefaultSettings(ctx context.Context, db *sql.DB, dialect Dialect) error
 		{"model_fuzzy_match", "false", "bool", "模型匹配失败时，使用子串模糊匹配(多匹配时选最新版本)", "false"},
 		{"channel_test_content", "sonnet 4.0的发布日期是什么", "string", "渠道测试默认内容", "sonnet 4.0的发布日期是什么"},
 		{"channel_check_interval_hours", "0", "float", "渠道定时检测间隔(小时,支持小数如0.5=30分钟,0=关闭,修改后重启生效)", "0"},
+		{"model_catalog_sync_interval_hours", "6", "float", "模型目录同步间隔(小时,支持小数,0=关闭网络同步,修改后重启生效)", "6"},
 		{"auto_update_interval_hours", "12", "int", "自动更新检测间隔(小时整数,0=关闭,启用时最低1小时)", "12"},
 		{"log_channel_click_action", "edit", "string", "日志页点击渠道名行为(edit=打开编辑器,navigate=跳转到渠道管理定位)", "edit"},
 		{"channel_stats_range", "today", "string", "渠道管理费用统计范围", "today"},

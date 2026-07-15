@@ -513,7 +513,8 @@ function renderLogSourceBadge(logSource) {
 }
 
 function canInspectDebugLog(entry) {
-  return Number(entry?.channel_id) > 0;
+  const isTokenSession = typeof window.isAPITokenRole === 'function' && window.isAPITokenRole();
+  return !isTokenSession && Number(entry?.channel_id) > 0;
 }
 
 function buildLogMessageContent(entry) {
@@ -540,7 +541,10 @@ function buildLogCostDisplay(entry) {
 
   const rawMultiplier = Number(entry?.cost_multiplier);
   const multiplier = (Number.isFinite(rawMultiplier) && rawMultiplier >= 0) ? rawMultiplier : 1;
-  const effectiveCost = standardCost * multiplier;
+  const responseEffectiveCost = Number(entry?.effective_cost);
+	const effectiveCost = Number.isFinite(responseEffectiveCost)
+		? responseEffectiveCost
+    : standardCost * multiplier;
   const hasMultiplier = Math.abs(effectiveCost - standardCost) >= 1e-9;
   const badgeParts = [];
 
@@ -636,7 +640,7 @@ async function load(skipLoading = false) {
     }
 
     const params = buildLogsRequestParams();
-    const response = await fetchAPIWithAuth('/admin/logs?' + params.toString());
+    const response = await fetchAPIWithAuth('/dashboard/logs?' + params.toString());
     if (!response.success) throw new Error(response.error || '无法加载请求日志');
 
     const data = response.data || [];
@@ -1262,6 +1266,12 @@ async function syncLogSourceVisibility(preloadedIntervalHours) {
   const { group, select } = getLogSourceFilterElements();
   if (!group || !select) return false;
 
+  if (window.isAPITokenRole()) {
+    group.hidden = true;
+    select.value = 'proxy';
+    return false;
+  }
+
   let scheduledCheckEnabledByConfig = false;
   if (preloadedIntervalHours !== undefined) {
     // 预加载路径：跳过 fetch，直接使用 bootstrap 数据
@@ -1290,7 +1300,7 @@ async function loadLogsModels(channelType, range) {
     const r = range || document.getElementById('f_hours')?.value || 'today';
     appendLogsTimeRangeParams(params, { range: r });
     if (ct && ct !== 'all') params.set('channel_type', ct);
-    const resp = await fetchDataWithAuth('/admin/models?' + params.toString()) || {};
+    const resp = await fetchDataWithAuth('/dashboard/models?' + params.toString()) || {};
     const rawModels = Array.isArray(resp.models) ? resp.models : [];
     const rawChannels = Array.isArray(resp.channels) ? resp.channels : [];
 
@@ -1741,7 +1751,7 @@ window.initPageBootstrap({
       await loadLogsModels(value);
       load();
     }),
-    fetchDataWithAuth('/admin/logs/bootstrap?' + bootstrapParams.toString()).catch(() => null)
+    fetchDataWithAuth('/dashboard/logs/bootstrap?' + bootstrapParams.toString()).catch(() => null)
   ]);
 
   // 从 bootstrap 数据应用设置（bootstrap 失败时各字段回退到原有 fetch 路径）
@@ -2588,12 +2598,12 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
       const pre = document.getElementById(targetId);
       if (!pre) return;
       const text = pre._rawText || pre.textContent || '';
-      navigator.clipboard.writeText(text).then(() => {
+      window.copyToClipboard(text).then(() => {
         const orig = copyBtn.textContent;
         copyBtn.textContent = '\u2713';
         copyBtn.classList.add('copied');
         setTimeout(() => { copyBtn.textContent = orig; copyBtn.classList.remove('copied'); }, 1500);
-      });
+      }).catch(() => {});
     }
   });
 }
