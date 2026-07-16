@@ -31,6 +31,7 @@ type testChannel struct {
 	name        string
 	channelType string
 	models      string // 逗号分隔的模型列表
+	redirects   map[string]string
 	apiKey      string
 	priority    int
 }
@@ -74,7 +75,7 @@ func setupProxyTestEnv(t testing.TB, channels []testChannel, upstreamURLs map[in
 		for _, m := range strings.Split(ch.models, ",") {
 			m = strings.TrimSpace(m)
 			if m != "" {
-				modelEntries = append(modelEntries, model.ModelEntry{Model: m})
+				modelEntries = append(modelEntries, model.ModelEntry{Model: m, RedirectModel: ch.redirects[m]})
 			}
 		}
 
@@ -207,6 +208,111 @@ func TestProxy_Success_NonStreaming(t *testing.T) {
 	}
 	if resp["id"] != "chatcmpl-1" {
 		t.Fatalf("expected id=chatcmpl-1, got %v", resp["id"])
+	}
+}
+
+func TestProxy_GPTCompactionUsesSameModelNativeCodexFallback(t *testing.T) {
+	t.Parallel()
+
+	const requestedModel = "gpt-5.5"
+	var redirectedCalls atomic.Int32
+	var failingNativeCalls atomic.Int32
+	var successfulNativeCalls atomic.Int32
+	var redirectedModel atomic.Value
+	var successfulPath atomic.Value
+	var successfulModel atomic.Value
+
+	redirectedUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedCalls.Add(1)
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		redirectedModel.Store(body.Model)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_grok","object":"response","output":[]}`))
+	}))
+	defer redirectedUpstream.Close()
+
+	failingNativeUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		failingNativeCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"model not found","type":"invalid_request_error","code":"model_not_found"}}`))
+	}))
+	defer failingNativeUpstream.Close()
+
+	successfulNativeUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		successfulNativeCalls.Add(1)
+		successfulPath.Store(r.URL.Path)
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		successfulModel.Store(body.Model)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_compact","object":"response","output":[{"type":"compaction","encrypted_content":"encoded"}]}`))
+	}))
+	defer successfulNativeUpstream.Close()
+
+	env := setupProxyTestEnv(t, []testChannel{
+		{
+			name:        "redirected-grok",
+			channelType: util.ChannelTypeCodex,
+			models:      requestedModel,
+			redirects:   map[string]string{requestedModel: "grok-4.5"},
+			priority:    300,
+		},
+		{
+			name:        "failing-native-gpt",
+			channelType: util.ChannelTypeCodex,
+			models:      requestedModel,
+			priority:    200,
+		},
+		{
+			name:        "successful-native-gpt",
+			channelType: util.ChannelTypeCodex,
+			models:      requestedModel,
+			priority:    100,
+		},
+	}, map[int]string{
+		0: redirectedUpstream.URL,
+		1: failingNativeUpstream.URL,
+		2: successfulNativeUpstream.URL,
+	})
+
+	compactResponse := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses/compact", map[string]any{
+		"model": requestedModel,
+		"input": []map[string]any{{"role": "user", "content": "compact this conversation"}},
+	}, nil)
+	if compactResponse.Code != http.StatusOK {
+		t.Fatalf("compact status=%d body=%s", compactResponse.Code, compactResponse.Body.String())
+	}
+	if redirectedCalls.Load() != 0 {
+		t.Fatalf("redirected channel received %d compact requests, want 0", redirectedCalls.Load())
+	}
+	if failingNativeCalls.Load() != 1 || successfulNativeCalls.Load() != 1 {
+		t.Fatalf("native calls: failing=%d successful=%d, want 1 each", failingNativeCalls.Load(), successfulNativeCalls.Load())
+	}
+	if got, _ := successfulPath.Load().(string); got != "/v1/responses/compact" {
+		t.Fatalf("successful native path=%q, want /v1/responses/compact", got)
+	}
+	if got, _ := successfulModel.Load().(string); got != requestedModel {
+		t.Fatalf("successful native model=%q, want %q", got, requestedModel)
+	}
+
+	regularResponse := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses", map[string]any{
+		"model": requestedModel,
+		"input": "regular request",
+	}, nil)
+	if regularResponse.Code != http.StatusOK {
+		t.Fatalf("regular status=%d body=%s", regularResponse.Code, regularResponse.Body.String())
+	}
+	if redirectedCalls.Load() != 1 {
+		t.Fatalf("redirected channel received %d regular requests, want 1", redirectedCalls.Load())
+	}
+	if got, _ := redirectedModel.Load().(string); got != "grok-4.5" {
+		t.Fatalf("redirected regular model=%q, want grok-4.5", got)
 	}
 }
 
@@ -2108,8 +2214,8 @@ func TestProxy_Success_Streaming_CodexToAnthropicTransform(t *testing.T) {
 		t.Fatalf("expected anthropic request body, got %s", gotBody)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "event: response.output_text.delta") || !strings.Contains(body, `"delta":"Hello"`) {
-		t.Fatalf("expected codex stream delta event, got %s", body)
+	if !strings.Contains(body, "event: response.output_item.done") || !strings.Contains(body, `"type":"message"`) || !strings.Contains(body, `"text":"Hello World"`) {
+		t.Fatalf("expected completed Codex assistant message item, got %s", body)
 	}
 	if !strings.Contains(body, "event: response.completed") {
 		t.Fatalf("expected codex completed event, got %s", body)
@@ -2797,6 +2903,159 @@ func TestProxy_Success_Streaming_CodexToOpenAITransform(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "event: response.output_text.delta") || !strings.Contains(body, `"delta":"Hello"`) || !strings.Contains(body, "event: response.completed") {
 		t.Fatalf("expected codex stream output, got %s", body)
+	}
+}
+
+func TestProxy_Streaming_CodexCustomToolToOpenAILocalTransform(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+	var gotBody []byte
+	env := setupProxyTestEnv(t, []testChannel{
+		{name: "openai-custom-tools", channelType: "openai", models: "gpt-5.5", apiKey: "sk-oai"},
+	}, map[int]string{0: "https://openai-upstream.example.com"})
+
+	env.server.client = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			gotPath = r.URL.Path
+			var err error
+			gotBody, err = io.ReadAll(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			body := bytes.NewBufferString(
+				`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"grok-4.5","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_patch","type":"function","function":{"name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\\n*** End Patch\"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n" +
+					"data: [DONE]\n\n",
+			)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(body),
+			}, nil
+		}),
+	}
+
+	configs, err := env.store.ListConfigs(context.Background())
+	if err != nil {
+		t.Fatalf("ListConfigs failed: %v", err)
+	}
+	cfg := configs[0]
+	cfg.ProtocolTransforms = []string{"codex"}
+	cfg.ProtocolTransformMode = model.ProtocolTransformModeLocal
+	if _, err := env.store.UpdateConfig(context.Background(), cfg.ID, cfg); err != nil {
+		t.Fatalf("UpdateConfig failed: %v", err)
+	}
+	env.server.InvalidateChannelListCache()
+
+	w := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses", map[string]any{
+		"model":  "gpt-5.5",
+		"stream": true,
+		"tools": []map[string]any{{
+			"type":        "custom",
+			"name":        "apply_patch",
+			"description": "Apply a patch",
+			"format":      map[string]any{"type": "text"},
+		}, {
+			"type":        "namespace",
+			"name":        "codex_app",
+			"description": "Tools provided by the Codex app",
+			"tools": []map[string]any{{
+				"type":        "function",
+				"name":        "list_threads",
+				"description": "List threads",
+				"parameters":  map[string]any{"type": "object"},
+			}},
+		}, {
+			"type":      "tool_search",
+			"execution": "client",
+		}},
+		"input": []map[string]any{{
+			"type":    "message",
+			"role":    "user",
+			"content": []map[string]string{{"type": "input_text", "text": "update the file"}},
+		}},
+	}, nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("upstream path=%q, want /v1/chat/completions", gotPath)
+	}
+	for _, want := range [][]byte{[]byte(`"type":"function"`), []byte(`"name":"apply_patch"`), []byte(`"input":{"description":"Freeform input passed to the custom tool.","type":"string"}`)} {
+		if !bytes.Contains(gotBody, want) {
+			t.Fatalf("translated upstream body missing %s: %s", want, gotBody)
+		}
+	}
+	for _, included := range [][]byte{[]byte(`codex_app__list_threads`), []byte(`tool_search`)} {
+		if !bytes.Contains(gotBody, included) {
+			t.Fatalf("translated upstream body missing Codex compatibility tool %s: %s", included, gotBody)
+		}
+	}
+	result := w.Body.String()
+	for _, want := range []string{`"type":"custom_tool_call"`, `"call_id":"call_patch"`, `"name":"apply_patch"`, `"input":"*** Begin Patch\n*** End Patch"`} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("Codex response missing %s: %s", want, result)
+		}
+	}
+}
+
+func TestProxy_CodexToOpenAILocalTransform_EmptyStreamFallsBack(t *testing.T) {
+	t.Parallel()
+
+	var emptyCalls atomic.Int32
+	var fallbackCalls atomic.Int32
+	emptyUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		emptyCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl_empty\",\"object\":\"chat.completion.chunk\",\"model\":\"grok-4.5\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\\u200b\"}}]}\n\n")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl_empty\",\"object\":\"chat.completion.chunk\",\"model\":\"grok-4.5\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer emptyUpstream.Close()
+
+	fallbackUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"fallback reply\"}\n\n")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.5\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2,\"total_tokens\":7}}}\n\n")
+	}))
+	defer fallbackUpstream.Close()
+
+	env := setupProxyTestEnv(t, []testChannel{
+		{name: "empty-openai-local", channelType: "openai", models: "gpt-5.5", apiKey: "sk-empty", priority: 200},
+		{name: "native-codex-fallback", channelType: "codex", models: "gpt-5.5", apiKey: "sk-fallback", priority: 100},
+	}, map[int]string{0: emptyUpstream.URL, 1: fallbackUpstream.URL})
+
+	configs, err := env.store.ListConfigs(context.Background())
+	if err != nil {
+		t.Fatalf("ListConfigs failed: %v", err)
+	}
+	for _, cfg := range configs {
+		if cfg.Name != "empty-openai-local" {
+			continue
+		}
+		cfg.ProtocolTransforms = []string{"codex"}
+		cfg.ProtocolTransformMode = model.ProtocolTransformModeLocal
+		if _, err := env.store.UpdateConfig(context.Background(), cfg.ID, cfg); err != nil {
+			t.Fatalf("UpdateConfig failed: %v", err)
+		}
+	}
+	env.server.InvalidateChannelListCache()
+
+	w := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses", map[string]any{
+		"model":  "gpt-5.5",
+		"stream": true,
+		"input":  []map[string]any{{"type": "message", "role": "user", "content": []map[string]string{{"type": "input_text", "text": "hello"}}}},
+	}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if emptyCalls.Load() != 1 || fallbackCalls.Load() != 1 {
+		t.Fatalf("calls empty=%d fallback=%d, want 1 each", emptyCalls.Load(), fallbackCalls.Load())
+	}
+	if body := w.Body.String(); !strings.Contains(body, "fallback reply") || strings.Contains(body, "\\u200b") {
+		t.Fatalf("unexpected fallback response: %s", body)
 	}
 }
 

@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -17,8 +18,9 @@ type pendingToolCall struct {
 }
 
 type openAIToCodexStreamState struct {
-	model string
-	usage struct {
+	model      string
+	toolRoutes map[string]codexOpenAIToolRoute
+	usage      struct {
 		promptTokens             int64
 		completionTokens         int64
 		totalTokens              int64
@@ -29,6 +31,8 @@ type openAIToCodexStreamState struct {
 	}
 	reasoningText      string
 	reasoningEncrypted string
+	textValue          string
+	textStarted        bool
 	toolCalls          map[int]*pendingToolCall
 }
 
@@ -72,12 +76,12 @@ func convertCodexRequestToOpenAI(model string, rawJSON []byte, stream bool) ([]b
 	return encodeOpenAIRequest(model, conv, stream)
 }
 
-func convertOpenAIResponseToCodexNonStream(_ context.Context, model string, _, _, rawJSON []byte) ([]byte, error) {
+func convertOpenAIResponseToCodexNonStream(_ context.Context, model string, rawReq, _ []byte, rawJSON []byte) ([]byte, error) {
 	var resp map[string]any
 	if err := sonic.Unmarshal(rawJSON, &resp); err != nil {
 		return nil, err
 	}
-	output, err := codexOutputItemsFromOpenAIResponse(resp)
+	output, err := codexOutputItemsFromOpenAIResponse(resp, codexOpenAIToolRoutes(rawReq))
 	if err != nil {
 		return nil, err
 	}
@@ -141,13 +145,13 @@ func convertCodexResponseToOpenAINonStream(_ context.Context, model string, rawR
 	return sonic.Marshal(out)
 }
 
-func convertOpenAIResponseToCodexStream(_ context.Context, model string, _, _, rawJSON []byte, param *any) ([][]byte, error) {
+func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq, _ []byte, rawJSON []byte, param *any) ([][]byte, error) {
 	if param == nil {
 		var local any
 		param = &local
 	}
 	if *param == nil {
-		*param = &openAIToCodexStreamState{model: model}
+		*param = &openAIToCodexStreamState{model: model, toolRoutes: codexOpenAIToolRoutes(rawReq)}
 	}
 	st := (*param).(*openAIToCodexStreamState)
 	if st.model == "" {
@@ -162,7 +166,7 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, _, _, r
 		return [][]byte{rawJSON}, nil
 	}
 	if line == "[DONE]" {
-		chunks := make([][]byte, 0, 4)
+		chunks := make([][]byte, 0, 5)
 		if st.reasoningText != "" || st.reasoningEncrypted != "" {
 			item := map[string]any{
 				"type": "response.output_item.done",
@@ -174,20 +178,21 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, _, _, r
 			}
 			chunks = append(chunks, append([]byte("event: response.output_item.done\ndata: "), append(body, []byte("\n\n")...)...))
 		}
+		textChunks, err := finishOpenAICodexText(st)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, textChunks...)
 		// 按 index 顺序发出所有累积的 function_call 事件
 		for idx := 0; ; idx++ {
 			tc, ok := st.toolCalls[idx]
 			if !ok {
 				break
 			}
+			toolItem := codexToolCallItemFromOpenAI(tc.id, tc.name, tc.arguments, st.toolRoute(tc.name))
 			item := map[string]any{
 				"type": "response.output_item.done",
-				"item": map[string]any{
-					"type":      "function_call",
-					"call_id":   tc.id,
-					"name":      tc.name,
-					"arguments": tc.arguments,
-				},
+				"item": toolItem,
 			}
 			body, err := sonic.Marshal(item)
 			if err != nil {
@@ -216,7 +221,8 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, _, _, r
 		if err != nil {
 			return nil, err
 		}
-		chunks = append(chunks, append([]byte("event: response.completed\ndata: "), append(body, []byte("\n\n")...)...))
+		completed := append([]byte("event: response.completed\ndata: "), append(body, []byte("\n\n")...)...)
+		chunks = append(chunks, completed)
 		return chunks, nil
 	}
 
@@ -288,12 +294,89 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, _, _, r
 	if content == "" {
 		return nil, nil
 	}
-	payload := map[string]any{"type": "response.output_text.delta", "delta": content}
+	st.textValue += content
+	chunks := make([][]byte, 0, 3)
+	if !st.textStarted {
+		st.textStarted = true
+		added := map[string]any{
+			"type": "response.output_item.added", "output_index": 0,
+			"item": map[string]any{"id": "msg-proxy", "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}},
+		}
+		partAdded := map[string]any{
+			"type": "response.content_part.added", "item_id": "msg-proxy", "output_index": 0, "content_index": 0,
+			"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+		}
+		var err error
+		chunk, err := appendCodexSSEEvent(nil, "response.output_item.added", added)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, chunk)
+		chunk, err = appendCodexSSEEvent(nil, "response.content_part.added", partAdded)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, chunk)
+	}
+	outputDelta := map[string]any{
+		"type": "response.output_text.delta", "item_id": "msg-proxy", "output_index": 0, "content_index": 0, "delta": content,
+	}
+	deltaChunk, err := appendCodexSSEEvent(nil, "response.output_text.delta", outputDelta)
+	if err != nil {
+		return nil, err
+	}
+	return append(chunks, deltaChunk), nil
+}
+
+func finishOpenAICodexText(st *openAIToCodexStreamState) ([][]byte, error) {
+	if st == nil || !st.textStarted {
+		return nil, nil
+	}
+	value := st.textValue
+	st.textValue = ""
+	st.textStarted = false
+	visible := strings.Trim(strings.TrimSpace(value), "\u200b\ufeff")
+	if strings.TrimSpace(visible) == "" {
+		return nil, nil
+	}
+	textDone := map[string]any{
+		"type": "response.output_text.done", "item_id": "msg-proxy", "output_index": 0, "content_index": 0, "text": value,
+	}
+	part := map[string]any{"type": "output_text", "text": value, "annotations": []any{}}
+	partDone := map[string]any{
+		"type": "response.content_part.done", "item_id": "msg-proxy", "output_index": 0, "content_index": 0, "part": part,
+	}
+	itemDone := map[string]any{
+		"type":         "response.output_item.done",
+		"output_index": 0,
+		"item": map[string]any{
+			"id": "msg-proxy", "type": "message", "role": "assistant", "status": "completed",
+			"content": []map[string]any{part},
+		},
+	}
+	textDoneChunk, err := appendCodexSSEEvent(nil, "response.output_text.done", textDone)
+	if err != nil {
+		return nil, err
+	}
+	partDoneChunk, err := appendCodexSSEEvent(nil, "response.content_part.done", partDone)
+	if err != nil {
+		return nil, err
+	}
+	itemDoneChunk, err := appendCodexSSEEvent(nil, "response.output_item.done", itemDone)
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{textDoneChunk, partDoneChunk, itemDoneChunk}, nil
+}
+
+func appendCodexSSEEvent(dst []byte, eventType string, payload map[string]any) ([]byte, error) {
 	body, err := sonic.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	return [][]byte{append([]byte("event: response.output_text.delta\ndata: "), append(body, []byte("\n\n")...)...)}, nil
+	dst = append(dst, []byte("event: "+eventType+"\ndata: ")...)
+	dst = append(dst, body...)
+	return append(dst, '\n', '\n'), nil
 }
 
 func convertCodexResponseToOpenAIStream(_ context.Context, model string, rawReq, translatedReq, rawJSON []byte, param *any) ([][]byte, error) {
@@ -481,7 +564,7 @@ type codexUsage struct {
 	reasoningTokens          int64
 }
 
-func codexOutputItemsFromOpenAIResponse(resp map[string]any) ([]map[string]any, error) {
+func codexOutputItemsFromOpenAIResponse(resp map[string]any, toolRoutes map[string]codexOpenAIToolRoute) ([]map[string]any, error) {
 	choices, _ := resp["choices"].([]any)
 	if len(choices) == 0 {
 		return nil, nil
@@ -524,15 +607,107 @@ func codexOutputItemsFromOpenAIResponse(resp map[string]any) ([]map[string]any, 
 		if arguments == "" {
 			arguments = "{}"
 		}
-		items = append(items, map[string]any{
-			"type":      "function_call",
-			"call_id":   call.ID,
-			"name":      call.Function.Name,
-			"arguments": arguments,
-		})
+		items = append(items, codexToolCallItemFromOpenAI(call.ID, call.Function.Name, arguments, toolRoutes[call.Function.Name]))
 	}
 	items = append(items, codexReasoningItemsFromOpenAIMessage(message)...)
 	return items, nil
+}
+
+type codexOpenAIToolRoute struct {
+	Type      string
+	Name      string
+	Namespace string
+}
+
+func codexOpenAIToolRoutes(rawReq []byte) map[string]codexOpenAIToolRoute {
+	if len(rawReq) == 0 {
+		return nil
+	}
+	var req struct {
+		Tools json.RawMessage `json:"tools"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := sonic.Unmarshal(rawReq, &req); err != nil {
+		return nil
+	}
+	tools, err := parseFunctionTools(req.Tools, "codex")
+	if err != nil {
+		return nil
+	}
+	var inputItems []map[string]any
+	if err := sonic.Unmarshal(req.Input, &inputItems); err == nil {
+		for _, item := range inputItems {
+			typ := normalizeRole(stringValue(item["type"]))
+			if typ != "tool_search_output" && typ != "additional_tools" {
+				continue
+			}
+			if rawTools, ok := item["tools"]; ok {
+				encoded, marshalErr := marshalStableJSON(rawTools)
+				if marshalErr != nil {
+					continue
+				}
+				loaded, parseErr := parseFunctionTools(encoded, "codex")
+				if parseErr == nil {
+					tools = append(tools, loaded...)
+				}
+			}
+		}
+	}
+	conv := conversation{Tools: tools}
+	aliases := buildCodexToolAliases(collectOpenAIWireToolNames(conv))
+	routes := make(map[string]codexOpenAIToolRoute)
+	for _, tool := range conv.Tools {
+		base := codexOpenAIWireBaseName(tool.Namespace, tool.Name)
+		wire := aliases.shorten(base)
+		if wire != "" {
+			routes[wire] = codexOpenAIToolRoute{Type: tool.toolType(), Name: tool.Name, Namespace: tool.Namespace}
+		}
+	}
+	if len(routes) == 0 {
+		return nil
+	}
+	return routes
+}
+
+func (st *openAIToCodexStreamState) toolRoute(name string) codexOpenAIToolRoute {
+	if st == nil {
+		return codexOpenAIToolRoute{}
+	}
+	return st.toolRoutes[name]
+}
+
+func codexToolCallItemFromOpenAI(callID, name, arguments string, route codexOpenAIToolRoute) map[string]any {
+	realName := name
+	if route.Name != "" {
+		realName = route.Name
+	}
+	if route.Type == "custom" {
+		return map[string]any{
+			"type":    "custom_tool_call",
+			"id":      callID,
+			"status":  "completed",
+			"call_id": callID,
+			"name":    realName,
+			"input":   customToolInputFromArguments(json.RawMessage(arguments)),
+		}
+	}
+	if route.Type == "tool_search" {
+		var parsed any = map[string]any{}
+		if err := sonic.UnmarshalString(arguments, &parsed); err != nil {
+			parsed = map[string]any{}
+		}
+		return map[string]any{"type": "tool_search_call", "id": callID, "call_id": callID, "execution": "client", "arguments": parsed, "status": "completed"}
+	}
+	item := map[string]any{
+		"type":      "function_call",
+		"call_id":   callID,
+		"name":      realName,
+		"arguments": arguments,
+	}
+	if route.Namespace != "" {
+		item["namespace"] = route.Namespace
+	}
+	return item
 }
 
 func openAIMessageFromCodexOutput(output any, restore func(string) string) (map[string]any, error) {

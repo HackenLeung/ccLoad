@@ -353,6 +353,8 @@ window.I18N_LOCALES['zh-CN'] = {
   'channels.protocolTransformNative': '原生',
   'channels.protocolTransformModeLocal': 'ccLoad(实验性)',
   'channels.protocolTransformModeUpstream': '上游',
+  'channels.protocolTransformModeLocalDescription': '由 ccLoad 在本地转换请求和响应协议。当前支持 Claude Code、Codex、OpenAI、Gemini 之间的基础对话、流式输出及常用工具调用。部分高级工具、图片、推理字段和上下文压缩受上游接口能力限制，可能无法完全兼容；转换失败时会按渠道顺序继续尝试。',
+  'channels.protocolTransformModeUpstreamDescription': '协议转换由上游接口完成，ccLoad 不进行本地请求和响应格式转换。',
   'channels.modal.apiUrl': 'API URL',
   'channels.modal.apiKey': 'API Key',
   'channels.modal.keyNote': '备注',

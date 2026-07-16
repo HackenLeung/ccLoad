@@ -30,6 +30,15 @@ function protocolTransformModeLabel(mode) {
   return window.t ? window.t(key) : key;
 }
 
+function protocolTransformModeDescription(mode) {
+  const descriptions = {
+    local: 'channels.protocolTransformModeLocalDescription',
+    upstream: 'channels.protocolTransformModeUpstreamDescription'
+  };
+  const key = descriptions[mode] || mode;
+  return window.t ? window.t(key) : key;
+}
+
 function hasExactURLMarker(url) {
   return String(url || '').trim().endsWith('#');
 }
@@ -99,17 +108,35 @@ function renderProtocolTransformModeOptions(selectedValue = 'upstream') {
   const selectedMode = exactURL
     ? 'local'
     : window.ChannelProtocolConfig.normalizeProtocolTransformMode(selectedValue);
-  container.innerHTML = window.ChannelProtocolConfig.PROTOCOL_TRANSFORM_MODES.map((mode) => `
-      <label class="channel-editor-radio-option">
-        <input type="radio"
-               name="protocolTransformMode"
-               value="${mode}"
-               ${exactURL && mode === 'upstream' ? 'disabled' : ''}
-               ${mode === selectedMode ? 'checked' : ''}
-        >
-        <span>${protocolTransformModeLabel(mode)}</span>
-      </label>
-    `).join('');
+  container.innerHTML = window.ChannelProtocolConfig.PROTOCOL_TRANSFORM_MODES.map((mode) => {
+    const descriptionKey = mode === 'local'
+      ? 'channels.protocolTransformModeLocalDescription'
+      : 'channels.protocolTransformModeUpstreamDescription';
+    const description = protocolTransformModeDescription(mode);
+    const escapedDescription = typeof window.escapeHtml === 'function'
+      ? window.escapeHtml(description)
+      : description;
+    return `
+      <span class="channel-editor-radio-option-with-help">
+        <label class="channel-editor-radio-option">
+          <input type="radio"
+                 name="protocolTransformMode"
+                 value="${mode}"
+                 ${exactURL && mode === 'upstream' ? 'disabled' : ''}
+                 ${mode === selectedMode ? 'checked' : ''}
+          >
+          <span>${protocolTransformModeLabel(mode)}</span>
+        </label>
+        <span class="protocol-transform-mode-help"
+              role="img"
+              tabindex="0"
+              data-i18n-title="${descriptionKey}"
+              data-tooltip="${escapedDescription}"
+              title="${escapedDescription}"
+              aria-label="${escapedDescription}">i</span>
+      </span>
+    `;
+  }).join('');
 }
 
 function syncProtocolTransformModeForURLs() {

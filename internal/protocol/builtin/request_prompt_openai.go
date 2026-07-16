@@ -12,6 +12,10 @@ import (
 )
 
 func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, error) {
+	toolAliases := buildCodexToolAliases(collectOpenAIWireToolNames(conv))
+	openAIWireName := func(namespace, name string) string {
+		return toolAliases.shorten(codexOpenAIWireBaseName(namespace, name))
+	}
 	messages := make([]map[string]any, 0, len(conv.Turns)+2)
 	for i, turn := range conv.Turns {
 		role := normalizeRole(turn.Role)
@@ -37,6 +41,7 @@ func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, 
 					if err != nil {
 						return nil, fmt.Errorf("openai turn %d: %w", i, err)
 					}
+					encoded["function"].(map[string]any)["name"] = openAIWireName(part.ToolCall.Namespace, part.ToolCall.Name)
 					toolCalls = append(toolCalls, encoded)
 				case partKindToolResult:
 					if part.ToolResult == nil {
@@ -52,7 +57,7 @@ func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, 
 						"content":      content,
 					}
 					if part.ToolResult.Name != "" {
-						toolMsg["name"] = part.ToolResult.Name
+						toolMsg["name"] = openAIWireName(part.ToolResult.Namespace, part.ToolResult.Name)
 					}
 					pendingToolMessages = append(pendingToolMessages, toolMsg)
 				case partKindReasoning:
@@ -96,7 +101,7 @@ func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, 
 					"content":      content,
 				}
 				if part.ToolResult.Name != "" {
-					message["name"] = part.ToolResult.Name
+					message["name"] = openAIWireName(part.ToolResult.Namespace, part.ToolResult.Name)
 				}
 				messages = append(messages, message)
 			}
@@ -125,29 +130,47 @@ func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, 
 		payload.Messages = append(payload.Messages, encoded)
 	}
 	encodedToolCount := 0
+	encodedToolNames := make(map[string]struct{})
 	var webSearchOptions map[string]any
 	if len(conv.Tools) > 0 {
 		tools := make([]map[string]any, 0, len(conv.Tools))
 		for _, tool := range conv.Tools {
-			if tool.toolType() != "function" {
+			toolType := tool.toolType()
+			if toolType != "function" && toolType != "custom" && toolType != "tool_search" {
 				if isOpenAIWebSearchToolType(tool.toolType()) && webSearchOptions == nil {
 					webSearchOptions = openAIWebSearchOptions(tool.Options)
 				}
 				continue
 			}
+			wireName := openAIWireName(tool.Namespace, tool.Name)
 			item := map[string]any{
 				"type": "function",
 				"function": map[string]any{
-					"name": tool.Name,
+					"name": wireName,
 				},
 			}
 			if tool.Description != "" {
 				item["function"].(map[string]any)["description"] = tool.Description
 			}
-			if anySchema, err := rawJSONToAny(tool.InputSchema); err == nil && anySchema != nil {
+			if toolType == "custom" {
+				item["function"].(map[string]any)["parameters"] = openAICustomToolInputSchema()
+			} else if anySchema, err := rawJSONToAny(tool.InputSchema); err == nil && anySchema != nil {
+				if strings.Contains(strings.ToLower(model), "grok") {
+					anySchema = normalizeGrokToolSchema(anySchema)
+				}
+				if anySchema == nil {
+					continue
+				}
 				item["function"].(map[string]any)["parameters"] = anySchema
 			}
 			tools = append(tools, item)
+			encodedToolNames[wireName] = struct{}{}
+		}
+		if conv.ToolChoice.Mode == "named" && (conv.ToolChoice.toolType() == "function" || conv.ToolChoice.toolType() == "custom") {
+			selectedName := openAIWireName(conv.ToolChoice.Namespace, conv.ToolChoice.Name)
+			if _, ok := encodedToolNames[selectedName]; !ok {
+				return nil, fmt.Errorf("%w: selected tool %q was omitted because its schema is not supported by the %s upstream", protocol.ErrUnsupportedRequestShape, selectedName, model)
+			}
 		}
 		if len(tools) > 0 {
 			encodedToolCount = len(tools)
@@ -168,6 +191,11 @@ func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, 
 	if !conv.ToolChoice.IsZero() && encodedToolCount > 0 {
 		choice := encodeOpenAIToolChoice(conv.ToolChoice)
 		if choice != nil {
+			if choiceMap, ok := choice.(map[string]any); ok {
+				if fn, ok := choiceMap["function"].(map[string]any); ok && conv.ToolChoice.Name != "" {
+					fn["name"] = openAIWireName(conv.ToolChoice.Namespace, conv.ToolChoice.Name)
+				}
+			}
 			var err error
 			payload.ToolChoice, err = marshalStableJSON(choice)
 			if err != nil {
@@ -349,12 +377,26 @@ func encodeOpenAIToolChoice(choice conversationToolChoice) any {
 	case "required":
 		return "required"
 	case "named":
-		if choice.toolType() != "function" {
+		if choice.toolType() != "function" && choice.toolType() != "custom" {
 			return nil
 		}
 		return map[string]any{"type": "function", "function": map[string]any{"name": choice.Name}}
 	default:
 		return nil
+	}
+}
+
+func openAICustomToolInputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"input": map[string]any{
+				"type":        "string",
+				"description": "Freeform input passed to the custom tool.",
+			},
+		},
+		"required":             []string{"input"},
+		"additionalProperties": false,
 	}
 }
 

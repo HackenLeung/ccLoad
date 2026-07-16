@@ -432,7 +432,7 @@ func TestRegistry_TranslateResponseStream_OpenAIToCodex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TranslateResponseStream failed: %v", err)
 	}
-	if len(chunks) != 1 || !strings.Contains(string(chunks[0]), "event: response.output_text.delta") || !strings.Contains(string(chunks[0]), `"delta":"hello"`) {
+	if len(chunks) != 3 || !strings.Contains(string(bytes.Join(chunks, nil)), "event: response.output_item.added") || !strings.Contains(string(bytes.Join(chunks, nil)), "event: response.output_text.delta") || !strings.Contains(string(bytes.Join(chunks, nil)), `"delta":"hello"`) {
 		t.Fatalf("unexpected codex stream chunk: %#v", chunks)
 	}
 
@@ -440,7 +440,7 @@ func TestRegistry_TranslateResponseStream_OpenAIToCodex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TranslateResponseStream done failed: %v", err)
 	}
-	if len(done) != 1 || !strings.Contains(string(done[0]), "event: response.completed") {
+	if len(done) != 4 || !strings.Contains(string(bytes.Join(done, nil)), "event: response.output_item.done") || !strings.Contains(string(bytes.Join(done, nil)), "event: response.completed") {
 		t.Fatalf("unexpected codex done chunk: %#v", done)
 	}
 }

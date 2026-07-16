@@ -41,6 +41,17 @@ func encodeCodexRequest(model string, conv conversation, stream bool) ([]byte, e
 				tools = append(tools, item)
 				continue
 			}
+			if tool.toolType() == "custom" {
+				item := map[string]any{"type": "custom", "name": toolAliases.shorten(tool.Name)}
+				if tool.Description != "" {
+					item["description"] = tool.Description
+				}
+				for key, value := range tool.Options {
+					item[key] = value
+				}
+				tools = append(tools, item)
+				continue
+			}
 			item := map[string]any{"type": tool.toolType()}
 			for key, value := range tool.Options {
 				item[key] = value
@@ -54,9 +65,9 @@ func encodeCodexRequest(model string, conv conversation, stream bool) ([]byte, e
 		case "auto", "none", "required":
 			out.ToolChoice = conv.ToolChoice.Mode
 		case "named":
-			if conv.ToolChoice.toolType() == "function" {
+			if conv.ToolChoice.toolType() == "function" || conv.ToolChoice.toolType() == "custom" {
 				out.ToolChoice = map[string]any{
-					"type": "function",
+					"type": conv.ToolChoice.toolType(),
 					"name": toolAliases.shorten(conv.ToolChoice.Name),
 				}
 			} else {
@@ -283,12 +294,32 @@ func encodeCodexToolCallWithAliases(call *conversationToolCall, aliases codexToo
 	if arguments == "" {
 		arguments = "{}"
 	}
-	return map[string]any{
+	if normalizeRole(call.Type) == "custom" {
+		return map[string]any{
+			"type":    "custom_tool_call",
+			"call_id": call.ID,
+			"name":    aliases.shorten(call.Name),
+			"input":   customToolInputFromArguments(call.Arguments),
+		}, nil
+	}
+	if normalizeRole(call.Type) == "tool_search" {
+		var arguments any = map[string]any{}
+		_ = sonic.Unmarshal(call.Arguments, &arguments)
+		return map[string]any{
+			"type": "tool_search_call", "call_id": call.ID,
+			"arguments": arguments, "execution": "client", "status": "completed",
+		}, nil
+	}
+	item := map[string]any{
 		"type":      "function_call",
 		"call_id":   call.ID,
 		"name":      aliases.shorten(call.Name),
 		"arguments": arguments,
-	}, nil
+	}
+	if call.Namespace != "" {
+		item["namespace"] = call.Namespace
+	}
+	return item, nil
 }
 
 func encodeCodexToolResultWithAliases(result *conversationToolResult, aliases codexToolAliases) (map[string]any, error) {
@@ -303,6 +334,9 @@ func encodeCodexToolResultWithAliases(result *conversationToolResult, aliases co
 		"type":    "function_call_output",
 		"call_id": result.CallID,
 		"output":  output,
+	}
+	if normalizeRole(result.Type) == "custom" {
+		item["type"] = "custom_tool_call_output"
 	}
 	if result.Name != "" {
 		item["name"] = aliases.shorten(result.Name)
@@ -399,13 +433,13 @@ func decodeCodexContentPart(part map[string]any) (conversationPart, error) {
 			return conversationPart{}, err
 		}
 		return conversationPart{Kind: partKindFile, Media: &media}, nil
-	case "function_call":
+	case "function_call", "custom_tool_call":
 		call, err := decodeCodexToolCall(part)
 		if err != nil {
 			return conversationPart{}, err
 		}
 		return conversationPart{Kind: partKindToolCall, ToolCall: &call}, nil
-	case "function_call_output":
+	case "function_call_output", "custom_tool_call_output":
 		result, err := decodeCodexToolResult(part)
 		if err != nil {
 			return conversationPart{}, err
@@ -417,17 +451,34 @@ func decodeCodexContentPart(part map[string]any) (conversationPart, error) {
 }
 
 func decodeCodexToolCall(item map[string]any) (conversationToolCall, error) {
-	arguments, err := rawJSONFromFields(item, "arguments")
-	if err != nil {
-		return conversationToolCall{}, err
-	}
-	if !hasJSONValue(arguments) {
-		arguments = json.RawMessage(`{}`)
+	typ := normalizeRole(stringValue(item["type"]))
+	var arguments json.RawMessage
+	if typ == "custom_tool_call" {
+		encoded, err := marshalStableJSON(map[string]any{"input": customToolInputValue(item["input"])})
+		if err != nil {
+			return conversationToolCall{}, err
+		}
+		arguments = encoded
+	} else {
+		var err error
+		arguments, err = rawJSONFromFields(item, "arguments")
+		if err != nil {
+			return conversationToolCall{}, err
+		}
+		if !hasJSONValue(arguments) {
+			arguments = json.RawMessage(`{}`)
+		}
 	}
 	call := conversationToolCall{
+		Type:      strings.TrimSuffix(typ, "_tool_call"),
 		ID:        firstNonEmptyString(item, "call_id", "id"),
 		Name:      strings.TrimSpace(stringValue(item["name"])),
+		Namespace: strings.TrimSpace(stringValue(item["namespace"])),
 		Arguments: arguments,
+	}
+	if typ == "tool_search_call" {
+		call.Type = "tool_search"
+		call.Name = "tool_search"
 	}
 	if call.Name == "" {
 		return conversationToolCall{}, fmt.Errorf("%w: codex function_call missing name", protocol.ErrUnsupportedRequestShape)
@@ -436,6 +487,33 @@ func decodeCodexToolCall(item map[string]any) (conversationToolCall, error) {
 		call.ID = call.Name
 	}
 	return call, nil
+}
+
+func decodeCodexToolSearchOutput(item map[string]any) (conversationToolResult, []conversationTool, error) {
+	callID := firstNonEmptyString(item, "call_id", "id")
+	if callID == "" {
+		return conversationToolResult{}, nil, fmt.Errorf("%w: codex tool_search_output missing call_id", protocol.ErrUnsupportedRequestShape)
+	}
+	var loaded []conversationTool
+	if rawTools, ok := item["tools"]; ok {
+		encoded, err := marshalStableJSON(rawTools)
+		if err != nil {
+			return conversationToolResult{}, nil, err
+		}
+		loaded, err = parseFunctionTools(encoded, "codex")
+		if err != nil {
+			return conversationToolResult{}, nil, err
+		}
+	}
+	names := make([]string, 0, len(loaded))
+	for _, tool := range loaded {
+		names = append(names, codexOpenAIWireBaseName(tool.Namespace, tool.Name))
+	}
+	text := "Tool search returned no tools."
+	if len(names) > 0 {
+		text = "Tool search loaded these tools. Call one by its exact name: " + strings.Join(names, ", ")
+	}
+	return conversationToolResult{Type: "tool_search", CallID: callID, Name: "tool_search", Parts: []conversationPart{{Kind: partKindText, Text: text}}}, loaded, nil
 }
 
 func decodeCodexToolResult(item map[string]any) (conversationToolResult, error) {
@@ -454,11 +532,44 @@ func decodeCodexToolResult(item map[string]any) (conversationToolResult, error) 
 		}
 	}
 	return conversationToolResult{
+		Type:    strings.TrimSuffix(normalizeRole(stringValue(item["type"])), "_tool_call_output"),
 		CallID:  callID,
 		Name:    strings.TrimSpace(stringValue(item["name"])),
 		IsError: boolValue(item["is_error"]),
 		Parts:   parts,
 	}, nil
+}
+
+func customToolInputValue(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	if value == nil {
+		return ""
+	}
+	encoded, err := marshalStableJSON(value)
+	if err != nil {
+		return fmt.Sprint(value)
+	}
+	return string(encoded)
+}
+
+func customToolInputFromArguments(arguments json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(arguments))
+	if trimmed == "" {
+		return ""
+	}
+	var wrapper map[string]any
+	if err := sonic.Unmarshal(arguments, &wrapper); err == nil {
+		if value, ok := wrapper["input"]; ok {
+			return customToolInputValue(value)
+		}
+	}
+	var text string
+	if err := sonic.Unmarshal(arguments, &text); err == nil {
+		return text
+	}
+	return trimmed
 }
 
 func decodeToolResultParts(value any) ([]conversationPart, error) {
@@ -485,6 +596,13 @@ func decodeCodexImageMedia(part map[string]any) (conversationMedia, error) {
 		MIMEType: firstNonEmptyString(part, "mime_type", "media_type"),
 		Data:     firstNonEmptyString(part, "data", "image_data"),
 		Detail:   firstNonEmptyString(part, "detail"),
+	}
+	if mimeType, data, ok := parseBase64DataURL(media.URL); ok {
+		media.URL = ""
+		media.Data = data
+		if media.MIMEType == "" {
+			media.MIMEType = mimeType
+		}
 	}
 	if media.URL == "" && media.FileID == "" && media.Data == "" {
 		return conversationMedia{}, fmt.Errorf("%w: codex image part missing image_url/file_id/data", protocol.ErrUnsupportedRequestShape)

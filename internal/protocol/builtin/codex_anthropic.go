@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"ccLoad/internal/protocol"
@@ -34,6 +35,7 @@ type codexToAnthropicStreamState struct {
 type anthropicToCodexStreamState struct {
 	model      string
 	responseID string
+	toolRoutes map[string]codexOpenAIToolRoute
 	usage      struct {
 		inputTokens              int64
 		outputTokens             int64
@@ -48,6 +50,12 @@ type anthropicToCodexStreamState struct {
 	toolInput          any
 	toolJSON           string
 	toolActive         bool
+	textActive         bool
+	textStarted        bool
+	textValue          string
+	textID             string
+	textOutputIndex    int
+	textSequence       int
 	reasoningActive    bool
 	reasoningText      string
 	reasoningSignature string
@@ -78,7 +86,7 @@ func convertAnthropicRequestToCodex(model string, rawJSON []byte, stream bool) (
 	return encodeCodexRequest(model, conv, stream)
 }
 
-func convertAnthropicResponseToCodexNonStream(_ context.Context, model string, _, _, rawJSON []byte) ([]byte, error) {
+func convertAnthropicResponseToCodexNonStream(_ context.Context, model string, rawReq, _ []byte, rawJSON []byte) ([]byte, error) {
 	var resp anthropicMessagesResponse
 	if err := sonic.Unmarshal(rawJSON, &resp); err != nil {
 		return nil, err
@@ -87,6 +95,7 @@ func convertAnthropicResponseToCodexNonStream(_ context.Context, model string, _
 	if err != nil {
 		return nil, err
 	}
+	output = restoreAnthropicCodexToolItems(output, codexOpenAIToolRoutes(rawReq))
 	out := map[string]any{
 		"id":     "resp-proxy",
 		"object": "response",
@@ -142,13 +151,13 @@ func convertCodexResponseToAnthropicNonStream(_ context.Context, model string, r
 	return sonic.Marshal(out)
 }
 
-func convertAnthropicResponseToCodexStream(_ context.Context, model string, _, _, rawJSON []byte, param *any) ([][]byte, error) {
+func convertAnthropicResponseToCodexStream(_ context.Context, model string, rawReq, _ []byte, rawJSON []byte, param *any) ([][]byte, error) {
 	if param == nil {
 		var local any
 		param = &local
 	}
 	if *param == nil {
-		*param = &anthropicToCodexStreamState{model: model, responseID: "resp-proxy"}
+		*param = &anthropicToCodexStreamState{model: model, responseID: "resp-proxy", toolRoutes: codexOpenAIToolRoutes(rawReq)}
 	}
 	st := (*param).(*anthropicToCodexStreamState)
 	if st.model == "" {
@@ -188,6 +197,10 @@ func convertAnthropicResponseToCodexStream(_ context.Context, model string, _, _
 		return nil, nil
 	}
 	if eventType == "message_stop" || func() bool { typ, _ := payload["type"].(string); return typ == "message_stop" }() {
+		chunks, err := finishAnthropicCodexText(st)
+		if err != nil {
+			return nil, err
+		}
 		done := map[string]any{
 			"type": "response.completed",
 			"response": map[string]any{
@@ -211,7 +224,8 @@ func convertAnthropicResponseToCodexStream(_ context.Context, model string, _, _
 		if err != nil {
 			return nil, err
 		}
-		return [][]byte{append([]byte("event: response.completed\ndata: "), append(body, []byte("\n\n")...)...)}, nil
+		chunks = append(chunks, append([]byte("event: response.completed\ndata: "), append(body, []byte("\n\n")...)...))
+		return chunks, nil
 	}
 	if typ := stringValue(payload["type"]); typ == "content_block_start" {
 		if block, _ := payload["content_block"].(map[string]any); block != nil {
@@ -227,6 +241,16 @@ func convertAnthropicResponseToCodexStream(_ context.Context, model string, _, _
 				st.reasoningText = ""
 				st.reasoningSignature = ""
 				st.reasoningData = stringValue(block["data"])
+			case "text":
+				st.textActive = true
+				st.textStarted = false
+				st.textValue = ""
+				st.textOutputIndex = int(int64Value(payload["index"]))
+				st.textSequence++
+				st.textID = fmt.Sprintf("msg-proxy-%d", st.textSequence)
+				if text := stringValue(block["text"]); text != "" {
+					return appendAnthropicCodexTextDelta(st, text)
+				}
 			}
 		}
 		return nil, nil
@@ -246,17 +270,13 @@ func convertAnthropicResponseToCodexStream(_ context.Context, model string, _, _
 				return nil, nil
 			}
 			if text := stringValue(delta["text"]); text != "" {
-				chunk := map[string]any{
-					"type":  "response.output_text.delta",
-					"delta": text,
-				}
-				body, err := sonic.Marshal(chunk)
-				if err != nil {
-					return nil, err
-				}
-				return [][]byte{append([]byte("event: response.output_text.delta\ndata: "), append(body, []byte("\n\n")...)...)}, nil
+				st.textActive = true
+				return appendAnthropicCodexTextDelta(st, text)
 			}
 		}
+	}
+	if typ := stringValue(payload["type"]); typ == "content_block_stop" && st.textActive {
+		return finishAnthropicCodexText(st)
 	}
 	if typ := stringValue(payload["type"]); typ == "content_block_stop" && st.reasoningActive {
 		chunk := map[string]any{
@@ -286,14 +306,11 @@ func convertAnthropicResponseToCodexStream(_ context.Context, model string, _, _
 		if arguments == "" {
 			arguments = "{}"
 		}
+		route := st.toolRoutes[st.toolName]
+		toolItem := codexToolCallItemFromOpenAI(st.toolID, st.toolName, arguments, route)
 		chunk := map[string]any{
 			"type": "response.output_item.done",
-			"item": map[string]any{
-				"type":      "function_call",
-				"call_id":   st.toolID,
-				"name":      st.toolName,
-				"arguments": arguments,
-			},
+			"item": toolItem,
 		}
 		body, err := sonic.Marshal(chunk)
 		if err != nil {
@@ -328,6 +345,100 @@ func convertAnthropicResponseToCodexStream(_ context.Context, model string, _, _
 		}
 	}
 	return nil, nil
+}
+
+func finishAnthropicCodexText(st *anthropicToCodexStreamState) ([][]byte, error) {
+	if st == nil || !st.textActive || !st.textStarted {
+		return nil, nil
+	}
+	text := st.textValue
+	st.textActive = false
+	st.textStarted = false
+	st.textValue = ""
+	textID := st.textID
+	st.textID = ""
+	outputIndex := st.textOutputIndex
+	visible := strings.TrimSpace(text)
+	visible = strings.Trim(visible, "\u200b\ufeff")
+	if strings.TrimSpace(visible) == "" {
+		return nil, nil
+	}
+	part := map[string]any{"type": "output_text", "text": text, "annotations": []any{}}
+	textDone := map[string]any{
+		"type": "response.output_text.done", "item_id": textID, "output_index": outputIndex, "content_index": 0, "text": text,
+	}
+	partDone := map[string]any{
+		"type": "response.content_part.done", "item_id": textID, "output_index": outputIndex, "content_index": 0, "part": part,
+	}
+	itemDone := map[string]any{
+		"type":         "response.output_item.done",
+		"output_index": outputIndex,
+		"item": map[string]any{
+			"id": textID, "type": "message", "role": "assistant", "status": "completed",
+			"content": []map[string]any{part},
+		},
+	}
+	textDoneChunk, err := appendCodexSSEEvent(nil, "response.output_text.done", textDone)
+	if err != nil {
+		return nil, err
+	}
+	partDoneChunk, err := appendCodexSSEEvent(nil, "response.content_part.done", partDone)
+	if err != nil {
+		return nil, err
+	}
+	itemDoneChunk, err := appendCodexSSEEvent(nil, "response.output_item.done", itemDone)
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{textDoneChunk, partDoneChunk, itemDoneChunk}, nil
+}
+
+func appendAnthropicCodexTextDelta(st *anthropicToCodexStreamState, text string) ([][]byte, error) {
+	if st == nil || text == "" {
+		return nil, nil
+	}
+	st.textValue += text
+	chunks := make([][]byte, 0, 3)
+	if !st.textStarted {
+		st.textStarted = true
+		added := map[string]any{
+			"type": "response.output_item.added", "output_index": st.textOutputIndex,
+			"item": map[string]any{"id": st.textID, "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}},
+		}
+		partAdded := map[string]any{
+			"type": "response.content_part.added", "item_id": st.textID, "output_index": st.textOutputIndex, "content_index": 0,
+			"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+		}
+		addedChunk, err := appendCodexSSEEvent(nil, "response.output_item.added", added)
+		if err != nil {
+			return nil, err
+		}
+		partChunk, err := appendCodexSSEEvent(nil, "response.content_part.added", partAdded)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, addedChunk, partChunk)
+	}
+	delta := map[string]any{
+		"type": "response.output_text.delta", "item_id": st.textID, "output_index": st.textOutputIndex, "content_index": 0, "delta": text,
+	}
+	deltaChunk, err := appendCodexSSEEvent(nil, "response.output_text.delta", delta)
+	if err != nil {
+		return nil, err
+	}
+	return append(chunks, deltaChunk), nil
+}
+
+func restoreAnthropicCodexToolItems(items []map[string]any, routes map[string]codexOpenAIToolRoute) []map[string]any {
+	for i, item := range items {
+		if normalizeRole(stringValue(item["type"])) != "function_call" {
+			continue
+		}
+		name := stringValue(item["name"])
+		arguments := stringValue(item["arguments"])
+		items[i] = codexToolCallItemFromOpenAI(firstNonEmptyString(item, "call_id", "id"), name, arguments, routes[name])
+	}
+	return items
 }
 
 func convertCodexResponseToAnthropicStream(_ context.Context, model string, rawReq, translatedReq, rawJSON []byte, param *any) ([][]byte, error) {

@@ -353,6 +353,8 @@ window.I18N_LOCALES['en'] = {
   'channels.protocolTransformNative': 'Native',
   'channels.protocolTransformModeLocal': 'ccLoad(experimental)',
   'channels.protocolTransformModeUpstream': 'Upstream',
+  'channels.protocolTransformModeLocalDescription': 'ccLoad converts request and response protocols locally. Basic conversations, streaming output, and common tool calls are currently supported across Claude Code, Codex, OpenAI, and Gemini. Some advanced tools, images, reasoning fields, and context compaction depend on upstream capabilities and may not be fully compatible. If conversion fails, ccLoad continues with the next eligible channel.',
+  'channels.protocolTransformModeUpstreamDescription': 'The upstream API performs protocol conversion. ccLoad does not locally convert request or response formats.',
   'channels.modal.apiUrl': 'API URL',
   'channels.modal.apiKey': 'API Key',
   'channels.modal.keyNote': 'Note',

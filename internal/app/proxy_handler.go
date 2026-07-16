@@ -172,6 +172,36 @@ func (s *Server) selectRouteCandidates(ctx context.Context, c *gin.Context, orig
 	return s.selectCandidatesByModelAndType(ctx, originalModel, channelType)
 }
 
+func isGPTModel(modelName string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), "gpt-")
+}
+
+func isCodexCompactionRequest(method, requestPath, modelName string) bool {
+	if method != http.MethodPost || !isGPTModel(modelName) {
+		return false
+	}
+	return strings.TrimSuffix(strings.TrimSpace(requestPath), "/") == "/v1/responses/compact"
+}
+
+// filterNativeGPTCompactionCandidates keeps only channels that can send the
+// requested GPT model unchanged to a native Codex Responses upstream.
+func filterNativeGPTCompactionCandidates(candidates []*model.Config, modelName string) []*model.Config {
+	filtered := make([]*model.Config, 0, len(candidates))
+	for _, cfg := range candidates {
+		if cfg == nil || !cfg.SupportsModel(modelName) {
+			continue
+		}
+		if redirectModel, ok := cfg.GetRedirectModel(modelName); ok && redirectModel != modelName {
+			continue
+		}
+		if cfg.ResolveUpstreamProtocol(string(protocol.Codex)) != string(protocol.Codex) {
+			continue
+		}
+		filtered = append(filtered, cfg)
+	}
+	return filtered
+}
+
 // ============================================================================
 // 主请求处理器
 // ============================================================================
@@ -270,6 +300,11 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 		return
 	}
 
+	isCodexCompaction := isCodexCompactionRequest(requestMethod, effectiveRequestPath, originalModel)
+	if isCodexCompaction {
+		cands = filterNativeGPTCompactionCandidates(cands, originalModel)
+	}
+
 	if len(cands) == 0 {
 		s.AddLogAsync(&model.LogEntry{
 			Time:           model.JSONTime{Time: time.Now()},
@@ -300,21 +335,22 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 	}
 
 	reqCtx := &proxyRequestContext{
-		originalModel:  originalModel,
-		clientProtocol: clientProtocol,
-		requestMethod:  requestMethod,
-		requestPath:    effectiveRequestPath,
-		rawQuery:       c.Request.URL.RawQuery,
-		body:           all,
-		translatedBody: all,
-		header:         c.Request.Header,
-		isStreaming:    isStreaming,
-		tokenHash:      tokenHashStr,
-		tokenID:        tokenIDInt64,
-		clientIP:       c.ClientIP(),
-		activeReqID:    activeID,
-		startTime:      startTime,
-		thinkingEffort: thinkingEffort,
+		originalModel:     originalModel,
+		clientProtocol:    clientProtocol,
+		requestMethod:     requestMethod,
+		requestPath:       effectiveRequestPath,
+		rawQuery:          c.Request.URL.RawQuery,
+		body:              all,
+		translatedBody:    all,
+		header:            c.Request.Header,
+		isStreaming:       isStreaming,
+		tokenHash:         tokenHashStr,
+		tokenID:           tokenIDInt64,
+		clientIP:          c.ClientIP(),
+		activeReqID:       activeID,
+		startTime:         startTime,
+		thinkingEffort:    thinkingEffort,
+		isCodexCompaction: isCodexCompaction,
 	}
 	reqCtx.observer = &ForwardObserver{
 		OnBytesRead: func(n int64) {
@@ -453,7 +489,7 @@ func (s *Server) runProxyAttemptLoop(
 				break
 			}
 
-			if shouldStopTryingChannels(result) {
+			if shouldStopTryingChannels(result) && !reqCtx.isCodexCompaction {
 				break
 			}
 		}

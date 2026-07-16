@@ -133,26 +133,27 @@ type ForwardObserver struct {
 
 // proxyRequestContext 代理请求上下文（封装请求信息，遵循DIP原则）
 type proxyRequestContext struct {
-	originalModel    string
-	clientProtocol   protocol.Protocol
-	requestMethod    string
-	requestPath      string
-	rawQuery         string
-	body             []byte
-	translatedBody   []byte
-	header           http.Header
-	isStreaming      bool
-	tokenHash        string               // Token哈希值（用于统计）
-	tokenID          int64                // Token ID（用于日志记录，0表示未使用token）
-	clientIP         string               // 客户端IP地址（用于日志记录）
-	activeReqID      int64                // 活跃请求ID（用于更新渠道信息）
-	observer         *ForwardObserver     // 转发观测回调（可选）
-	startTime        time.Time            // 请求开始时间（用于统计）
-	channelStartTime time.Time            // 当前渠道尝试开始时间（每次切换渠道时重置）
-	attemptStartTime time.Time            // 渠道内单次 Key/URL 尝试开始时间
-	baseURL          string               // 当前尝试使用的上游URL（多URL场景）
-	debugData        *model.DebugLogEntry // Debug日志数据（debug开启时填充）
-	thinkingEffort   string
+	originalModel     string
+	clientProtocol    protocol.Protocol
+	requestMethod     string
+	requestPath       string
+	rawQuery          string
+	body              []byte
+	translatedBody    []byte
+	header            http.Header
+	isStreaming       bool
+	tokenHash         string               // Token哈希值（用于统计）
+	tokenID           int64                // Token ID（用于日志记录，0表示未使用token）
+	clientIP          string               // 客户端IP地址（用于日志记录）
+	activeReqID       int64                // 活跃请求ID（用于更新渠道信息）
+	observer          *ForwardObserver     // 转发观测回调（可选）
+	startTime         time.Time            // 请求开始时间（用于统计）
+	channelStartTime  time.Time            // 当前渠道尝试开始时间（每次切换渠道时重置）
+	attemptStartTime  time.Time            // 渠道内单次 Key/URL 尝试开始时间
+	baseURL           string               // 当前尝试使用的上游URL（多URL场景）
+	debugData         *model.DebugLogEntry // Debug日志数据（debug开启时填充）
+	thinkingEffort    string
+	isCodexCompaction bool // GPT /v1/responses/compact 请求会尝试所有符合条件的原生渠道
 }
 
 // proxyResult 代理请求结果

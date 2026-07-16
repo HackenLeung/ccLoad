@@ -177,6 +177,22 @@ func normalizeCodexConversation(req codexRequest) (conversation, error) {
 			}
 		}
 		switch typ {
+		case "reasoning":
+			// Provider-specific reasoning history is opaque to local cross-protocol
+			// transforms. Dropping it is preferable to rejecting every continuation.
+			continue
+		case "additional_tools":
+			if rawTools, ok := item["tools"]; ok {
+				encoded, marshalErr := marshalStableJSON(rawTools)
+				if marshalErr != nil {
+					return conversation{}, marshalErr
+				}
+				loaded, parseErr := parseFunctionTools(encoded, "codex")
+				if parseErr != nil {
+					return conversation{}, parseErr
+				}
+				conv.Tools = append(conv.Tools, loaded...)
+			}
 		case "message":
 			role := normalizeRole(stringValue(item["role"]))
 			parts, err := extractCodexContentParts(item["content"])
@@ -192,17 +208,24 @@ func normalizeCodexConversation(req codexRequest) (conversation, error) {
 			default:
 				return conversation{}, fmt.Errorf("%w: unsupported codex message role %q", protocol.ErrUnsupportedRequestShape, role)
 			}
-		case "function_call":
+		case "function_call", "custom_tool_call", "tool_search_call":
 			call, err := decodeCodexToolCall(item)
 			if err != nil {
 				return conversation{}, fmt.Errorf("codex input %d: %w", i, err)
 			}
 			conv.Turns = append(conv.Turns, conversationTurn{Role: "assistant", Parts: []conversationPart{{Kind: partKindToolCall, ToolCall: &call}}})
-		case "function_call_output":
+		case "function_call_output", "custom_tool_call_output":
 			result, err := decodeCodexToolResult(item)
 			if err != nil {
 				return conversation{}, fmt.Errorf("codex input %d: %w", i, err)
 			}
+			conv.Turns = append(conv.Turns, conversationTurn{Role: "tool", Parts: []conversationPart{{Kind: partKindToolResult, ToolResult: &result}}})
+		case "tool_search_output":
+			result, loaded, decodeErr := decodeCodexToolSearchOutput(item)
+			if decodeErr != nil {
+				return conversation{}, fmt.Errorf("codex input %d: %w", i, decodeErr)
+			}
+			conv.Tools = append(conv.Tools, loaded...)
 			conv.Turns = append(conv.Turns, conversationTurn{Role: "tool", Parts: []conversationPart{{Kind: partKindToolResult, ToolResult: &result}}})
 		case "input_text", "output_text", "text", "input_image", "image", "input_file", "file":
 			part, err := decodeCodexContentPart(item)
@@ -316,9 +339,61 @@ func parseFunctionTools(raw json.RawMessage, source string) ([]conversationTool,
 	}
 	tools := make([]conversationTool, 0, len(items))
 	for i, item := range items {
+		rawType := normalizeRole(stringValue(item["type"]))
+		if source == "codex" && rawType == "namespace" {
+			namespace := strings.TrimSpace(stringValue(item["name"]))
+			children, _ := item["tools"].([]any)
+			for childIndex, rawChild := range children {
+				child, ok := rawChild.(map[string]any)
+				if !ok || normalizeRole(stringValue(child["type"])) != "function" {
+					continue
+				}
+				name := strings.TrimSpace(stringValue(child["name"]))
+				if name == "" {
+					return nil, fmt.Errorf("%w: codex namespace tool %d child %d missing name", protocol.ErrUnsupportedRequestShape, i, childIndex)
+				}
+				schema, schemaErr := rawJSONFromFields(child, "parameters", "input_schema")
+				if schemaErr != nil {
+					return nil, schemaErr
+				}
+				tools = append(tools, conversationTool{Type: "function", Name: name, Namespace: namespace, Description: stringValue(child["description"]), InputSchema: schema})
+			}
+			continue
+		}
+		if source == "codex" && rawType == "tool_search" {
+			schema, schemaErr := rawJSONFromFields(item, "parameters")
+			if schemaErr != nil {
+				return nil, schemaErr
+			}
+			if !hasJSONValue(schema) {
+				schema = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"number"}},"required":["query"]}`)
+			}
+			tools = append(tools, conversationTool{Type: "tool_search", Name: "tool_search", Description: firstNonEmptyString(item, "description"), InputSchema: schema})
+			continue
+		}
 		typ, err := normalizeConversationToolType(stringValue(item["type"]))
 		if err != nil {
+			// Codex App attaches provider-specific tools such as namespace and
+			// tool_search to every request. Chat Completions cannot represent them.
+			// Degrade gracefully by omitting only the unsupported declaration;
+			// rejecting it would also break ordinary turns that never use the tool.
+			if source == "codex" {
+				continue
+			}
 			return nil, fmt.Errorf("%w: unsupported %s tool type %q at index %d", protocol.ErrUnsupportedRequestShape, source, normalizeRole(stringValue(item["type"])), i)
+		}
+		if typ == "custom" {
+			name := strings.TrimSpace(stringValue(item["name"]))
+			if name == "" {
+				return nil, fmt.Errorf("%w: %s custom tool %d missing name", protocol.ErrUnsupportedRequestShape, source, i)
+			}
+			tools = append(tools, conversationTool{
+				Type:        typ,
+				Name:        name,
+				Description: stringValue(item["description"]),
+				Options:     cloneMapWithoutKeys(item, "type", "name", "description"),
+			})
+			continue
 		}
 		if typ != "function" {
 			tool := conversationTool{
@@ -393,7 +468,13 @@ func parseToolChoice(raw json.RawMessage, source string) (conversationToolChoice
 		if name == "" {
 			return conversationToolChoice{}, fmt.Errorf("%w: named %s tool_choice missing name", protocol.ErrUnsupportedRequestShape, source)
 		}
-		return conversationToolChoice{Mode: "named", Name: name, ToolType: "function"}, nil
+		return conversationToolChoice{Mode: "named", Name: name, Namespace: strings.TrimSpace(stringValue(obj["namespace"])), ToolType: "function"}, nil
+	case "custom":
+		name := strings.TrimSpace(stringValue(obj["name"]))
+		if name == "" {
+			return conversationToolChoice{}, fmt.Errorf("%w: named %s custom tool_choice missing name", protocol.ErrUnsupportedRequestShape, source)
+		}
+		return conversationToolChoice{Mode: "named", Name: name, ToolType: "custom"}, nil
 	case "tool":
 		name := strings.TrimSpace(stringValue(obj["name"]))
 		if name == "" {

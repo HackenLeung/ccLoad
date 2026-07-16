@@ -68,6 +68,7 @@ type conversationMedia struct {
 type conversationTool struct {
 	Type        string
 	Name        string
+	Namespace   string
 	Description string
 	InputSchema json.RawMessage
 	Options     map[string]any
@@ -76,21 +77,26 @@ type conversationTool struct {
 type conversationToolChoice struct {
 	Mode            string
 	Name            string
+	Namespace       string
 	ToolType        string
 	DisableParallel bool
 }
 
 type conversationToolCall struct {
+	Type      string
 	ID        string
 	Name      string
+	Namespace string
 	Arguments json.RawMessage
 }
 
 type conversationToolResult struct {
-	CallID  string
-	Name    string
-	IsError bool
-	Parts   []conversationPart
+	Type      string
+	CallID    string
+	Name      string
+	Namespace string
+	IsError   bool
+	Parts     []conversationPart
 }
 
 type geminiRequestPayload struct {
@@ -217,21 +223,31 @@ func resolveToolResultNames(conv *conversation) {
 		return
 	}
 	callNames := make(map[string]string)
+	callTypes := make(map[string]string)
+	callNamespaces := make(map[string]string)
 	for _, turn := range conv.Turns {
 		for _, part := range turn.Parts {
 			if part.Kind == partKindToolCall && part.ToolCall != nil && part.ToolCall.ID != "" && part.ToolCall.Name != "" {
 				callNames[part.ToolCall.ID] = part.ToolCall.Name
+				callTypes[part.ToolCall.ID] = part.ToolCall.Type
+				callNamespaces[part.ToolCall.ID] = part.ToolCall.Namespace
 			}
 		}
 	}
 	for ti := range conv.Turns {
 		for pi := range conv.Turns[ti].Parts {
 			part := &conv.Turns[ti].Parts[pi]
-			if part.Kind != partKindToolResult || part.ToolResult == nil || part.ToolResult.Name != "" {
+			if part.Kind != partKindToolResult || part.ToolResult == nil {
 				continue
 			}
-			if name := callNames[part.ToolResult.CallID]; name != "" {
+			if name := callNames[part.ToolResult.CallID]; part.ToolResult.Name == "" && name != "" {
 				part.ToolResult.Name = name
+			}
+			if typ := callTypes[part.ToolResult.CallID]; part.ToolResult.Type == "" && typ != "" {
+				part.ToolResult.Type = typ
+			}
+			if namespace := callNamespaces[part.ToolResult.CallID]; part.ToolResult.Namespace == "" && namespace != "" {
+				part.ToolResult.Namespace = namespace
 			}
 		}
 	}
@@ -243,7 +259,7 @@ func hasJSONValue(raw json.RawMessage) bool {
 }
 
 func (c conversationToolChoice) IsZero() bool {
-	return c.Mode == "" && c.Name == "" && c.ToolType == ""
+	return c.Mode == "" && c.Name == "" && c.Namespace == "" && c.ToolType == ""
 }
 
 func (t conversationTool) toolType() string {
@@ -264,7 +280,7 @@ func normalizeConversationToolType(value string) (string, error) {
 	switch typ := normalizeRole(value); typ {
 	case "", "function":
 		return "function", nil
-	case "web_search", "web_search_preview":
+	case "custom", "web_search", "web_search_preview":
 		return typ, nil
 	default:
 		return "", fmt.Errorf("unsupported conversation tool type %q", typ)
@@ -387,4 +403,36 @@ func buildDataURL(mimeType, encoded string) string {
 		mimeType = "application/octet-stream"
 	}
 	return fmt.Sprintf("data:%s;base64,%s", mimeType, encoded)
+}
+
+func parseBase64DataURL(value string) (mimeType, data string, ok bool) {
+	value = strings.TrimSpace(value)
+	if len(value) < len("data:,") || !strings.EqualFold(value[:5], "data:") {
+		return "", "", false
+	}
+	comma := strings.IndexByte(value, ',')
+	if comma < 0 {
+		return "", "", false
+	}
+	metadata := value[5:comma]
+	parts := strings.Split(metadata, ";")
+	base64Encoded := false
+	for _, part := range parts[1:] {
+		if strings.EqualFold(strings.TrimSpace(part), "base64") {
+			base64Encoded = true
+			break
+		}
+	}
+	if !base64Encoded {
+		return "", "", false
+	}
+	mimeType = strings.TrimSpace(parts[0])
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	data = strings.TrimSpace(value[comma+1:])
+	if data == "" {
+		return "", "", false
+	}
+	return mimeType, data, true
 }

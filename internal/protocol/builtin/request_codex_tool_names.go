@@ -17,6 +17,45 @@ type codexToolAliases struct {
 	ShortToOriginal map[string]string
 }
 
+func codexOpenAIWireBaseName(namespace, name string) string {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	if namespace == "" {
+		return name
+	}
+	return namespace + "__" + name
+}
+
+func collectOpenAIWireToolNames(conv conversation) []string {
+	names := make([]string, 0, len(conv.Tools))
+	seen := make(map[string]struct{})
+	add := func(namespace, name string) {
+		wire := codexOpenAIWireBaseName(namespace, name)
+		if wire == "" {
+			return
+		}
+		if _, ok := seen[wire]; ok {
+			return
+		}
+		seen[wire] = struct{}{}
+		names = append(names, wire)
+	}
+	for _, tool := range conv.Tools {
+		add(tool.Namespace, tool.Name)
+	}
+	if conv.ToolChoice.Mode == "named" {
+		add(conv.ToolChoice.Namespace, conv.ToolChoice.Name)
+	}
+	for _, turn := range conv.Turns {
+		for _, part := range turn.Parts {
+			if part.ToolCall != nil {
+				add(part.ToolCall.Namespace, part.ToolCall.Name)
+			}
+		}
+	}
+	return names
+}
+
 func buildCodexToolAliases(names []string) codexToolAliases {
 	aliases := codexToolAliases{
 		OriginalToShort: make(map[string]string),
@@ -104,11 +143,11 @@ func collectCodexAliasNames(conv conversation) []string {
 	}
 
 	for _, tool := range conv.Tools {
-		if tool.toolType() == "function" {
+		if tool.toolType() == "function" || tool.toolType() == "custom" {
 			add(tool.Name)
 		}
 	}
-	if conv.ToolChoice.Mode == "named" && conv.ToolChoice.toolType() == "function" {
+	if conv.ToolChoice.Mode == "named" && (conv.ToolChoice.toolType() == "function" || conv.ToolChoice.toolType() == "custom") {
 		add(conv.ToolChoice.Name)
 	}
 	for _, turn := range conv.Turns {

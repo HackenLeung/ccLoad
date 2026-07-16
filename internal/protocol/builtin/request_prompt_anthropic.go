@@ -25,6 +25,7 @@ func newClaudeMetadataUserID() string {
 }
 
 func encodeAnthropicRequest(model string, conv conversation, stream bool) ([]byte, error) {
+	conv = prepareConversationForAnthropic(conv)
 	systemParts, turns, err := splitConversationForSystem(conv)
 	if err != nil {
 		return nil, err
@@ -148,6 +149,55 @@ func encodeAnthropicRequest(model string, conv conversation, stream bool) ([]byt
 		return nil, fmt.Errorf("%w: no convertible anthropic messages", protocol.ErrUnsupportedRequestShape)
 	}
 	return marshalStableJSON(out)
+}
+
+func prepareConversationForAnthropic(conv conversation) conversation {
+	aliases := buildCodexToolAliases(collectOpenAIWireToolNames(conv))
+	wireName := func(namespace, name string) string {
+		return aliases.shorten(codexOpenAIWireBaseName(namespace, name))
+	}
+	out := conv
+	out.Tools = append([]conversationTool(nil), conv.Tools...)
+	for i := range out.Tools {
+		tool := &out.Tools[i]
+		tool.Name = wireName(tool.Namespace, tool.Name)
+		tool.Namespace = ""
+		switch tool.toolType() {
+		case "custom":
+			tool.Type = "function"
+			if encoded, err := marshalStableJSON(openAICustomToolInputSchema()); err == nil {
+				tool.InputSchema = encoded
+			}
+		case "tool_search":
+			tool.Type = "function"
+		}
+	}
+	out.Turns = make([]conversationTurn, len(conv.Turns))
+	for i, turn := range conv.Turns {
+		out.Turns[i] = turn
+		out.Turns[i].Parts = append([]conversationPart(nil), turn.Parts...)
+		for j := range out.Turns[i].Parts {
+			part := &out.Turns[i].Parts[j]
+			if part.ToolCall != nil {
+				copy := *part.ToolCall
+				copy.Name = wireName(copy.Namespace, copy.Name)
+				copy.Namespace = ""
+				part.ToolCall = &copy
+			}
+			if part.ToolResult != nil {
+				copy := *part.ToolResult
+				copy.Name = wireName(copy.Namespace, copy.Name)
+				copy.Namespace = ""
+				part.ToolResult = &copy
+			}
+		}
+	}
+	if out.ToolChoice.Mode == "named" {
+		out.ToolChoice.Name = wireName(out.ToolChoice.Namespace, out.ToolChoice.Name)
+		out.ToolChoice.Namespace = ""
+		out.ToolChoice.ToolType = "function"
+	}
+	return out
 }
 
 func applyAnthropicThinking(out *anthropicMessagesRequest, thinking *anthropicThinkingConfig) {
@@ -299,8 +349,14 @@ func encodeAnthropicMediaBlock(blockType string, media *conversationMedia) (map[
 			source["media_type"] = media.MIMEType
 		}
 	case media.URL != "":
-		source["type"] = "url"
-		source["url"] = media.URL
+		if mimeType, data, ok := parseBase64DataURL(media.URL); ok {
+			source["type"] = "base64"
+			source["media_type"] = mimeType
+			source["data"] = data
+		} else {
+			source["type"] = "url"
+			source["url"] = media.URL
+		}
 	case media.FileID != "":
 		source["type"] = "file"
 		source["file_id"] = media.FileID

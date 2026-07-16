@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"ccLoad/internal/cooldown"
+	"ccLoad/internal/model"
+	"ccLoad/internal/protocol"
 	"ccLoad/internal/util"
 
 	"github.com/gin-gonic/gin"
@@ -305,6 +307,78 @@ func TestShouldStopTryingChannels(t *testing.T) {
 				t.Fatalf("shouldStopTryingChannels()=%v, expected %v", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestIsCodexCompactionRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		model  string
+		want   bool
+	}{
+		{name: "GPT compact", method: http.MethodPost, path: "/v1/responses/compact", model: "gpt-5.5", want: true},
+		{name: "GPT compact trailing slash", method: http.MethodPost, path: "/v1/responses/compact/", model: "GPT-5.6-CODEX", want: true},
+		{name: "normal responses", method: http.MethodPost, path: "/v1/responses", model: "gpt-5.5", want: false},
+		{name: "non GPT compact", method: http.MethodPost, path: "/v1/responses/compact", model: "grok-4.5", want: false},
+		{name: "wrong method", method: http.MethodGet, path: "/v1/responses/compact", model: "gpt-5.5", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isCodexCompactionRequest(tt.method, tt.path, tt.model); got != tt.want {
+				t.Fatalf("isCodexCompactionRequest()=%v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterNativeGPTCompactionCandidates(t *testing.T) {
+	t.Parallel()
+
+	const requestedModel = "gpt-5.5"
+	candidates := []*model.Config{
+		{
+			Name:         "redirected-to-grok",
+			ChannelType:  util.ChannelTypeCodex,
+			ModelEntries: []model.ModelEntry{{Model: requestedModel, RedirectModel: "grok-4.5"}},
+		},
+		{
+			Name:         "fuzzy-only",
+			ChannelType:  util.ChannelTypeCodex,
+			ModelEntries: []model.ModelEntry{{Model: "gpt-5.5-preview"}},
+		},
+		{
+			Name:                  "local-openai-transform",
+			ChannelType:           util.ChannelTypeOpenAI,
+			ProtocolTransformMode: model.ProtocolTransformModeLocal,
+			ProtocolTransforms:    []string{string(protocol.Codex)},
+			ModelEntries:          []model.ModelEntry{{Model: requestedModel}},
+		},
+		{
+			Name:         "native-codex",
+			ChannelType:  util.ChannelTypeCodex,
+			ModelEntries: []model.ModelEntry{{Model: requestedModel}},
+		},
+		{
+			Name:                  "native-codex-exposed",
+			ChannelType:           util.ChannelTypeAnthropic,
+			ProtocolTransformMode: model.ProtocolTransformModeUpstream,
+			ProtocolTransforms:    []string{string(protocol.Codex)},
+			ModelEntries:          []model.ModelEntry{{Model: requestedModel}},
+		},
+	}
+
+	got := filterNativeGPTCompactionCandidates(candidates, requestedModel)
+	if len(got) != 2 {
+		t.Fatalf("filtered candidates=%d, want 2", len(got))
+	}
+	if got[0].Name != "native-codex" || got[1].Name != "native-codex-exposed" {
+		t.Fatalf("unexpected filtered order: %q, %q", got[0].Name, got[1].Name)
 	}
 }
 

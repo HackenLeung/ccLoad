@@ -375,6 +375,48 @@ func translatedStreamChunksComplete(clientProtocol protocol.Protocol, chunks [][
 	return false
 }
 
+func translatedCodexChunksHaveOutput(chunks [][]byte) bool {
+	for _, chunk := range chunks {
+		eventType, data := parseSSEEventChunk(chunk)
+		payload, ok := decodeSSEPayload(data)
+		if !ok {
+			continue
+		}
+		payloadType, _ := payload["type"].(string)
+		if payloadType == "" {
+			payloadType = eventType
+		}
+		switch payloadType {
+		case "response.output_text.delta":
+			if visibleTranslatedText(translatedString(payload["delta"])) {
+				return true
+			}
+		case "response.output_item.added", "response.output_item.done":
+			item, _ := payload["item"].(map[string]any)
+			switch strings.TrimSpace(translatedString(item["type"])) {
+			case "function_call", "custom_tool_call", "reasoning":
+				return true
+			case "message":
+				if content, ok := item["content"].([]any); ok && len(content) > 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func translatedString(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func visibleTranslatedText(text string) bool {
+	text = strings.TrimSpace(text)
+	text = strings.Trim(text, "\u200b\ufeff")
+	return strings.TrimSpace(text) != ""
+}
+
 var sseDoneMarker = []byte("[DONE]")
 
 func translatedStreamChunkCompletes(clientProtocol protocol.Protocol, chunk []byte) bool {
@@ -939,6 +981,9 @@ func (s *Server) handleTranslatedStreamSuccessResponse(
 
 	parser := newSSEUsageParser(channelType)
 	var translatedComplete bool
+	var translatedHasOutput bool
+	gateOnTranslatedCodexOutput := reqCtx.transformPlan.ClientProtocol == protocol.Codex &&
+		reqCtx.transformPlan.UpstreamProtocol == protocol.OpenAI
 	var state any
 	streamErr := streamTransformSSEEventsUntil(
 		reqCtx.ctx,
@@ -948,13 +993,13 @@ func (s *Server) handleTranslatedStreamSuccessResponse(
 			if err := parser.Feed(rawEvent); err != nil {
 				return err
 			}
-			if parser.GetLastError() != nil || parser.HasStreamOutput() || parser.IsStreamComplete() {
+			if parser.GetLastError() != nil || (!gateOnTranslatedCodexOutput && parser.HasStreamOutput()) || parser.IsStreamComplete() {
 				markFirstStreamResponse(reqCtx, readStats, observer)
 			}
 			if !deferredWriter.Committed() && parser.GetLastError() != nil {
 				return errAbortStreamBeforeWrite
 			}
-			if !deferredWriter.Committed() && parser.HasStreamOutput() {
+			if !gateOnTranslatedCodexOutput && !deferredWriter.Committed() && parser.HasStreamOutput() {
 				return deferredWriter.Commit()
 			}
 			return nil
@@ -976,6 +1021,15 @@ func (s *Server) handleTranslatedStreamSuccessResponse(
 			if !translatedComplete && translatedStreamChunksComplete(reqCtx.transformPlan.ClientProtocol, chunks) {
 				translatedComplete = true
 			}
+			if gateOnTranslatedCodexOutput && translatedCodexChunksHaveOutput(chunks) {
+				translatedHasOutput = true
+				markFirstStreamResponse(reqCtx, readStats, observer)
+				if !deferredWriter.Committed() {
+					if err := deferredWriter.Commit(); err != nil {
+						return nil, err
+					}
+				}
+			}
 			return chunks, nil
 		},
 		func() bool {
@@ -986,7 +1040,7 @@ func (s *Server) handleTranslatedStreamSuccessResponse(
 	abortedBeforeCommit := errors.Is(streamErr, errAbortStreamBeforeWrite)
 	if abortedBeforeCommit {
 		streamErr = nil
-	} else if !deferredWriter.Committed() && isEmptyStreamOutput(parser, readStats) {
+	} else if !deferredWriter.Committed() && ((gateOnTranslatedCodexOutput && !translatedHasOutput) || (!gateOnTranslatedCodexOutput && isEmptyStreamOutput(parser, readStats))) {
 		if streamErr == nil {
 			return emptyOKResponseResult(reqCtx, resp, hdrClone, readStats, emptyStreamDetail(readStats))
 		}
