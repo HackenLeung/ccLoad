@@ -6,7 +6,28 @@
 
 - 新增渠道排序方案保存/切换功能
 - Docker 镜像、Release 下载和自动更新链路指向本 fork
-- 同步上游模型目录、Token 仪表盘与计费修复
+- 增强 Codex 客户端到 OpenAI/Anthropic 上游的本地协议转换
+- GPT 上下文压缩会跳过模型重定向渠道，按优先级尝试同名原生 GPT 渠道
+- HTTP 200 空响应不会直接结束请求，会继续尝试下一个符合条件的渠道
+
+## 本地协议转换
+
+渠道编辑中的“转换方式”提供两种模式：
+
+- `上游`：协议转换由上游接口完成，ccLoad 不改写请求和响应格式。
+- `ccLoad(实验性)`：由 ccLoad 在本地转换客户端协议与上游协议。
+
+当前本地转换重点兼容 Codex `/v1/responses` 客户端，包括：
+
+- 普通对话、推理内容与完整流式消息事件
+- function、custom、namespace 和 `tool_search` 工具声明、调用及结果续答
+- 超长工具名稳定缩短，并在响应中恢复原始名称和 namespace
+- Codex 到 OpenAI Chat Completions、Anthropic Messages 的请求与响应转换
+- Grok 对嵌套 `oneOf` 工具 Schema 的兼容处理
+- data URL 图片转 Anthropic base64 图片，HTTPS 图片保持 URL
+- OpenAI/Anthropic 多文本块、工具调用和最终正文的正确回填
+
+部分高级工具、图片格式、推理字段和上下文压缩仍取决于上游接口能力。使用 `ccLoad(实验性)` 时，如果某个渠道返回错误或没有有效正文/工具输出，ccLoad 会在允许重试的情况下继续尝试后续渠道。
 
 Docker 镜像：
 
@@ -15,3 +36,5 @@ docker pull ghcr.io/hackenleung/ccload:latest
 ```
 
 原项目说明和完整功能文档可参考：[caidaoli/ccLoad](https://github.com/caidaoli/ccLoad)
+
+本 fork 的最新版本与多平台二进制文件见：[GitHub Releases](https://github.com/HackenLeung/ccLoad/releases/latest)
