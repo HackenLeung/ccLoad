@@ -3145,6 +3145,68 @@ func TestProxy_CodexToOpenAILocalTransform_EmptyStreamFallsBack(t *testing.T) {
 	}
 }
 
+func TestProxy_CodexToAnthropicLocalTransform_EmptyStreamFallsBack(t *testing.T) {
+	t.Parallel()
+
+	var emptyCalls atomic.Int32
+	var fallbackCalls atomic.Int32
+	emptyUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		emptyCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_empty\",\"model\":\"claude-sonnet-4\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer emptyUpstream.Close()
+
+	fallbackUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"fallback reply\"}\n\n")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"claude-3-5-sonnet\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2,\"total_tokens\":7}}}\n\n")
+	}))
+	defer fallbackUpstream.Close()
+
+	env := setupProxyTestEnv(t, []testChannel{
+		{name: "empty-anthropic-local", channelType: "anthropic", models: "claude-3-5-sonnet", apiKey: "sk-empty", priority: 200},
+		{name: "native-codex-fallback", channelType: "codex", models: "claude-3-5-sonnet", apiKey: "sk-fallback", priority: 100},
+	}, map[int]string{0: emptyUpstream.URL, 1: fallbackUpstream.URL})
+
+	configs, err := env.store.ListConfigs(context.Background())
+	if err != nil {
+		t.Fatalf("ListConfigs failed: %v", err)
+	}
+	for _, cfg := range configs {
+		if cfg.Name != "empty-anthropic-local" {
+			continue
+		}
+		cfg.ProtocolTransforms = []string{"codex"}
+		cfg.ProtocolTransformMode = model.ProtocolTransformModeLocal
+		if _, err := env.store.UpdateConfig(context.Background(), cfg.ID, cfg); err != nil {
+			t.Fatalf("UpdateConfig failed: %v", err)
+		}
+	}
+	env.server.InvalidateChannelListCache()
+
+	w := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses", map[string]any{
+		"model":  "claude-3-5-sonnet",
+		"stream": true,
+		"input": []map[string]any{{
+			"type":    "message",
+			"role":    "user",
+			"content": []map[string]string{{"type": "input_text", "text": "hello"}},
+		}},
+	}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if emptyCalls.Load() != 1 || fallbackCalls.Load() != 1 {
+		t.Fatalf("calls empty=%d fallback=%d, want 1 each", emptyCalls.Load(), fallbackCalls.Load())
+	}
+	if body := w.Body.String(); !strings.Contains(body, "fallback reply") || strings.Contains(body, "msg_empty") {
+		t.Fatalf("unexpected fallback response: %s", body)
+	}
+}
+
 func TestProxy_GeminiTransform_UsesResolvedActualModelInUpstreamPath(t *testing.T) {
 	t.Parallel()
 

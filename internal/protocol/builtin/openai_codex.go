@@ -33,6 +33,8 @@ type openAIToCodexStreamState struct {
 	reasoningEncrypted string
 	textValue          string
 	textStarted        bool
+	textOutputIndex    int
+	nextOutputIndex    int
 	toolCalls          map[int]*pendingToolCall
 }
 
@@ -166,17 +168,9 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 		return [][]byte{rawJSON}, nil
 	}
 	if line == "[DONE]" {
-		chunks := make([][]byte, 0, 5)
-		if st.reasoningText != "" || st.reasoningEncrypted != "" {
-			item := map[string]any{
-				"type": "response.output_item.done",
-				"item": codexReasoningItem(st.reasoningText, st.reasoningEncrypted),
-			}
-			body, err := sonic.Marshal(item)
-			if err != nil {
-				return nil, err
-			}
-			chunks = append(chunks, append([]byte("event: response.output_item.done\ndata: "), append(body, []byte("\n\n")...)...))
+		chunks, err := finishOpenAICodexReasoning(st)
+		if err != nil {
+			return nil, err
 		}
 		textChunks, err := finishOpenAICodexText(st)
 		if err != nil {
@@ -191,9 +185,11 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 			}
 			toolItem := codexToolCallItemFromOpenAI(tc.id, tc.name, tc.arguments, st.toolRoute(tc.name))
 			item := map[string]any{
-				"type": "response.output_item.done",
-				"item": toolItem,
+				"type":         "response.output_item.done",
+				"output_index": st.nextOutputIndex,
+				"item":         toolItem,
 			}
+			st.nextOutputIndex++
 			body, err := sonic.Marshal(item)
 			if err != nil {
 				return nil, err
@@ -294,16 +290,21 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 	if content == "" {
 		return nil, nil
 	}
+	chunks, err := finishOpenAICodexReasoning(st)
+	if err != nil {
+		return nil, err
+	}
 	st.textValue += content
-	chunks := make([][]byte, 0, 3)
 	if !st.textStarted {
 		st.textStarted = true
+		st.textOutputIndex = st.nextOutputIndex
+		st.nextOutputIndex++
 		added := map[string]any{
-			"type": "response.output_item.added", "output_index": 0,
+			"type": "response.output_item.added", "output_index": st.textOutputIndex,
 			"item": map[string]any{"id": "msg-proxy", "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}},
 		}
 		partAdded := map[string]any{
-			"type": "response.content_part.added", "item_id": "msg-proxy", "output_index": 0, "content_index": 0,
+			"type": "response.content_part.added", "item_id": "msg-proxy", "output_index": st.textOutputIndex, "content_index": 0,
 			"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
 		}
 		var err error
@@ -319,7 +320,7 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 		chunks = append(chunks, chunk)
 	}
 	outputDelta := map[string]any{
-		"type": "response.output_text.delta", "item_id": "msg-proxy", "output_index": 0, "content_index": 0, "delta": content,
+		"type": "response.output_text.delta", "item_id": "msg-proxy", "output_index": st.textOutputIndex, "content_index": 0, "delta": content,
 	}
 	deltaChunk, err := appendCodexSSEEvent(nil, "response.output_text.delta", outputDelta)
 	if err != nil {
@@ -340,15 +341,15 @@ func finishOpenAICodexText(st *openAIToCodexStreamState) ([][]byte, error) {
 		return nil, nil
 	}
 	textDone := map[string]any{
-		"type": "response.output_text.done", "item_id": "msg-proxy", "output_index": 0, "content_index": 0, "text": value,
+		"type": "response.output_text.done", "item_id": "msg-proxy", "output_index": st.textOutputIndex, "content_index": 0, "text": value,
 	}
 	part := map[string]any{"type": "output_text", "text": value, "annotations": []any{}}
 	partDone := map[string]any{
-		"type": "response.content_part.done", "item_id": "msg-proxy", "output_index": 0, "content_index": 0, "part": part,
+		"type": "response.content_part.done", "item_id": "msg-proxy", "output_index": st.textOutputIndex, "content_index": 0, "part": part,
 	}
 	itemDone := map[string]any{
 		"type":         "response.output_item.done",
-		"output_index": 0,
+		"output_index": st.textOutputIndex,
 		"item": map[string]any{
 			"id": "msg-proxy", "type": "message", "role": "assistant", "status": "completed",
 			"content": []map[string]any{part},
@@ -367,6 +368,62 @@ func finishOpenAICodexText(st *openAIToCodexStreamState) ([][]byte, error) {
 		return nil, err
 	}
 	return [][]byte{textDoneChunk, partDoneChunk, itemDoneChunk}, nil
+}
+
+func finishOpenAICodexReasoning(st *openAIToCodexStreamState) ([][]byte, error) {
+	if st == nil || (st.reasoningText == "" && st.reasoningEncrypted == "") {
+		return nil, nil
+	}
+	text := st.reasoningText
+	encrypted := st.reasoningEncrypted
+	st.reasoningText = ""
+	st.reasoningEncrypted = ""
+	outputIndex := st.nextOutputIndex
+	st.nextOutputIndex++
+	itemID := fmt.Sprintf("rs-proxy-%d", outputIndex)
+
+	addedItem := codexReasoningItem("", encrypted)
+	addedItem["id"] = itemID
+	addedItem["status"] = "in_progress"
+	addedItem["summary"] = []map[string]any{}
+	added, err := appendCodexSSEEvent(nil, "response.output_item.added", map[string]any{
+		"type": "response.output_item.added", "output_index": outputIndex, "item": addedItem,
+	})
+	if err != nil {
+		return nil, err
+	}
+	chunks := [][]byte{added}
+	summary := make([]map[string]any, 0, 1)
+	if text != "" {
+		part := map[string]any{"type": "summary_text", "text": text}
+		summary = append(summary, part)
+		for _, event := range []struct {
+			name    string
+			payload map[string]any
+		}{
+			{"response.reasoning_summary_part.added", map[string]any{"type": "response.reasoning_summary_part.added", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": ""}}},
+			{"response.reasoning_summary_text.delta", map[string]any{"type": "response.reasoning_summary_text.delta", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "delta": text}},
+			{"response.reasoning_summary_text.done", map[string]any{"type": "response.reasoning_summary_text.done", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "text": text}},
+			{"response.reasoning_summary_part.done", map[string]any{"type": "response.reasoning_summary_part.done", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "part": part}},
+		} {
+			chunk, marshalErr := appendCodexSSEEvent(nil, event.name, event.payload)
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			chunks = append(chunks, chunk)
+		}
+	}
+	doneItem := codexReasoningItem(text, encrypted)
+	doneItem["id"] = itemID
+	doneItem["status"] = "completed"
+	doneItem["summary"] = summary
+	done, err := appendCodexSSEEvent(nil, "response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "output_index": outputIndex, "item": doneItem,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(chunks, done), nil
 }
 
 func appendCodexSSEEvent(dst []byte, eventType string, payload map[string]any) ([]byte, error) {

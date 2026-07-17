@@ -283,6 +283,86 @@ func TestRegistry_TranslateResponseStream_OpenAITextToCompletedCodexMessage(t *t
 	}
 }
 
+func TestRegistry_TranslateResponseStream_OpenAIReasoningPrecedesTextWithDistinctIndexes(t *testing.T) {
+	t.Parallel()
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	var state any
+	chunks := []string{
+		`data: {"model":"grok-4.5","choices":[{"index":0,"delta":{"reasoning_content":"think"}}]}` + "\n\n",
+		`data: {"model":"grok-4.5","choices":[{"index":0,"delta":{"content":"answer"}}]}` + "\n\n",
+		"data: [DONE]\n\n",
+	}
+	var output bytes.Buffer
+	for _, chunk := range chunks {
+		translated, err := reg.TranslateResponseStream(context.Background(), protocol.OpenAI, protocol.Codex, "gpt-5.5", []byte(`{"model":"gpt-5.5","stream":true}`), nil, []byte(chunk), &state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range translated {
+			output.Write(item)
+		}
+	}
+	result := output.String()
+	reasoningAdded := strings.Index(result, `event: response.output_item.added`)
+	reasoningDelta := strings.Index(result, `event: response.reasoning_summary_text.delta`)
+	reasoningDone := -1
+	if reasoningDelta >= 0 {
+		reasoningDone = strings.Index(result[reasoningDelta:], `event: response.output_item.done`)
+		if reasoningDone >= 0 {
+			reasoningDone += reasoningDelta
+		}
+	}
+	textAdded := -1
+	if reasoningDone >= 0 {
+		textAdded = strings.Index(result[reasoningDone:], `event: response.output_item.added`)
+		if textAdded >= 0 {
+			textAdded += reasoningDone
+		}
+	}
+	if reasoningAdded < 0 || reasoningDelta < reasoningAdded || reasoningDone < reasoningDelta || textAdded < reasoningDone {
+		t.Fatalf("reasoning lifecycle must complete before text starts:\n%s", result)
+	}
+	for _, want := range []string{`"id":"rs-proxy-0"`, `"output_index":0`, `"output_index":1`, `event: response.reasoning_summary_text.done`, `"delta":"answer"`, `event: response.completed`} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("stream output missing %s:\n%s", want, result)
+		}
+	}
+	reasoningSummary := func(eventName string) []any {
+		marker := "event: " + eventName + "\ndata: "
+		start := strings.Index(result, marker)
+		if start < 0 {
+			t.Fatalf("stream output missing %s:\n%s", eventName, result)
+		}
+		data := result[start+len(marker):]
+		if end := strings.Index(data, "\n\n"); end >= 0 {
+			data = data[:end]
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			t.Fatalf("decode %s: %v", eventName, err)
+		}
+		item, _ := payload["item"].(map[string]any)
+		summary, ok := item["summary"].([]any)
+		if !ok {
+			t.Fatalf("%s reasoning item missing summary: %#v", eventName, item)
+		}
+		return summary
+	}
+	if summary := reasoningSummary("response.output_item.added"); len(summary) != 0 {
+		t.Fatalf("added reasoning summary=%#v, want empty", summary)
+	}
+	summary := reasoningSummary("response.output_item.done")
+	if len(summary) != 1 {
+		t.Fatalf("done reasoning summary=%#v, want one part", summary)
+	}
+	part, ok := summary[0].(map[string]any)
+	if !ok || part["type"] != "summary_text" || part["text"] != "think" {
+		t.Fatalf("done reasoning summary=%#v, want think", summary)
+	}
+}
+
 func TestRegistry_TranslateRequest_CodexToolsToAnthropicLocal(t *testing.T) {
 	t.Parallel()
 	reg := protocol.NewRegistry()

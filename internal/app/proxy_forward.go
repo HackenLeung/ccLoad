@@ -394,7 +394,7 @@ func translatedCodexChunksHaveOutput(chunks [][]byte) bool {
 		case "response.output_item.added", "response.output_item.done":
 			item, _ := payload["item"].(map[string]any)
 			switch strings.TrimSpace(translatedString(item["type"])) {
-			case "function_call", "custom_tool_call", "reasoning":
+			case "function_call", "custom_tool_call", "tool_search_call", "reasoning":
 				return true
 			case "message":
 				if content, ok := item["content"].([]any); ok && len(content) > 0 {
@@ -982,8 +982,7 @@ func (s *Server) handleTranslatedStreamSuccessResponse(
 	parser := newSSEUsageParser(channelType)
 	var translatedComplete bool
 	var translatedHasOutput bool
-	gateOnTranslatedCodexOutput := reqCtx.transformPlan.ClientProtocol == protocol.Codex &&
-		reqCtx.transformPlan.UpstreamProtocol == protocol.OpenAI
+	gateOnTranslatedCodexOutput := reqCtx.transformPlan.ClientProtocol == protocol.Codex
 	var state any
 	streamErr := streamTransformSSEEventsUntil(
 		reqCtx.ctx,

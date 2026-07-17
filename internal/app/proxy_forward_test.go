@@ -404,6 +404,14 @@ func TestPrepareCodexResponsesBodyForUpstream_KeepsRegularCodexToolSearch(t *tes
 	}
 }
 
+func TestTranslatedCodexChunksHaveOutput_ToolSearchCall(t *testing.T) {
+	t.Parallel()
+	chunks := [][]byte{[]byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"tool_search_call\",\"call_id\":\"search_1\"}}\n\n")}
+	if !translatedCodexChunksHaveOutput(chunks) {
+		t.Fatal("tool_search_call must count as translated Codex output")
+	}
+}
+
 func TestTranslatedStreamChunkCompletes(t *testing.T) {
 	t.Parallel()
 
