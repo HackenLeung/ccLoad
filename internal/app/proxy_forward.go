@@ -1904,10 +1904,136 @@ func prepareCodexResponsesBodyForUpstream(cfg *model.Config, upstreamProtocol pr
 	}
 	if isAnyrouterChannel(cfg) {
 		if stripped, ok := codexBodyWithoutToolSearchOnlyInputItems(body); ok {
-			return stripped
+			body = stripped
+		}
+	}
+	// Hosted web_search is OpenAI Responses capability. Grok/third-party "codex"
+	// routes often fake empty completed web_search_call and waste the turn.
+	// Strip by actual upstream model only (after redirect), not channel name/URL.
+	if shouldStripHostedWebSearch(body) {
+		if stripped, ok := codexBodyWithoutHostedWebSearch(body); ok {
+			body = stripped
 		}
 	}
 	return body
+}
+
+// shouldStripHostedWebSearch decides from the body model name only.
+// Channel name/URL is intentionally ignored: a misnamed channel that still
+// forwards a real gpt-* model must keep hosted web_search.
+func shouldStripHostedWebSearch(body []byte) bool {
+	var root map[string]any
+	if err := sonic.Unmarshal(body, &root); err != nil {
+		return false
+	}
+	modelName, _ := root["model"].(string)
+	return modelLacksHostedWebSearch(modelName)
+}
+
+func modelLacksHostedWebSearch(modelName string) bool {
+	m := strings.ToLower(strings.TrimSpace(modelName))
+	if m == "" {
+		return false
+	}
+	// Common non-OpenAI families without real Responses hosted web_search.
+	markers := []string{
+		"grok", "claude", "gemini", "deepseek", "qwen", "kimi", "moonshot",
+		"llama", "mistral", "doubao", "hunyuan", "glm-", "ernie", "command-r", "sonar",
+	}
+	for _, marker := range markers {
+		if strings.Contains(m, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHostedWebSearchToolType(typ string) bool {
+	switch strings.ToLower(strings.TrimSpace(typ)) {
+	case "web_search", "web_search_preview":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexBodyWithoutHostedWebSearch(body []byte) ([]byte, bool) {
+	var root map[string]any
+	if err := sonic.Unmarshal(body, &root); err != nil {
+		return nil, false
+	}
+
+	changed := false
+
+	if tools, ok := root["tools"].([]any); ok {
+		filtered := make([]any, 0, len(tools))
+		for _, item := range tools {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				filtered = append(filtered, item)
+				continue
+			}
+			typ, _ := obj["type"].(string)
+			if isHostedWebSearchToolType(typ) {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if changed {
+			if len(filtered) == 0 {
+				delete(root, "tools")
+			} else {
+				root["tools"] = filtered
+			}
+		}
+	}
+
+	switch choice := root["tool_choice"].(type) {
+	case string:
+		if isHostedWebSearchToolType(choice) {
+			delete(root, "tool_choice")
+			changed = true
+		}
+	case map[string]any:
+		typ, _ := choice["type"].(string)
+		if isHostedWebSearchToolType(typ) {
+			delete(root, "tool_choice")
+			changed = true
+		}
+	}
+
+	if input, ok := root["input"].([]any); ok {
+		filtered := make([]any, 0, len(input))
+		removedInput := false
+		for _, item := range input {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				filtered = append(filtered, item)
+				continue
+			}
+			typ, _ := obj["type"].(string)
+			// Drop empty/fake prior hosted search turns so the model stops relying on them.
+			if typ == "web_search_call" || strings.HasPrefix(typ, "web_search_") {
+				removedInput = true
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if removedInput {
+			root["input"] = filtered
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil, false
+	}
+	out, err := sonic.Marshal(root)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 func normalizeCodexToolSearchInputItems(body []byte) ([]byte, bool) {

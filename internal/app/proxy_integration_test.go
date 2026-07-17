@@ -316,6 +316,92 @@ func TestProxy_GPTCompactionUsesSameModelNativeCodexFallback(t *testing.T) {
 	}
 }
 
+func TestProxy_GPTHostedWebSearchUsesSameModelNativeCodexFallback(t *testing.T) {
+	t.Parallel()
+
+	const requestedModel = "gpt-5.4"
+	var redirectedCalls atomic.Int32
+	var nativeCalls atomic.Int32
+	var nativeModel atomic.Value
+	var nativeHasSearch atomic.Bool
+
+	redirectedUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_grok","object":"response","output":[]}`))
+	}))
+	defer redirectedUpstream.Close()
+
+	nativeUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nativeCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Model string `json:"model"`
+			Tools []struct {
+				Type string `json:"type"`
+			} `json:"tools"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		nativeModel.Store(payload.Model)
+		for _, tool := range payload.Tools {
+			if tool.Type == "web_search" {
+				nativeHasSearch.Store(true)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_search","object":"response","output":[]}`))
+	}))
+	defer nativeUpstream.Close()
+
+	env := setupProxyTestEnv(t, []testChannel{
+		{
+			name:        "redirected-grok",
+			channelType: util.ChannelTypeCodex,
+			models:      requestedModel,
+			redirects:   map[string]string{requestedModel: "grok-4.5"},
+			priority:    300,
+		},
+		{
+			name:        "native-gpt",
+			channelType: util.ChannelTypeCodex,
+			models:      requestedModel,
+			priority:    100,
+		},
+	}, map[int]string{
+		0: redirectedUpstream.URL,
+		1: nativeUpstream.URL,
+	})
+
+	searchResponse := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses", map[string]any{
+		"model":       requestedModel,
+		"tools":       []map[string]any{{"type": "web_search", "search_context_size": "medium"}},
+		"tool_choice": map[string]any{"type": "web_search"},
+		"input": []map[string]any{{
+			"type": "message",
+			"role": "user",
+			"content": []map[string]any{{
+				"type": "input_text",
+				"text": "search this",
+			}},
+		}},
+	}, nil)
+	if searchResponse.Code != http.StatusOK {
+		t.Fatalf("search status=%d body=%s", searchResponse.Code, searchResponse.Body.String())
+	}
+	if redirectedCalls.Load() != 0 {
+		t.Fatalf("redirected channel received %d search requests, want 0", redirectedCalls.Load())
+	}
+	if nativeCalls.Load() != 1 {
+		t.Fatalf("native channel received %d search requests, want 1", nativeCalls.Load())
+	}
+	if got, _ := nativeModel.Load().(string); got != requestedModel {
+		t.Fatalf("native model=%q, want %q", got, requestedModel)
+	}
+	if !nativeHasSearch.Load() {
+		t.Fatal("native request should keep hosted web_search tool")
+	}
+}
+
 func TestDashboardProxy_UsesBoundTokenAndStreams(t *testing.T) {
 	var upstreamHits atomic.Int64
 	upstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

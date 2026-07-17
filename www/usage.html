@@ -161,7 +161,7 @@
         </div>
 
         <div class="www-callout">
-          <strong>Search remains an upstream capability.</strong> If the selected provider, model or route does not support built-in search, disable search for that request or channel instead of expecting ccLoad to emulate browser access.
+          <strong>Search remains an upstream capability.</strong> If the selected provider, model or route does not support built-in search, disable search for that request or channel instead of expecting ccLoad to emulate browser access. When a <code>gpt-*</code> Codex request currently selects hosted search via <code>tool_choice</code> of <code>web_search</code>, or includes Desktop Computer/Chrome plugin markers, ccLoad routes it like compaction: keep the selected model name and only try native Codex channels that do not redirect away from that model. Merely listing <code>web_search</code> in <code>tools</code> does not force native routing. For remaining routes whose upstream model is not a real OpenAI-hosted search model (for example after redirect to <code>grok-*</code> or other non-OpenAI families), ccLoad still strips hosted <code>web_search</code> tools and empty <code>web_search_call</code> history before forwarding so the model does not loop on fake completed searches. Channel display names are not used for this decision.
         </div>
       </div>
     </section>

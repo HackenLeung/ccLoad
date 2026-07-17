@@ -324,6 +324,70 @@ func TestPrepareCodexResponsesBodyForUpstream_StripsAnyrouterUnsupportedInputBef
 	}
 }
 
+func TestPrepareCodexResponsesBodyForUpstream_StripsHostedWebSearchForGrokModel(t *testing.T) {
+	body := []byte(`{
+		"model":"grok-4.5",
+		"tools":[
+			{"type":"web_search","search_context_size":"medium"},
+			{"type":"function","name":"shell","parameters":{"type":"object"}}
+		],
+		"tool_choice":{"type":"web_search"},
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"keep"}]},
+			{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"drop"}},
+			{"type":"function_call","name":"shell","arguments":"{}"}
+		]
+	}`)
+	// Channel name is irrelevant; strip is based on body model only.
+	cfg := &model.Config{Name: "friendly-name", URL: "https://example.com", ChannelType: util.ChannelTypeCodex}
+
+	got := prepareCodexResponsesBodyForUpstream(cfg, protocol.Codex, "/v1/responses", body)
+	text := string(got)
+	if strings.Contains(text, `"type":"web_search"`) ||
+		strings.Contains(text, `"web_search_call"`) ||
+		strings.Contains(text, `"tool_choice"`) {
+		t.Fatalf("non-openai model should drop hosted web_search before forward, got %s", text)
+	}
+	if !strings.Contains(text, `"name":"shell"`) ||
+		!strings.Contains(text, `"type":"message"`) ||
+		!strings.Contains(text, `"function_call"`) {
+		t.Fatalf("non-openai model route should keep non-search tools/history, got %s", text)
+	}
+}
+
+func TestPrepareCodexResponsesBodyForUpstream_KeepsHostedWebSearchForOpenAIModel(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.4",
+		"tools":[{"type":"web_search","search_context_size":"medium"}],
+		"tool_choice":{"type":"web_search"},
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"keep"}]}]
+	}`)
+	cfg := &model.Config{Name: "openai-codex", URL: "https://api.openai.com", ChannelType: util.ChannelTypeCodex}
+
+	got := prepareCodexResponsesBodyForUpstream(cfg, protocol.Codex, "/v1/responses", body)
+	text := string(got)
+	if !strings.Contains(text, `"type":"web_search"`) || !strings.Contains(text, `"tool_choice"`) {
+		t.Fatalf("openai-capable codex body should keep hosted web_search, got %s", text)
+	}
+}
+
+func TestPrepareCodexResponsesBodyForUpstream_KeepsHostedWebSearchWhenChannelNameLooksLikeGork(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.4",
+		"tools":[{"type":"web_search","search_context_size":"medium"}],
+		"tool_choice":{"type":"web_search"},
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"keep"}]}]
+	}`)
+	// Misnamed channel still forwarding a real gpt model must not strip search.
+	cfg := &model.Config{Name: "公益田文镜 - gork", URL: "https://gork.example.com", ChannelType: util.ChannelTypeCodex}
+
+	got := prepareCodexResponsesBodyForUpstream(cfg, protocol.Codex, "/v1/responses", body)
+	text := string(got)
+	if !strings.Contains(text, `"type":"web_search"`) || !strings.Contains(text, `"tool_choice"`) {
+		t.Fatalf("real gpt model must keep hosted web_search even if channel name contains gork, got %s", text)
+	}
+}
+
 func TestPrepareCodexResponsesBodyForUpstream_KeepsRegularCodexToolSearch(t *testing.T) {
 	body := []byte(`{
 		"model":"gpt-5.5",

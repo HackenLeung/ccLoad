@@ -337,7 +337,7 @@ func TestIsCodexCompactionRequest(t *testing.T) {
 	}
 }
 
-func TestFilterNativeGPTCompactionCandidates(t *testing.T) {
+func TestFilterNativeGPTCandidates(t *testing.T) {
 	t.Parallel()
 
 	const requestedModel = "gpt-5.5"
@@ -373,12 +373,71 @@ func TestFilterNativeGPTCompactionCandidates(t *testing.T) {
 		},
 	}
 
-	got := filterNativeGPTCompactionCandidates(candidates, requestedModel)
+	got := filterNativeGPTCandidates(candidates, requestedModel)
 	if len(got) != 2 {
 		t.Fatalf("filtered candidates=%d, want 2", len(got))
 	}
 	if got[0].Name != "native-codex" || got[1].Name != "native-codex-exposed" {
 		t.Fatalf("unexpected filtered order: %q, %q", got[0].Name, got[1].Name)
+	}
+}
+
+func TestShouldRouteToNativeGPT(t *testing.T) {
+	t.Parallel()
+
+	searchChoiceBody := []byte(`{"model":"gpt-5.4","tools":[{"type":"web_search","search_context_size":"medium"}],"tool_choice":{"type":"web_search"},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"search"}]}]}`)
+	searchToolsOnlyBody := []byte(`{"model":"gpt-5.4","tools":[{"type":"web_search","search_context_size":"medium"}],"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"search"}]}]}`)
+	computerBody := []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"[@电脑](plugin://computer-use@openai-bundled) [@Chrome](plugin://chrome@openai-bundled) check"}]}]}`)
+	plainBody := []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		model  string
+		body   []byte
+		want   bool
+	}{
+		{name: "compact still routes", method: http.MethodPost, path: "/v1/responses/compact", model: "gpt-5.4", body: plainBody, want: true},
+		{name: "current web_search tool_choice routes", method: http.MethodPost, path: "/v1/responses", model: "gpt-5.4", body: searchChoiceBody, want: true},
+		{name: "tools listing web_search alone stays normal", method: http.MethodPost, path: "/v1/responses", model: "gpt-5.4", body: searchToolsOnlyBody, want: false},
+		{name: "computer chrome plugin routes", method: http.MethodPost, path: "/v1/responses", model: "gpt-5.4", body: computerBody, want: true},
+		{name: "plain responses stays normal", method: http.MethodPost, path: "/v1/responses", model: "gpt-5.4", body: plainBody, want: false},
+		{name: "non gpt with search stays normal", method: http.MethodPost, path: "/v1/responses", model: "grok-4.5", body: searchChoiceBody, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldRouteToNativeGPT(tt.method, tt.path, tt.model, tt.body); got != tt.want {
+				t.Fatalf("shouldRouteToNativeGPT()=%v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexBodyNeedsNativeOpenAICapabilities(t *testing.T) {
+	t.Parallel()
+
+	// tools may advertise search without this turn actually using it.
+	if codexBodyNeedsNativeOpenAICapabilities([]byte(`{"tools":[{"type":"web_search"}]}`)) {
+		t.Fatal("tools listing web_search alone must not require native capabilities")
+	}
+	if !codexBodyNeedsNativeOpenAICapabilities([]byte(`{"tool_choice":{"type":"web_search"}}`)) {
+		t.Fatal("current web_search tool_choice should require native capabilities")
+	}
+	if !codexBodyNeedsNativeOpenAICapabilities([]byte(`{"tool_choice":"web_search"}`)) {
+		t.Fatal("string web_search tool_choice should require native capabilities")
+	}
+	// Prior search turns left in input must not sticky-route later plain requests.
+	if codexBodyNeedsNativeOpenAICapabilities([]byte(`{"input":[{"type":"web_search_call","id":"ws_1"}]}`)) {
+		t.Fatal("web_search_call history alone must not require native capabilities")
+	}
+	if !codexBodyNeedsNativeOpenAICapabilities([]byte(`{"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"plugin://computer-use@openai-bundled"}]}]}`)) {
+		t.Fatal("computer plugin marker should require native capabilities")
+	}
+	if codexBodyNeedsNativeOpenAICapabilities([]byte(`{"tools":[{"type":"function","name":"shell"}]}`)) {
+		t.Fatal("ordinary function tools should not force native routing")
 	}
 }
 

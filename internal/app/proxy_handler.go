@@ -183,9 +183,85 @@ func isCodexCompactionRequest(method, requestPath, modelName string) bool {
 	return strings.TrimSuffix(strings.TrimSpace(requestPath), "/") == "/v1/responses/compact"
 }
 
-// filterNativeGPTCompactionCandidates keeps only channels that can send the
-// requested GPT model unchanged to a native Codex Responses upstream.
-func filterNativeGPTCompactionCandidates(candidates []*model.Config, modelName string) []*model.Config {
+func isCodexResponsesRequest(method, requestPath string) bool {
+	if method != http.MethodPost {
+		return false
+	}
+	return strings.TrimSuffix(strings.TrimSpace(requestPath), "/") == "/v1/responses"
+}
+
+// shouldRouteToNativeGPT reports whether this request must use native GPT routing.
+// Compact detection stays in isCodexCompactionRequest; this composes that with
+// current web_search tool_choice / Computer+Chrome body checks for /v1/responses.
+func shouldRouteToNativeGPT(method, requestPath, modelName string, body []byte) bool {
+	if !isGPTModel(modelName) {
+		return false
+	}
+	// Compact is its own path, but shares the same native-channel policy.
+	if isCodexCompactionRequest(method, requestPath, modelName) {
+		return true
+	}
+	if !isCodexResponsesRequest(method, requestPath) {
+		return false
+	}
+	return codexBodyNeedsNativeOpenAICapabilities(body)
+}
+
+func codexBodyNeedsNativeOpenAICapabilities(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	// Computer Use / Chrome plugins are injected by Codex Desktop into the body.
+	if hasCodexComputerOrChromeMarkers(body) {
+		return true
+	}
+
+	var root map[string]any
+	if err := sonic.Unmarshal(body, &root); err != nil {
+		return false
+	}
+	return codexPayloadHasHostedWebSearch(root)
+}
+
+func hasCodexComputerOrChromeMarkers(body []byte) bool {
+	// Keep markers specific to avoid matching ordinary prose.
+	markers := [][]byte{
+		[]byte("plugin://computer-use"),
+		[]byte("plugin://chrome"),
+		[]byte("computer-use@openai-bundled"),
+		[]byte("chrome@openai-bundled"),
+	}
+	for _, marker := range markers {
+		if bytes.Contains(body, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func codexPayloadHasHostedWebSearch(root map[string]any) bool {
+	// Only the current turn's forced/selected search counts.
+	// Merely advertising web_search in tools (common when search is enabled in
+	// Codex settings) must not sticky-route ordinary gpt-* chats to native GPT.
+	// Historical web_search_call items are also ignored here.
+	switch choice := root["tool_choice"].(type) {
+	case string:
+		if isHostedWebSearchToolType(choice) {
+			return true
+		}
+	case map[string]any:
+		typ, _ := choice["type"].(string)
+		if isHostedWebSearchToolType(typ) {
+			return true
+		}
+	}
+	return false
+}
+
+// filterNativeGPTCandidates keeps only channels that can send the requested GPT
+// model unchanged to a native Codex Responses upstream. Used by compact and by
+// other native-only capabilities (hosted search / computer).
+func filterNativeGPTCandidates(candidates []*model.Config, modelName string) []*model.Config {
 	filtered := make([]*model.Config, 0, len(candidates))
 	for _, cfg := range candidates {
 		if cfg == nil || !cfg.SupportsModel(modelName) {
@@ -300,9 +376,12 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 		return
 	}
 
-	isCodexCompaction := isCodexCompactionRequest(requestMethod, effectiveRequestPath, originalModel)
-	if isCodexCompaction {
-		cands = filterNativeGPTCompactionCandidates(cands, originalModel)
+	// Native GPT policy is separate from "is this a compact request":
+	// compact path is detected on its own, while search/computer add body checks.
+	// Both share requireNativeGPT for candidate filtering + multi-channel retry.
+	requireNativeGPT := shouldRouteToNativeGPT(requestMethod, effectiveRequestPath, originalModel, all)
+	if requireNativeGPT {
+		cands = filterNativeGPTCandidates(cands, originalModel)
 	}
 
 	if len(cands) == 0 {
@@ -350,7 +429,7 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 		activeReqID:       activeID,
 		startTime:         startTime,
 		thinkingEffort:    thinkingEffort,
-		isCodexCompaction: isCodexCompaction,
+		requireNativeGPT:    requireNativeGPT,
 	}
 	reqCtx.observer = &ForwardObserver{
 		OnBytesRead: func(n int64) {
@@ -489,7 +568,7 @@ func (s *Server) runProxyAttemptLoop(
 				break
 			}
 
-			if shouldStopTryingChannels(result) && !reqCtx.isCodexCompaction {
+			if shouldStopTryingChannels(result) && !reqCtx.requireNativeGPT {
 				break
 			}
 		}

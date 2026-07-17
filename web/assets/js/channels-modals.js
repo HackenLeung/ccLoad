@@ -130,9 +130,8 @@ function renderProtocolTransformModeOptions(selectedValue = 'upstream') {
         <span class="protocol-transform-mode-help"
               role="img"
               tabindex="0"
-              data-i18n-title="${descriptionKey}"
+              data-i18n-aria-label="${descriptionKey}"
               data-tooltip="${escapedDescription}"
-              title="${escapedDescription}"
               aria-label="${escapedDescription}">i</span>
       </span>
     `;

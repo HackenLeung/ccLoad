@@ -153,7 +153,10 @@ type proxyRequestContext struct {
 	baseURL           string               // 当前尝试使用的上游URL（多URL场景）
 	debugData         *model.DebugLogEntry // Debug日志数据（debug开启时填充）
 	thinkingEffort    string
-	isCodexCompaction bool // GPT /v1/responses/compact 请求会尝试所有符合条件的原生渠道
+	// requireNativeGPT marks requests that must stay on native Codex channels
+	// with the client-selected gpt-* model (compact, current web_search tool_choice, computer).
+	// When true, candidate filtering and multi-channel retry both use native-only rules.
+	requireNativeGPT bool
 }
 
 // proxyResult 代理请求结果
