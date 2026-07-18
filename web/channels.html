@@ -118,10 +118,8 @@
                   data-i18n="common.clear" data-i18n-title="common.clearSearch" title="清空搜索">
                   清空
                 </button>
-                <button id="btn_sort" type="button" class="btn btn-secondary channel-filter-action-btn"
+                <button id="btn_sort" type="button" class="btn btn-primary channel-filter-action-btn"
                   data-i18n="channels.sortBtn">排序</button>
-                <button id="btn_filter" type="button" class="btn btn-primary channel-filter-action-btn"
-                  data-i18n="channels.filterBtn">筛选</button>
               </div>
             </div>
           </div>
@@ -1090,9 +1088,10 @@
   <div id="sortModal" class="modal">
     <div class="modal-content modal-content--xl modal-content--tall channel-sort-modal">
       <div class="modal-header">
-        <h2 class="modal-title" data-i18n="channels.sortModalTitle">渠道排序</h2>
+        <h2 id="sortModalTitle" class="modal-title" data-i18n="channels.sortModalTitle">渠道排序</h2>
         <button type="button" class="close-btn" data-action="close-sort-modal">&times;</button>
       </div>
+      <div class="channel-sort-scope" id="sortModalScopeText" data-i18n="channels.sortScopeHint">当前 tab 内独立排序</div>
       <div class="channel-sort-preset-editor">
         <label class="form-label" for="sortPresetLoadSelect" data-i18n="channels.sortPresetLoad">载入方案</label>
         <div class="channel-sort-preset-load-row">
@@ -1130,7 +1129,7 @@
             <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5" />
             <path d="M8 5V8.5M8 11H8.005" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
           </svg>
-          <span data-i18n="channels.sortHint">拖动卡片调整顺序 · 保存后相邻优先级相差10</span>
+          <span data-i18n="channels.sortHint">拖动卡片调整顺序 · 仅影响当前类型 · 保存后相邻优先级相差10</span>
         </div>
         <div class="channel-sort-action-buttons">
           <button type="button" class="btn btn-secondary" data-action="close-sort-modal"

@@ -299,6 +299,23 @@ func (h *HybridStore) BatchUpdatePriority(ctx context.Context, updates []struct 
 	return affected, nil
 }
 
+func (h *HybridStore) BatchUpdateProtocolPriority(ctx context.Context, protocol string, updates []struct {
+	ID       int64
+	Priority int
+}) (int64, error) {
+	affected, err := h.mysql.BatchUpdateProtocolPriority(ctx, protocol, updates)
+	if err != nil {
+		return 0, err
+	}
+
+	h.syncToSQLite("BatchUpdateProtocolPriority", func() error {
+		_, err := h.sqlite.BatchUpdateProtocolPriority(ctx, protocol, updates)
+		return err
+	})
+
+	return affected, nil
+}
+
 // === Channel URL Runtime State ===
 
 func (h *HybridStore) LoadDisabledURLs(ctx context.Context) (map[int64][]string, error) {

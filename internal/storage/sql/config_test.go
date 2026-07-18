@@ -1190,6 +1190,67 @@ func TestConfig_BatchUpdatePriority(t *testing.T) {
 	}
 }
 
+func TestConfig_BatchUpdateProtocolPriority(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t, "protocol-priority.db")
+
+	cfg, err := store.CreateConfig(ctx, &model.Config{
+		Name:        "shared-transform",
+		URL:         "https://example.com",
+		Priority:    10,
+		ChannelType: "openai",
+		Enabled:     true,
+		ModelEntries: []model.ModelEntry{
+			{Model: "shared-model"},
+		},
+		ProtocolTransforms: []string{"anthropic", "codex"},
+	})
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+
+	if _, err := store.BatchUpdateProtocolPriority(ctx, "anthropic", []struct {
+		ID       int64
+		Priority int
+	}{{ID: cfg.ID, Priority: 100}}); err != nil {
+		t.Fatalf("set anthropic priority: %v", err)
+	}
+	if _, err := store.BatchUpdateProtocolPriority(ctx, "codex", []struct {
+		ID       int64
+		Priority int
+	}{{ID: cfg.ID, Priority: 1}}); err != nil {
+		t.Fatalf("set codex priority: %v", err)
+	}
+
+	// 全局 priority 不应被协议排序改写
+	got, err := store.GetConfig(ctx, cfg.ID)
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	if got.Priority != 10 {
+		t.Fatalf("global priority changed: got %d want 10", got.Priority)
+	}
+	if got.ProtocolPriorities["anthropic"] != 100 || got.ProtocolPriorities["codex"] != 1 {
+		t.Fatalf("protocol priorities = %#v", got.ProtocolPriorities)
+	}
+
+	anthropicList, err := store.GetEnabledChannelsByModelAndProtocol(ctx, "shared-model", "anthropic")
+	if err != nil {
+		t.Fatalf("list anthropic: %v", err)
+	}
+	if len(anthropicList) != 1 || anthropicList[0].Priority != 100 {
+		t.Fatalf("anthropic priority not applied: %+v", anthropicList)
+	}
+
+	codexList, err := store.GetEnabledChannelsByModelAndProtocol(ctx, "shared-model", "codex")
+	if err != nil {
+		t.Fatalf("list codex: %v", err)
+	}
+	if len(codexList) != 1 || codexList[0].Priority != 1 {
+		t.Fatalf("codex priority not applied: %+v", codexList)
+	}
+}
+
 func TestConfig_ModelRedirect(t *testing.T) {
 	t.Parallel()
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"log"
 	"maps"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -144,7 +145,7 @@ func (c *ChannelCache) GetEnabledChannelsByExposedProtocol(ctx context.Context, 
 		return []*modelpkg.Config{}, nil
 	}
 
-	return deepCopyConfigs(channels), nil
+	return applyProtocolPrioritiesToConfigs(deepCopyConfigs(channels), protocol), nil
 }
 
 // GetEnabledChannelsByModelAndProtocol 缓存优先的“模型 + 暴露协议”联合查询。
@@ -169,7 +170,7 @@ func (c *ChannelCache) GetEnabledChannelsByModelAndProtocol(ctx context.Context,
 		if !exists {
 			return []*modelpkg.Config{}, nil
 		}
-		return deepCopyConfigs(channels), nil
+		return applyProtocolPrioritiesToConfigs(deepCopyConfigs(channels), protocol), nil
 	}
 
 	byProtocol, exists := c.channelsByModelAndProtocol[modelName]
@@ -181,11 +182,38 @@ func (c *ChannelCache) GetEnabledChannelsByModelAndProtocol(ctx context.Context,
 	if !exists {
 		return []*modelpkg.Config{}, nil
 	}
-	return deepCopyConfigs(channels), nil
+	return applyProtocolPrioritiesToConfigs(deepCopyConfigs(channels), protocol), nil
 }
 
 func normalizeProtocol(protocol string) string {
 	return strings.ToLower(strings.TrimSpace(protocol))
+}
+
+func applyProtocolPrioritiesToConfigs(configs []*modelpkg.Config, protocol string) []*modelpkg.Config {
+	protocol = normalizeProtocol(protocol)
+	if protocol == "" || len(configs) == 0 {
+		return configs
+	}
+	for _, cfg := range configs {
+		if cfg != nil {
+			cfg.ApplyProtocolPriority(protocol)
+		}
+	}
+	// 缓存原始顺序按全局 priority 构建；协议覆盖后需重排
+	sort.SliceStable(configs, func(i, j int) bool {
+		a, b := configs[i], configs[j]
+		if a == nil {
+			return false
+		}
+		if b == nil {
+			return true
+		}
+		if a.Priority != b.Priority {
+			return a.Priority > b.Priority
+		}
+		return a.ID < b.ID
+	})
+	return configs
 }
 
 // GetConfig 获取指定ID的渠道配置

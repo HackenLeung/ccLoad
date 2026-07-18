@@ -49,6 +49,7 @@ func migrate(ctx context.Context, db *sql.DB, dialect Dialect) error {
 		schema.DefineAPIKeysTable,
 		schema.DefineChannelModelsTable,
 		schema.DefineChannelProtocolTransformsTable,
+		schema.DefineChannelProtocolPrioritiesTable,
 		schema.DefineChannelURLStatesTable,
 		schema.DefineAuthTokensTable,
 		schema.DefineSystemSettingsTable,

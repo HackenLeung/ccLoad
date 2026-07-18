@@ -138,6 +138,48 @@ func TestSyncManager_RestoreOnStartup_RestoresProtocolTransforms(t *testing.T) {
 	}
 }
 
+func TestSyncManager_RestoreOnStartup_RestoresProtocolPriorities(t *testing.T) {
+	mysql := createTestStoreForSync(t, "mysql_protocol_priorities")
+	sqlite := createTestStoreForSync(t, "sqlite_protocol_priorities")
+	defer func() {
+		_ = mysql.Close()
+		_ = sqlite.Close()
+	}()
+
+	ctx := context.Background()
+	created, err := mysql.CreateConfig(ctx, &model.Config{
+		Name:        "protocol-priority-channel",
+		ChannelType: "openai",
+		URL:         "https://api.example.com",
+		Priority:    100,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("创建测试渠道失败: %v", err)
+	}
+	if _, err := mysql.BatchUpdateProtocolPriority(ctx, "codex", []struct {
+		ID       int64
+		Priority int
+	}{{ID: created.ID, Priority: 320}}); err != nil {
+		t.Fatalf("写入协议优先级失败: %v", err)
+	}
+
+	sm := NewSyncManager(mysql, sqlite)
+	restoreCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := sm.RestoreOnStartup(restoreCtx, 0); err != nil {
+		t.Fatalf("RestoreOnStartup 失败: %v", err)
+	}
+
+	restored, err := sqlite.GetConfig(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("恢复后获取配置失败: %v", err)
+	}
+	if got := restored.ProtocolPriorities["codex"]; got != 320 {
+		t.Fatalf("codex 协议优先级未恢复: got %d, want 320", got)
+	}
+}
+
 func TestSyncManager_RestoreLogsIncremental(t *testing.T) {
 	mysql := createTestStoreForSync(t, "mysql_logs")
 	sqlite := createTestStoreForSync(t, "sqlite_logs")

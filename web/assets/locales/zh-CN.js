@@ -183,7 +183,15 @@ window.I18N_LOCALES['zh-CN'] = {
   'channels.sortPresetNamePlaceholder': '填写排序方案名称',
   'channels.sortPresetNameRequired': '请先填写排序方案名称',
   'channels.sortPresetCreateHint': '方案仅存在本地浏览器，作为拖拽起点；点「保存排序」才会应用到服务器',
+  'channels.sortPresetCreateHintType': '方案只作用于当前类型（{type}），仅保存在本浏览器；点「保存排序」才会写到服务器',
   'channels.sortPresetUpdateHint': '将更新此本地方案（不影响服务器）；改名可另存',
+  'channels.sortPresetUpdateHintType': '将更新 {type} 的本地方案（不影响服务器）；改名可另存为新方案',
+  'channels.sortPresetLegacy': '旧方案',
+  'channels.sortTypeRequired': '请先切换到具体渠道类型（Claude / Codex / OpenAI / Gemini）再排序',
+  'channels.sortScopeHint': '当前 tab 内独立排序',
+  'channels.sortScopeType': '当前仅排序：{type}',
+  'channels.sortScopeAll': '当前未按类型隔离',
+  'channels.sortSaveSuccessType': '{type} 排序已保存',
   'channels.sortPresetSaved': '本地方案已保存',
   'channels.sortPresetDeleted': '排序方案已删除',
   'channels.sortPresetNoChannels': '没有可保存的渠道顺序',
@@ -330,7 +338,7 @@ window.I18N_LOCALES['zh-CN'] = {
 
   // 排序模态框（扁平化键名）
   'channels.sortModalTitle': '渠道排序',
-  'channels.sortHint': '拖动卡片调整顺序 · 点「保存排序」应用到服务器，相邻优先级相差10',
+  'channels.sortHint': '拖动卡片调整顺序 · 仅影响当前类型 · 点「保存排序」应用到服务器，相邻优先级相差10',
   'channels.saveSortOrder': '保存排序',
 
   // 渠道模态框（原有嵌套结构保留）

@@ -1657,28 +1657,38 @@ func shouldRetryCodexInvalidEncryptedContent(upstreamProtocol protocol.Protocol,
 }
 
 func isInvalidEncryptedContentError(body []byte) bool {
-	var payload struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-			Type    string `json:"type"`
-		} `json:"error"`
-	}
+	var payload map[string]any
 	if err := sonic.Unmarshal(body, &payload); err != nil {
 		return false
 	}
-	code := strings.ToLower(payload.Error.Code)
+
+	code := stringMapValue(payload, "code")
+	message := firstStringMapValue(payload, "message", "error")
+	if errorObject, ok := payload["error"].(map[string]any); ok {
+		if nestedCode := stringMapValue(errorObject, "code"); nestedCode != "" {
+			code = nestedCode
+		}
+		if nestedMessage := stringMapValue(errorObject, "message"); nestedMessage != "" {
+			message = nestedMessage
+		}
+	}
+
+	code = strings.ToLower(code)
 	if code == "invalid_encrypted_content" {
 		return true
 	}
-	message := strings.ToLower(payload.Error.Message)
+	message = strings.ToLower(message)
 	if strings.Contains(message, "invalid_encrypted_content") {
 		return true
 	}
-	return strings.Contains(message, "encrypted content") &&
-		(strings.Contains(message, "could not be verified") ||
-			strings.Contains(message, "could not be decrypted") ||
-			strings.Contains(message, "could not be parsed"))
+	normalizedMessage := strings.NewReplacer("_", " ", "-", " ").Replace(message)
+	return strings.Contains(normalizedMessage, "encrypted content") &&
+		(strings.Contains(normalizedMessage, "could not be verified") ||
+			strings.Contains(normalizedMessage, "could not be decrypted") ||
+			strings.Contains(normalizedMessage, "could not decrypt") ||
+			strings.Contains(normalizedMessage, "could not be parsed") ||
+			strings.Contains(normalizedMessage, "cannot decrypt") ||
+			strings.Contains(normalizedMessage, "failed to decrypt"))
 }
 
 func shouldRetryAnyrouterCodexInvalidResponsesRequest(upstreamProtocol protocol.Protocol, cfg *model.Config, res *fwResult) bool {

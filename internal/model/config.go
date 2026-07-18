@@ -109,13 +109,16 @@ type Config struct {
 	ChannelType           string   `json:"channel_type"` // 渠道类型: "anthropic" | "codex" | "openai" | "gemini"，默认anthropic
 	ProtocolTransformMode string   `json:"protocol_transform_mode,omitempty"`
 	ProtocolTransforms    []string `json:"protocol_transforms,omitempty"`
-	URL                   string   `json:"url"`
-	Priority              int      `json:"priority"`
-	RPMLimit              int      `json:"rpm_limit"`       // 每分钟请求数限制，0表示无限制
-	MaxConcurrency        int      `json:"max_concurrency"` // 最大并发请求数，0表示无限制
-	Enabled               bool     `json:"enabled"`
-	ScheduledCheckEnabled bool     `json:"scheduled_check_enabled"`
-	ScheduledCheckModel   string   `json:"scheduled_check_model"`
+	// ProtocolPriorities 协议级优先级覆盖。key 为客户端协议（anthropic/codex/openai/gemini）。
+	// 缺省时回退到 Priority。
+	ProtocolPriorities    map[string]int `json:"protocol_priorities,omitempty"`
+	URL                   string         `json:"url"`
+	Priority              int            `json:"priority"`
+	RPMLimit              int            `json:"rpm_limit"`       // 每分钟请求数限制，0表示无限制
+	MaxConcurrency        int            `json:"max_concurrency"` // 最大并发请求数，0表示无限制
+	Enabled               bool           `json:"enabled"`
+	ScheduledCheckEnabled bool           `json:"scheduled_check_enabled"`
+	ScheduledCheckModel   string         `json:"scheduled_check_model"`
 
 	// 模型配置（统一管理模型和重定向）
 	ModelEntries []ModelEntry `json:"models"`
@@ -185,6 +188,12 @@ func (c *Config) Clone() *Config {
 		dst.ModelEntries = make([]ModelEntry, len(c.ModelEntries))
 		copy(dst.ModelEntries, c.ModelEntries)
 	}
+	if len(c.ProtocolPriorities) > 0 {
+		dst.ProtocolPriorities = make(map[string]int, len(c.ProtocolPriorities))
+		for protocol, priority := range c.ProtocolPriorities {
+			dst.ProtocolPriorities[protocol] = priority
+		}
+	}
 	return dst
 }
 
@@ -243,6 +252,29 @@ func (c *Config) ResolveUpstreamProtocol(clientProtocol string) string {
 		return clientProtocol
 	}
 	return c.GetChannelType()
+}
+
+// PriorityForProtocol 返回指定客户端协议下的调度优先级。
+// 有协议级覆盖时使用覆盖值，否则回退到全局 Priority。
+func (c *Config) PriorityForProtocol(protocol string) int {
+	if c == nil {
+		return 0
+	}
+	protocol = strings.TrimSpace(strings.ToLower(protocol))
+	if protocol != "" && len(c.ProtocolPriorities) > 0 {
+		if priority, ok := c.ProtocolPriorities[protocol]; ok {
+			return priority
+		}
+	}
+	return c.Priority
+}
+
+// ApplyProtocolPriority 将指定协议的优先级写回 Config.Priority（仅用于当前请求候选列表）。
+func (c *Config) ApplyProtocolPriority(protocol string) {
+	if c == nil {
+		return
+	}
+	c.Priority = c.PriorityForProtocol(protocol)
 }
 
 // SupportsProtocol 检查渠道是否暴露指定客户端协议。

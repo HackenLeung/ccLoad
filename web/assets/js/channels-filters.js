@@ -165,12 +165,6 @@ function setupFilterListeners() {
     });
   }
 
-  // 筛选按钮：手动触发筛选
-  document.getElementById('btn_filter').addEventListener('click', () => {
-    channelsCurrentPage = 1;
-    if (typeof saveChannelsFilters === 'function') saveChannelsFilters();
-    loadChannels(filters.channelType);
-  });
 
   const clearSearchBtn = document.getElementById('clearSearchBtn');
   if (clearSearchBtn) {

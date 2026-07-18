@@ -183,7 +183,15 @@ window.I18N_LOCALES['en'] = {
   'channels.sortPresetNamePlaceholder': 'Enter a sort preset name',
   'channels.sortPresetNameRequired': 'Enter a sort preset name first',
   'channels.sortPresetCreateHint': 'Presets live in this browser only, as a drag starting point; click "Save Order" to apply to the server',
+  'channels.sortPresetCreateHintType': 'Preset applies only to the current type ({type}) and stays in this browser; click "Save Order" to write it to the server',
   'channels.sortPresetUpdateHint': 'This updates the local preset (server unaffected); edit the name to save a copy',
+  'channels.sortPresetUpdateHintType': 'Updates the local preset for {type} (server unaffected); rename to save a copy',
+  'channels.sortPresetLegacy': 'legacy',
+  'channels.sortTypeRequired': 'Switch to a concrete channel type (Claude / Codex / OpenAI / Gemini) before sorting',
+  'channels.sortScopeHint': 'Independent sort within the current tab',
+  'channels.sortScopeType': 'Sorting only: {type}',
+  'channels.sortScopeAll': 'Not type-scoped',
+  'channels.sortSaveSuccessType': '{type} sort order saved',
   'channels.sortPresetSaved': 'Local preset saved',
   'channels.sortPresetDeleted': 'Sort preset deleted',
   'channels.sortPresetNoChannels': 'No channel order to save',
@@ -330,7 +338,7 @@ window.I18N_LOCALES['en'] = {
 
   // Sort Modal (flattened keys)
   'channels.sortModalTitle': 'Channel Sort',
-  'channels.sortHint': 'Drag cards to reorder · Save Order writes to the server (adjacent priorities differ by 10)',
+  'channels.sortHint': 'Drag cards to reorder · Current type only · Save Order writes to the server (adjacent priorities differ by 10)',
   'channels.saveSortOrder': 'Save Order',
 
   // Channel Modal (original nested structure preserved)

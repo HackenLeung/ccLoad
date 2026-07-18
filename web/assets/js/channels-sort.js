@@ -1,13 +1,104 @@
 // ==================== 渠道排序功能 ====================
 // 拖拽排序实现,优先级相差10
+// 排序与本地方案按 channel_type 隔离：Claude / Codex / OpenAI / Gemini 各自独立
 
 let sortChannels = []; // 存储排序中的渠道列表
 let draggedItem = null; // 当前拖拽的元素
+// activeSortPresetId 定义在 channels-state.js，这里按类型读写 active map
+let sortChannelType = ''; // 当前排序弹窗锁定的渠道类型
+let sortModalLoadRequestId = 0; // 仅允许最后一次打开请求更新弹窗状态
 const CHANNEL_SORT_PRESETS_KEY = 'channels.sortPresets';
-const CHANNEL_SORT_PRESET_ACTIVE_KEY = 'channels.sortPreset.active';
+const CHANNEL_SORT_PRESET_ACTIVE_BY_TYPE_KEY = 'channels.sortPreset.activeByType';
+const CHANNEL_SORT_PRESET_ACTIVE_KEY_LEGACY = 'channels.sortPreset.active';
 
 function normalizeSortPresetId(id) {
   return String(id || '').trim();
+}
+
+function normalizeSortChannelType(type) {
+  const value = String(type || '').trim().toLowerCase();
+  if (!value || value === 'all') return '';
+  return value;
+}
+
+function getCurrentSortChannelType() {
+  if (typeof filters !== 'undefined' && filters && filters.channelType) {
+    return normalizeSortChannelType(filters.channelType);
+  }
+  return '';
+}
+
+function createSortModalLoadContext() {
+  return {
+    requestId: ++sortModalLoadRequestId,
+    channelType: getCurrentSortChannelType()
+  };
+}
+
+function isCurrentSortModalLoad(loadContext) {
+  return Boolean(
+    loadContext
+    && loadContext.requestId === sortModalLoadRequestId
+    && loadContext.channelType
+    && loadContext.channelType === getCurrentSortChannelType()
+  );
+}
+
+function getSortChannelTypeLabel(type) {
+  const normalized = normalizeSortChannelType(type);
+  if (!normalized) {
+    return (window.t && window.t('channels.allTypes')) || '全部类型';
+  }
+  if (Array.isArray(channelTypeTabList)) {
+    const hit = channelTypeTabList.find((item) => normalizeSortChannelType(item && item.value) === normalized);
+    if (hit && hit.display_name) return hit.display_name;
+  }
+  return normalized;
+}
+
+function loadActiveSortPresetMap() {
+  try {
+    const raw = localStorage.getItem(CHANNEL_SORT_PRESET_ACTIVE_BY_TYPE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const map = {};
+    Object.keys(parsed).forEach((key) => {
+      const type = normalizeSortChannelType(key);
+      const id = normalizeSortPresetId(parsed[key]);
+      if (type && id) map[type] = id;
+    });
+    return map;
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveActiveSortPresetMap(map) {
+  localStorage.setItem(
+    CHANNEL_SORT_PRESET_ACTIVE_BY_TYPE_KEY,
+    JSON.stringify(map && typeof map === 'object' ? map : {})
+  );
+}
+
+function getActiveSortPresetIdForType(type) {
+  const normalized = normalizeSortChannelType(type);
+  if (!normalized) return '';
+  const map = loadActiveSortPresetMap();
+  if (map[normalized]) return map[normalized];
+
+  // 兼容旧版全局 active key：仅在当前类型下第一次读取时迁移
+  try {
+    const legacy = normalizeSortPresetId(localStorage.getItem(CHANNEL_SORT_PRESET_ACTIVE_KEY_LEGACY));
+    if (!legacy) return '';
+    const legacyPreset = loadSortPresets().find((preset) => preset.id === legacy);
+    if (!legacyPreset) return '';
+    if (legacyPreset.channelType && legacyPreset.channelType !== normalized) return '';
+    map[normalized] = legacy;
+    saveActiveSortPresetMap(map);
+    return legacy;
+  } catch (_) {
+    return '';
+  }
 }
 
 function loadSortPresets() {
@@ -19,6 +110,7 @@ function loadSortPresets() {
       .map((preset) => ({
         id: normalizeSortPresetId(preset.id),
         name: String(preset.name || '').trim(),
+        channelType: normalizeSortChannelType(preset.channelType || preset.channel_type || ''),
         channelOrder: Array.isArray(preset.channelOrder)
           ? preset.channelOrder.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
           : []
@@ -37,26 +129,68 @@ function buildSortPresetId() {
   return `preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function getSortPresetsForType(type, availableChannelIds = null) {
+  const normalized = normalizeSortChannelType(type);
+  const available = availableChannelIds instanceof Set
+    ? availableChannelIds
+    : (Array.isArray(availableChannelIds)
+      ? new Set(availableChannelIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
+      : null);
+
+  return loadSortPresets().filter((preset) => {
+    if (preset.channelType) {
+      return preset.channelType === normalized;
+    }
+    // 旧版无类型方案：仅当顺序与当前类型渠道有交集时，才出现在该类型下
+    if (!available || available.size === 0) return !normalized;
+    return preset.channelOrder.some((id) => available.has(Number(id)));
+  });
+}
+
 function getActiveSortPreset() {
   const activeId = normalizeSortPresetId(activeSortPresetId);
   if (!activeId) return null;
-  return loadSortPresets().find((preset) => preset.id === activeId) || null;
+  return getSortPresetsForType(sortChannelType, getChannelIdOrder(sortChannels))
+    .find((preset) => preset.id === activeId) || null;
 }
 
 function setActiveSortPreset(id) {
   activeSortPresetId = normalizeSortPresetId(id);
+  const type = normalizeSortChannelType(sortChannelType || getCurrentSortChannelType());
+  if (!type) return;
+
+  const map = loadActiveSortPresetMap();
   if (activeSortPresetId) {
-    localStorage.setItem(CHANNEL_SORT_PRESET_ACTIVE_KEY, activeSortPresetId);
+    map[type] = activeSortPresetId;
   } else {
-    localStorage.removeItem(CHANNEL_SORT_PRESET_ACTIVE_KEY);
+    delete map[type];
+  }
+  saveActiveSortPresetMap(map);
+}
+
+function updateSortModalScopeUI() {
+  const typeLabel = getSortChannelTypeLabel(sortChannelType);
+  const title = document.getElementById('sortModalTitle');
+  if (title) {
+    const base = (window.t && window.t('channels.sortModalTitle')) || '渠道排序';
+    title.textContent = sortChannelType ? `${base} · ${typeLabel}` : base;
+    title.removeAttribute('data-i18n');
+  }
+
+  const scope = document.getElementById('sortModalScopeText');
+  if (scope) {
+    scope.textContent = sortChannelType
+      ? ((window.t && window.t('channels.sortScopeType', { type: typeLabel })) || `当前仅排序：${typeLabel}`)
+      : ((window.t && window.t('channels.sortScopeAll')) || '当前未按类型隔离');
+    scope.removeAttribute('data-i18n');
   }
 }
 
 function refreshSortPresetSelect() {
   const select = document.getElementById('sortPresetLoadSelect');
-
-  const presets = loadSortPresets();
+  const presets = getSortPresetsForType(sortChannelType, getChannelIdOrder(sortChannels));
   const currentValue = normalizeSortPresetId(activeSortPresetId);
+
   if (select) {
     select.innerHTML = '';
 
@@ -68,7 +202,9 @@ function refreshSortPresetSelect() {
     presets.forEach((preset) => {
       const option = document.createElement('option');
       option.value = preset.id;
-      option.textContent = preset.name;
+      option.textContent = preset.channelType
+        ? preset.name
+        : `${preset.name} (${(window.t && window.t('channels.sortPresetLegacy')) || '旧方案'})`;
       select.appendChild(option);
     });
 
@@ -79,6 +215,7 @@ function refreshSortPresetSelect() {
   }
 
   syncSortPresetEditor();
+  updateSortModalScopeUI();
 }
 
 function syncSortPresetEditor() {
@@ -86,14 +223,21 @@ function syncSortPresetEditor() {
   const input = document.getElementById('sortPresetNameInput');
   if (input) {
     input.value = preset ? preset.name : '';
-    input.placeholder = preset ? preset.name : ((window.t && window.t('channels.sortPresetNamePlaceholder')) || '填写排序方案名称');
+    input.placeholder = preset
+      ? preset.name
+      : ((window.t && window.t('channels.sortPresetNamePlaceholder')) || '填写排序方案名称');
   }
 
   const hint = document.getElementById('sortPresetEditorHint');
   if (hint) {
-    hint.textContent = preset
-      ? window.t('channels.sortPresetUpdateHint')
-      : window.t('channels.sortPresetCreateHint');
+    const typeLabel = getSortChannelTypeLabel(sortChannelType);
+    if (preset) {
+      hint.textContent = (window.t && window.t('channels.sortPresetUpdateHintType', { type: typeLabel }))
+        || window.t('channels.sortPresetUpdateHint');
+    } else {
+      hint.textContent = (window.t && window.t('channels.sortPresetCreateHintType', { type: typeLabel }))
+        || window.t('channels.sortPresetCreateHint');
+    }
   }
 
   const saveBtn = document.getElementById('saveSortPresetModalBtn');
@@ -160,6 +304,16 @@ function buildPriorityUpdatesFromOrder(list) {
   }));
 }
 
+function getChannelsForCurrentSortType() {
+  // 降级路径：用当前 tab 已加载列表。
+  // loadChannels(type)/排序全量接口已按“对该协议可用”返回（含协议转换渠道），
+  // 这里不能再按底层 channel_type 过滤。
+  const source = (Array.isArray(filteredChannels) && filteredChannels.length > 0)
+    ? filteredChannels
+    : (Array.isArray(channels) ? channels : []);
+  return [...source];
+}
+
 // 载入方案：仅在弹窗内把拖拽列表按方案顺序重排，不写后端。
 function loadSortPresetIntoModal(id) {
   const normalizedId = normalizeSortPresetId(id);
@@ -189,6 +343,12 @@ function saveSortPresetFromOrder(channelOrder, defaultName = '') {
     return;
   }
 
+  const channelType = normalizeSortChannelType(sortChannelType || getCurrentSortChannelType());
+  if (!channelType) {
+    window.showNotification(window.t('channels.sortTypeRequired'), 'warning');
+    return;
+  }
+
   const name = getSortPresetEditorName(defaultName);
   if (!name) {
     window.showNotification(window.t('channels.sortPresetNameRequired'), 'warning');
@@ -203,11 +363,16 @@ function saveSortPresetFromOrder(channelOrder, defaultName = '') {
     ? presets.findIndex((preset) => preset.id === activeId)
     : -1;
   if (existingIndex < 0) {
-    existingIndex = presets.findIndex((preset) => preset.name === name);
+    // 同类型下同名覆盖；跨类型允许重名
+    existingIndex = presets.findIndex((preset) =>
+      preset.name === name && normalizeSortChannelType(preset.channelType) === channelType
+    );
   }
+
   const nextPreset = {
     id: existingIndex >= 0 ? presets[existingIndex].id : buildSortPresetId(),
     name,
+    channelType,
     channelOrder: order
   };
 
@@ -264,37 +429,78 @@ function updateSortPresetSaveButtonState() {
 
 // 打开排序模态框
 function showSortModal() {
+  // 拉当前 tab 全量渠道（不受分页限制），确保排序覆盖全部可用渠道
+  showSortModalAsync();
+}
+
+async function showSortModalAsync() {
   const modal = document.getElementById('sortModal');
   if (!modal) return;
 
-  // 获取当前渠道列表(使用筛选后的渠道)
-  const sourceChannels = filteredChannels.length > 0 ? filteredChannels : channels;
-
-  if (!sourceChannels || sourceChannels.length === 0) {
-    window.showError(window.t('channels.loadChannelsFailed'));
+  const loadContext = createSortModalLoadContext();
+  if (!loadContext.channelType) {
+    window.showNotification(window.t('channels.sortTypeRequired'), 'warning');
     return;
   }
 
-  // 每次打开都以当前后端顺序为准，清空已载入方案——方案是可选的起点，不是隐式状态。
+  let sourceChannels = [];
+  try {
+    const params = new URLSearchParams();
+    params.set('type', loadContext.channelType);
+    params.set('limit', '1000');
+    params.set('offset', '0');
+    if (typeof channelStatsRange !== 'undefined' && channelStatsRange) {
+      params.set('range', channelStatsRange);
+    }
+    const listBase = (typeof channelsReadURL === 'function')
+      ? channelsReadURL('/admin/channels', '/dashboard/channels')
+      : '/admin/channels';
+    const resp = await fetchAPIWithAuth(listBase + '?' + params.toString());
+    if (!resp || !resp.success) {
+      throw new Error((resp && resp.error) || window.t('channels.loadChannelsFailed'));
+    }
+    sourceChannels = Array.isArray(resp.data) ? resp.data : [];
+  } catch (error) {
+    if (!isCurrentSortModalLoad(loadContext)) return;
+    console.error('Load channels for sort failed:', error);
+    // 降级：使用当前页列表
+    sourceChannels = getChannelsForCurrentSortType();
+  }
+
+  // 请求等待期间若切换了 tab、再次打开或关闭弹窗，丢弃过期结果。
+  if (!isCurrentSortModalLoad(loadContext)) return;
+
+  if (!sourceChannels || sourceChannels.length === 0) {
+    window.showError(window.t('channels.noChannelsForSort'));
+    return;
+  }
+
+  // 每次打开以当前协议顺序为准；恢复该类型上次使用的本地方案（若有）
+  sortChannelType = loadContext.channelType;
   sortChannels = [...sourceChannels];
-  setActiveSortPreset('');
+  activeSortPresetId = getActiveSortPresetIdForType(sortChannelType);
+  const activePreset = getActiveSortPreset();
+  if (activePreset) {
+    sortChannels = orderListByPreset(sortChannels, activePreset);
+  } else {
+    activeSortPresetId = '';
+  }
+
   refreshSortPresetSelect();
-
-  // 渲染排序列表
   renderSortList();
-
-  // 显示模态框(使用show类实现居中)
   modal.classList.add('show');
 }
 
 // 关闭排序模态框
 function closeSortModal() {
+  sortModalLoadRequestId += 1;
   const modal = document.getElementById('sortModal');
   if (modal) {
     modal.classList.remove('show');
   }
   sortChannels = [];
   draggedItem = null;
+  sortChannelType = '';
 }
 
 // 渲染排序列表
@@ -317,10 +523,9 @@ function renderSortList() {
   // 添加拖拽事件监听
   attachDragListeners();
 
-  // Translate dynamically rendered elements
-  if (window.i18n && window.i18n.translatePage) {
-    window.i18n.translatePage();
-  }
+  // 排序卡片由 JS 直接使用 window.t 渲染；不要全页 translatePage，
+  // 否则会覆盖弹窗标题/范围里的动态类型名称。
+  updateSortModalScopeUI();
 }
 
 // 创建排序卡片
@@ -432,29 +637,40 @@ function getDragAfterElement(container, y) {
   return closest;
 }
 
-// 保存排序
+// 保存排序：只写当前类型渠道的 priority，不影响其他类型
 async function saveSortOrder() {
   if (sortChannels.length === 0) {
     window.showNotification(window.t('channels.sortNoChanges'), 'warning');
     return;
   }
 
-  // 计算新的优先级(从高到低,相差10)
+  const channelType = normalizeSortChannelType(sortChannelType || getCurrentSortChannelType());
+  if (!channelType) {
+    window.showNotification(window.t('channels.sortTypeRequired'), 'warning');
+    return;
+  }
+
+  // sortChannels 打开弹窗时已按当前 tab 可用列表锁定；这里保存整表顺序。
+  // 不要再按底层 channel_type 过滤，否则协议转换渠道会被丢掉。
   const updates = buildPriorityUpdatesFromOrder(sortChannels);
+  if (updates.length === 0) {
+    window.showNotification(window.t('channels.sortNoChanges'), 'warning');
+    return;
+  }
 
   try {
-    const result = await fetchDataWithAuth('/admin/channels/batch-priority', {
+    await fetchDataWithAuth('/admin/channels/batch-priority', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ updates })
+      body: JSON.stringify({ protocol: channelType, updates })
     });
 
-    window.showSuccess(window.t('channels.sortSaveSuccess'));
+    window.showSuccess(window.t('channels.sortSaveSuccessType', { type: getSortChannelTypeLabel(channelType) })
+      || window.t('channels.sortSaveSuccess'));
     closeSortModal();
-    const currentType = (filters && filters.channelType) ? filters.channelType : 'all';
-    if (typeof loadChannels === 'function') await loadChannels(currentType);
+    if (typeof loadChannels === 'function') await loadChannels(channelType);
   } catch (error) {
     console.error('Save sort order failed:', error);
     window.showError(error.message || window.t('channels.sortSaveFailed'));
@@ -468,8 +684,6 @@ document.addEventListener('DOMContentLoaded', function() {
     sortBtn.addEventListener('click', showSortModal);
   }
 
-  refreshSortPresetSelect();
-
   const sortPresetLoadSelect = document.getElementById('sortPresetLoadSelect');
   if (sortPresetLoadSelect) {
     sortPresetLoadSelect.addEventListener('change', (event) => {
@@ -481,5 +695,4 @@ document.addEventListener('DOMContentLoaded', function() {
   if (sortPresetNameInput) {
     sortPresetNameInput.addEventListener('input', updateSortPresetSaveButtonState);
   }
-
 });

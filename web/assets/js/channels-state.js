@@ -18,7 +18,7 @@ let channelsTotalCount = 0;
 let allAvailableModels = [];
 let allAvailableChannelNames = [];
 let batchRefreshResultsByChannelId = new Map();
-let activeSortPresetId = localStorage.getItem('channels.sortPreset.active') || '';
+let activeSortPresetId = ''; // 具体激活方案按渠道类型存在 channels.sortPreset.activeByType
 
 function isTokenChannelsReadOnly() {
   return Boolean(window.WebAuth && window.WebAuth.isAPITokenRole(localStorage));

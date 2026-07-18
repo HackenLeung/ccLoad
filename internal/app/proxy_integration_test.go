@@ -2377,7 +2377,8 @@ func TestProxy_Success_NonStreaming_OpenAIToCodexTransform(t *testing.T) {
 func TestProxy_CodexInvalidEncryptedContentRetriesWithoutEncryptedInputItems(t *testing.T) {
 	t.Parallel()
 
-	const invalidEncryptedContentBody = `{"error":{"message":"The encrypted content could not be verified. Reason: Encrypted content could not be decrypted or parsed.","type":"invalid_request_error","param":"","code":"invalid_encrypted_content"}}`
+	// 兼容部分 Codex 中转返回的顶层 code + 字符串 error 格式。
+	const invalidEncryptedContentBody = `{"code":"invalid-argument","error":"Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response."}`
 
 	var attempts atomic.Int32
 	var bodies [][]byte

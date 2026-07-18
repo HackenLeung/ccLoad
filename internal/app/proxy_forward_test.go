@@ -42,6 +42,46 @@ func runHandleSuccessResponse(t *testing.T, body string, headers http.Header, is
 	return res, rec.Body.String()
 }
 
+func TestIsInvalidEncryptedContentError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "openai nested error",
+			body: `{"error":{"message":"The encrypted content could not be verified.","code":"invalid_encrypted_content"}}`,
+			want: true,
+		},
+		{
+			name: "relay top level string error",
+			body: `{"code":"invalid-argument","error":"Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response."}`,
+			want: true,
+		},
+		{
+			name: "unrelated invalid argument",
+			body: `{"code":"invalid-argument","error":"model is required"}`,
+			want: false,
+		},
+		{
+			name: "malformed json",
+			body: `{`,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isInvalidEncryptedContentError([]byte(tt.body)); got != tt.want {
+				t.Fatalf("isInvalidEncryptedContentError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHandleSuccessResponse_ExtractsUsageFromJSON(t *testing.T) {
 	body := `{"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":5,"cache_creation_input_tokens":7}}`
 	res, forwardedBody := runHandleSuccessResponse(

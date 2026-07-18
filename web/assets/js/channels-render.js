@@ -290,12 +290,18 @@ async function saveInlineChannelPriority(input) {
 
   try {
     setInlinePrioritySaving(input, true);
+    const protocol = (typeof filters !== 'undefined' && filters && filters.channelType && filters.channelType !== 'all')
+      ? String(filters.channelType).toLowerCase()
+      : '';
     await fetchDataWithAuth('/admin/channels/batch-priority', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ updates: [{ id: channelId, priority: nextPriority }] })
+      body: JSON.stringify({
+        protocol,
+        updates: [{ id: channelId, priority: nextPriority }]
+      })
     });
 
     input.classList.remove('is-dirty');

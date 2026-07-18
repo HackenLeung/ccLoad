@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -240,6 +241,8 @@ func (s *SQLStore) GetEnabledChannelsByModelAndProtocol(ctx context.Context, mod
 	}
 
 	configs = filterConfigsByProtocol(configs, protocol)
+	applyProtocolPriorities(configs, protocol)
+	sortConfigsByPriority(configs)
 	return configs, nil
 }
 
@@ -455,6 +458,9 @@ func (s *SQLStore) DeleteConfig(ctx context.Context, id int64) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM channel_protocol_transforms WHERE channel_id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel protocol transforms: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM channel_protocol_priorities WHERE channel_id = ?`, id); err != nil {
+			return fmt.Errorf("delete channel protocol priorities: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM channel_url_states WHERE channel_id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel url states: %w", err)
 		}
@@ -525,6 +531,52 @@ func (s *SQLStore) BatchUpdatePriority(ctx context.Context, updates []struct {
 	rowsAffected, _ := result.RowsAffected()
 
 	return rowsAffected, nil
+}
+
+// BatchUpdateProtocolPriority 批量写入渠道在指定客户端协议下的优先级。
+// 使用 upsert 覆盖更新，不修改 channels.priority 全局值。
+func (s *SQLStore) BatchUpdateProtocolPriority(ctx context.Context, protocol string, updates []struct {
+	ID       int64
+	Priority int
+}) (int64, error) {
+	protocol = strings.TrimSpace(strings.ToLower(protocol))
+	if protocol == "" {
+		return 0, fmt.Errorf("protocol is required")
+	}
+	if len(updates) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	query := `INSERT INTO channel_protocol_priorities (channel_id, protocol, priority) VALUES (?, ?, ?)
+ON CONFLICT(channel_id, protocol) DO UPDATE SET priority = excluded.priority`
+	if s.driverName == "mysql" {
+		query = `INSERT INTO channel_protocol_priorities (channel_id, protocol, priority) VALUES (?, ?, ?)
+ON DUPLICATE KEY UPDATE priority = VALUES(priority)`
+	}
+
+	var affected int64
+	for _, update := range updates {
+		if update.ID <= 0 {
+			continue
+		}
+		res, execErr := tx.ExecContext(ctx, query, update.ID, protocol, update.Priority)
+		if execErr != nil {
+			return 0, fmt.Errorf("upsert protocol priority: %w", execErr)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			affected += n
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return affected, nil
 }
 
 // ==================== ModelEntries 辅助方法 ====================
@@ -621,8 +673,55 @@ func (s *SQLStore) loadProtocolTransformsForConfigs(ctx context.Context, configs
 	return nil
 }
 
-// loadConfigsAuxConcurrent 并发加载多渠道的模型与协议转换附属数据。
-// 两次 IN 查询互不依赖，并行可省去一次 RTT；DB 资源池足够时无额外开销。
+func (s *SQLStore) loadProtocolPrioritiesForConfigs(ctx context.Context, configs []*model.Config) error {
+	if len(configs) == 0 {
+		return nil
+	}
+
+	channelIDs := make([]any, len(configs))
+	placeholders := make([]string, len(configs))
+	idToConfig := make(map[int64]*model.Config, len(configs))
+	for i, cfg := range configs {
+		channelIDs[i] = cfg.ID
+		placeholders[i] = "?"
+		idToConfig[cfg.ID] = cfg
+		cfg.ProtocolPriorities = nil
+	}
+
+	query := fmt.Sprintf(
+		`SELECT channel_id, protocol, priority FROM channel_protocol_priorities WHERE channel_id IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+	rows, err := s.db.QueryContext(ctx, query, channelIDs...)
+	if err != nil {
+		return fmt.Errorf("query protocol priorities: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var channelID int64
+		var protocol string
+		var priority int
+		if err := rows.Scan(&channelID, &protocol, &priority); err != nil {
+			return fmt.Errorf("scan protocol priority: %w", err)
+		}
+		cfg, ok := idToConfig[channelID]
+		if !ok || cfg == nil {
+			continue
+		}
+		protocol = strings.TrimSpace(strings.ToLower(protocol))
+		if protocol == "" {
+			continue
+		}
+		if cfg.ProtocolPriorities == nil {
+			cfg.ProtocolPriorities = make(map[string]int)
+		}
+		cfg.ProtocolPriorities[protocol] = priority
+	}
+	return rows.Err()
+}
+
+// loadConfigsAuxConcurrent 并发加载多渠道的模型、协议转换与协议优先级附属数据。
 func (s *SQLStore) loadConfigsAuxConcurrent(ctx context.Context, configs []*model.Config) error {
 	if len(configs) == 0 {
 		return nil
@@ -631,8 +730,9 @@ func (s *SQLStore) loadConfigsAuxConcurrent(ctx context.Context, configs []*mode
 		wg          sync.WaitGroup
 		modelErr    error
 		protocolErr error
+		priorityErr error
 	)
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		modelErr = s.loadModelEntriesForConfigs(ctx, configs)
@@ -641,11 +741,18 @@ func (s *SQLStore) loadConfigsAuxConcurrent(ctx context.Context, configs []*mode
 		defer wg.Done()
 		protocolErr = s.loadProtocolTransformsForConfigs(ctx, configs)
 	}()
+	go func() {
+		defer wg.Done()
+		priorityErr = s.loadProtocolPrioritiesForConfigs(ctx, configs)
+	}()
 	wg.Wait()
 	if modelErr != nil {
 		return modelErr
 	}
-	return protocolErr
+	if protocolErr != nil {
+		return protocolErr
+	}
+	return priorityErr
 }
 
 func normalizeLoadedProtocolTransforms(cfg *model.Config) {
@@ -653,6 +760,30 @@ func normalizeLoadedProtocolTransforms(cfg *model.Config) {
 		return
 	}
 	cfg.ProtocolTransforms = cfg.GetProtocolTransforms()
+}
+
+func applyProtocolPriorities(configs []*model.Config, protocol string) {
+	for _, cfg := range configs {
+		if cfg != nil {
+			cfg.ApplyProtocolPriority(protocol)
+		}
+	}
+}
+
+func sortConfigsByPriority(configs []*model.Config) {
+	sort.SliceStable(configs, func(i, j int) bool {
+		a, b := configs[i], configs[j]
+		if a == nil {
+			return false
+		}
+		if b == nil {
+			return true
+		}
+		if a.Priority != b.Priority {
+			return a.Priority > b.Priority
+		}
+		return a.ID < b.ID
+	})
 }
 
 func filterConfigsByProtocol(configs []*model.Config, protocol string) []*model.Config {

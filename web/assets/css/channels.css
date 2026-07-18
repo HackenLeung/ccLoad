@@ -1781,6 +1781,13 @@
       flex: 0 1 auto;
     }
 
+    .channel-sort-scope {
+      padding: 0 20px 8px;
+      color: var(--neutral-500);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
     .channel-sort-preset-editor {
       display: grid;
       grid-template-columns: auto minmax(220px, 1fr);

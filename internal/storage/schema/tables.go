@@ -70,6 +70,19 @@ func DefineChannelProtocolTransformsTable() *TableBuilder {
 		Index("idx_channel_protocol_transforms_protocol", "protocol")
 }
 
+// DefineChannelProtocolPrioritiesTable 定义渠道协议级优先级表
+// 用于 Claude/Codex/OpenAI/Gemini 各自独立的调度与展示排序。
+// 无记录时回退到 channels.priority。
+func DefineChannelProtocolPrioritiesTable() *TableBuilder {
+	return NewTable("channel_protocol_priorities").
+		Column("channel_id INT NOT NULL").
+		Column("protocol VARCHAR(64) NOT NULL").
+		Column("priority INT NOT NULL DEFAULT 0").
+		Column("PRIMARY KEY (channel_id, protocol)").
+		Column("FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE").
+		Index("idx_channel_protocol_priorities_protocol_priority", "protocol, priority DESC")
+}
+
 // DefineChannelURLStatesTable 定义渠道URL运行状态持久化表（当前仅记录手动禁用URL）
 // 注意：url_hash 为 url 的 SHA-256 十六进制摘要（CHAR(64)），用作主键以规避 MySQL utf8mb4
 // InnoDB 索引列 767 字节上限（VARCHAR(500) × 4 = 2000 字节 > 767）。

@@ -227,6 +227,45 @@ func TestHandleBatchUpdatePriority(t *testing.T) {
 			t.Fatalf("priority not updated: got (%d,%d)", updated1.Priority, updated2.Priority)
 		}
 	})
+
+	t.Run("protocol priorities are isolated", func(t *testing.T) {
+		c, w := newTestContext(t, newJSONRequest(t, http.MethodPost, "/admin/channels/batch-priority", map[string]any{
+			"protocol": "codex",
+			"updates": []map[string]any{
+				{"id": c1.ID, "priority": 300},
+				{"id": c2.ID, "priority": 400},
+			},
+		}))
+
+		server.HandleBatchUpdatePriority(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
+		}
+
+		updated1, _ := store.GetConfig(ctx, c1.ID)
+		updated2, _ := store.GetConfig(ctx, c2.ID)
+		if updated1.Priority != 100 || updated2.Priority != 200 {
+			t.Fatalf("global priority changed: got (%d,%d)", updated1.Priority, updated2.Priority)
+		}
+		if updated1.ProtocolPriorities["codex"] != 300 || updated2.ProtocolPriorities["codex"] != 400 {
+			t.Fatalf("codex priorities not updated: got (%#v,%#v)", updated1.ProtocolPriorities, updated2.ProtocolPriorities)
+		}
+		if _, ok := updated1.ProtocolPriorities["anthropic"]; ok {
+			t.Fatalf("anthropic priority unexpectedly changed: %#v", updated1.ProtocolPriorities)
+		}
+	})
+
+	t.Run("invalid protocol", func(t *testing.T) {
+		c, w := newTestContext(t, newJSONRequest(t, http.MethodPost, "/admin/channels/batch-priority", map[string]any{
+			"protocol": "unsupported",
+			"updates":  []map[string]any{{"id": c1.ID, "priority": 500}},
+		}))
+
+		server.HandleBatchUpdatePriority(c)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d, want %d, body=%s", w.Code, http.StatusBadRequest, w.Body.String())
+		}
+	})
 }
 
 func TestHandleBatchSetEnabled(t *testing.T) {

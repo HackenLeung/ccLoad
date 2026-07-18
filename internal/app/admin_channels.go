@@ -111,8 +111,17 @@ func (s *Server) handleListChannels(c *gin.Context) {
 	// 健康度模式检查
 	healthEnabled := s.healthCache != nil && s.healthCache.Config().Enabled
 
-	// 排序：健康度开启按 effective_priority 降序；关闭按 priority DESC, name ASC，
-	// 与前端 filterChannels 的排序键对齐，保证分页跨页顺序稳定。
+	// 排序：健康度开启按 effective_priority 降序；关闭按 priority DESC, name ASC。
+	// 当按 type/protocol 过滤时，优先使用协议级优先级。
+	listProtocol := ""
+	if t := c.Query("type"); t != "" && t != "all" {
+		listProtocol = util.NormalizeChannelType(t)
+		for _, cfg := range cfgs {
+			if cfg != nil {
+				cfg.ApplyProtocolPriority(listProtocol)
+			}
+		}
+	}
 	priorityMap, successRateMap := s.sortChannelsByEffectivePriority(cfgs, healthEnabled)
 
 	totalCount := len(cfgs)
@@ -1009,10 +1018,12 @@ func (s *Server) HandleDeleteModels(c *gin.Context) {
 
 // HandleBatchUpdatePriority 批量更新渠道优先级
 // POST /admin/channels/batch-priority
-// 使用单条批量 UPDATE 语句更新多个渠道优先级
+// protocol 为空时写全局 channels.priority；
+// protocol 有值时写协议级 channel_protocol_priorities，互不影响其它协议。
 func (s *Server) HandleBatchUpdatePriority(c *gin.Context) {
 	var req struct {
-		Updates []struct {
+		Protocol string `json:"protocol"`
+		Updates  []struct {
 			ID       int64 `json:"id"`
 			Priority int   `json:"priority"`
 		} `json:"updates"`
@@ -1029,33 +1040,48 @@ func (s *Server) HandleBatchUpdatePriority(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-
-	// 转换为storage层的类型
 	updates := make([]struct {
 		ID       int64
 		Priority int
-	}, len(req.Updates))
-	for i, u := range req.Updates {
-		updates[i] = struct {
+	}, 0, len(req.Updates))
+	for _, u := range req.Updates {
+		if u.ID <= 0 {
+			continue
+		}
+		updates = append(updates, struct {
 			ID       int64
 			Priority int
-		}{ID: u.ID, Priority: u.Priority}
+		}{ID: u.ID, Priority: u.Priority})
+	}
+	if len(updates) == 0 {
+		RespondError(c, http.StatusBadRequest, fmt.Errorf("updates cannot be empty"))
+		return
 	}
 
-	// 调用storage层批量更新方法
-	rowsAffected, err := s.store.BatchUpdatePriority(ctx, updates)
+	protocol := strings.TrimSpace(strings.ToLower(req.Protocol))
+	var rowsAffected int64
+	var err error
+	if protocol == "" || protocol == "all" {
+		rowsAffected, err = s.store.BatchUpdatePriority(ctx, updates)
+	} else {
+		protocol = util.NormalizeChannelType(protocol)
+		if !util.IsValidChannelType(protocol) {
+			RespondError(c, http.StatusBadRequest, fmt.Errorf("invalid protocol"))
+			return
+		}
+		rowsAffected, err = s.store.BatchUpdateProtocolPriority(ctx, protocol, updates)
+	}
 	if err != nil {
 		log.Printf("批量优先级更新失败: %v", err)
 		RespondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	// 清除缓存
 	s.InvalidateChannelListCache()
-
 	RespondJSON(c, http.StatusOK, gin.H{
-		"updated": rowsAffected,
-		"total":   len(req.Updates),
+		"updated":  rowsAffected,
+		"total":    len(updates),
+		"protocol": protocol,
 	})
 }
 
