@@ -152,6 +152,7 @@ function syncProtocolTransformModeForURLs() {
   if (exactURL && localInput) {
     localInput.checked = true;
   }
+  syncProtocolCapabilityVisibility();
 }
 
 function getSelectedProtocolTransformMode() {
@@ -160,6 +161,62 @@ function getSelectedProtocolTransformMode() {
   }
   const selected = document.querySelector('input[name="protocolTransformMode"]:checked')?.value;
   return window.ChannelProtocolConfig.normalizeProtocolTransformMode(selected);
+}
+
+function protocolCapabilityLabel(capability) {
+  const labels = {
+    function_tools: 'channels.protocolCapabilityFunctionTools',
+    hosted_web_search: 'channels.protocolCapabilityHostedWebSearch',
+    tool_search: 'channels.protocolCapabilityToolSearch',
+    reasoning: 'channels.protocolCapabilityReasoning',
+    prompt_cache: 'channels.protocolCapabilityPromptCache'
+  };
+  const key = labels[capability] || capability;
+  return window.t ? window.t(key) : key;
+}
+
+function renderProtocolCapabilityOptions(rawCapabilities) {
+  const container = document.getElementById('protocolCapabilitiesContainer');
+  if (!container) return;
+
+  const values = window.ChannelProtocolConfig.normalizeCodexToOpenAICapabilities(rawCapabilities);
+  container.innerHTML = window.ChannelProtocolConfig.CODEX_TO_OPENAI_CAPABILITIES.map((capability) => `
+    <label class="channel-protocol-capability-option">
+      <input type="checkbox"
+             name="protocolCapability"
+             value="${capability}"
+             ${values[capability] ? 'checked' : ''}
+      >
+      <span>${protocolCapabilityLabel(capability)}</span>
+    </label>
+  `).join('');
+}
+
+function syncProtocolCapabilityVisibility() {
+  const panel = document.getElementById('protocolCapabilitiesPanel');
+  if (!panel) return;
+  const channelType = document.querySelector('input[name="channelType"]:checked')?.value || 'anthropic';
+  panel.hidden = !window.ChannelProtocolConfig.shouldShowCodexToOpenAICapabilities(
+    channelType,
+    getSelectedProtocolTransforms(channelType),
+    getSelectedProtocolTransformMode()
+  );
+}
+
+function getSelectedProtocolCapabilities(channelType) {
+  if (!window.ChannelProtocolConfig.shouldShowCodexToOpenAICapabilities(
+    channelType,
+    getSelectedProtocolTransforms(channelType),
+    getSelectedProtocolTransformMode()
+  )) {
+    return null;
+  }
+  const checked = new Set(Array.from(document.querySelectorAll('input[name="protocolCapability"]:checked'))
+    .map((input) => input.value));
+  return {
+    codex: Object.fromEntries(window.ChannelProtocolConfig.CODEX_TO_OPENAI_CAPABILITIES
+      .map((capability) => [capability, checked.has(capability)]))
+  };
 }
 
 async function syncScheduledCheckVisibility() {
@@ -391,10 +448,23 @@ function initChannelEditorActions() {
     channelTypeRadios.addEventListener('change', (event) => {
       if (event.target && event.target.name === 'channelType') {
         renderProtocolTransformOptions(event.target.value, getSelectedProtocolTransforms(''));
+        syncProtocolCapabilityVisibility();
         scheduleChannelDuplicateHintCheck();
       }
     });
     channelTypeRadios.dataset.protocolTransformsBound = '1';
+  }
+
+  const protocolTransformsContainer = document.getElementById('protocolTransformsContainer');
+  if (protocolTransformsContainer && !protocolTransformsContainer.dataset.capabilitiesBound) {
+    protocolTransformsContainer.addEventListener('change', syncProtocolCapabilityVisibility);
+    protocolTransformsContainer.dataset.capabilitiesBound = '1';
+  }
+
+  const protocolTransformModeContainer = document.getElementById('protocolTransformModeContainer');
+  if (protocolTransformModeContainer && !protocolTransformModeContainer.dataset.capabilitiesBound) {
+    protocolTransformModeContainer.addEventListener('change', syncProtocolCapabilityVisibility);
+    protocolTransformModeContainer.dataset.capabilitiesBound = '1';
   }
 
   ensureScheduledCheckModelCombobox();
@@ -413,6 +483,8 @@ async function showAddModal() {
   document.querySelector('input[name="channelType"][value="anthropic"]').checked = true;
   renderProtocolTransformOptions('anthropic', []);
   renderProtocolTransformModeOptions('upstream');
+  renderProtocolCapabilityOptions(null);
+  syncProtocolCapabilityVisibility();
   document.querySelector('input[name="keyStrategy"][value="sequential"]').checked = true;
 
   redirectTableData = [];
@@ -492,6 +564,8 @@ async function editChannel(id) {
 
   renderProtocolTransformOptions(channelType, channel.protocol_transforms || []);
   renderProtocolTransformModeOptions(channel.protocol_transform_mode || 'upstream');
+  renderProtocolCapabilityOptions(channel.protocol_capabilities || null);
+  syncProtocolCapabilityVisibility();
   const keyStrategy = channel.key_strategy || 'sequential';
   const strategyRadio = document.querySelector(`input[name="keyStrategy"][value="${keyStrategy}"]`);
   if (strategyRadio) {
@@ -740,6 +814,7 @@ async function saveChannel(event) {
     channel_type: channelType,
     protocol_transform_mode: getSelectedProtocolTransformMode(),
     protocol_transforms: getSelectedProtocolTransforms(channelType),
+    protocol_capabilities: getSelectedProtocolCapabilities(channelType),
     key_strategy: keyStrategy,
     priority: parseInt(document.getElementById('channelPriority').value) || 0,
     rpm_limit: parseInt(document.getElementById('channelRPMLimit').value) || 0,

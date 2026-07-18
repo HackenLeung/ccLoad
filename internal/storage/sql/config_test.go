@@ -87,6 +87,39 @@ func TestConfig_CreateAndGet(t *testing.T) {
 	}
 }
 
+func TestConfig_ProtocolCapabilitiesRoundTripIncludingAllFalse(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t, "protocol-capabilities.db")
+	ctx := context.Background()
+	values := make(map[string]bool, len(model.CodexToOpenAICapabilities))
+	for _, capability := range model.CodexToOpenAICapabilities {
+		values[capability] = false
+	}
+	created, err := store.CreateConfig(ctx, &model.Config{
+		Name: "capabilities", URL: "https://example.com", Enabled: true,
+		ChannelType: "openai", ProtocolTransformMode: model.ProtocolTransformModeLocal,
+		ProtocolTransforms:   []string{"codex"},
+		ProtocolCapabilities: map[string]map[string]bool{"codex": values},
+		ModelEntries:         []model.ModelEntry{{Model: "gpt-test"}},
+	})
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	got, err := store.GetConfig(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	if len(got.ProtocolCapabilities["codex"]) != len(model.CodexToOpenAICapabilities) {
+		t.Fatalf("capability count = %d, want %d", len(got.ProtocolCapabilities["codex"]), len(model.CodexToOpenAICapabilities))
+	}
+	for _, capability := range model.CodexToOpenAICapabilities {
+		if got.ProtocolCapabilityEnabled("codex", capability) {
+			t.Fatalf("capability %q should remain explicitly disabled", capability)
+		}
+	}
+}
+
 func TestConfig_ListConfigs(t *testing.T) {
 	t.Parallel()
 

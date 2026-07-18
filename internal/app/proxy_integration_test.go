@@ -2939,6 +2939,73 @@ func TestProxy_Success_NonStreaming_CodexToOpenAITransform(t *testing.T) {
 	})
 }
 
+func TestProxy_CodexToOpenAIHostedWebSearchUsesChannelCapability(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name        string
+		enabled     bool
+		wantOptions bool
+	}{
+		{name: "supported upstream", enabled: true, wantOptions: true},
+		{name: "unsupported upstream", enabled: false, wantOptions: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var gotBody []byte
+			env := setupProxyTestEnv(t, []testChannel{
+				{name: "openai-grok", channelType: "openai", models: "grok-4.5", apiKey: "sk-oai"},
+			}, map[int]string{0: "https://openai-upstream.example.com"})
+			env.server.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				var err error
+				gotBody, err = io.ReadAll(r.Body)
+				if err != nil {
+					return nil, err
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(strings.NewReader(
+						`{"id":"chatcmpl_1","object":"chat.completion","model":"grok-4.5","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
+					)),
+				}, nil
+			})}
+
+			configs, err := env.store.ListConfigs(context.Background())
+			if err != nil {
+				t.Fatalf("ListConfigs failed: %v", err)
+			}
+			cfg := configs[0]
+			cfg.ProtocolTransforms = []string{"codex"}
+			cfg.ProtocolTransformMode = model.ProtocolTransformModeLocal
+			cfg.ProtocolCapabilities = map[string]map[string]bool{
+				"codex": {model.ProtocolCapabilityHostedWebSearch: tt.enabled},
+			}
+			if _, err := env.store.UpdateConfig(context.Background(), cfg.ID, cfg); err != nil {
+				t.Fatalf("UpdateConfig failed: %v", err)
+			}
+			env.server.InvalidateChannelListCache()
+
+			w := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses", map[string]any{
+				"model": "grok-4.5",
+				"input": []map[string]any{{
+					"type": "message", "role": "user",
+					"content": []map[string]string{{"type": "input_text", "text": "search"}},
+				}},
+				"tools": []map[string]any{{"type": "web_search", "search_context_size": "medium"}},
+			}, nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+			}
+			hasOptions := bytes.Contains(gotBody, []byte(`"web_search_options"`))
+			if hasOptions != tt.wantOptions {
+				t.Fatalf("web_search_options present=%v, want %v; body=%s", hasOptions, tt.wantOptions, gotBody)
+			}
+		})
+	}
+}
+
 func TestProxy_Success_Streaming_CodexToOpenAITransform(t *testing.T) {
 	t.Parallel()
 

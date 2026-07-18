@@ -363,6 +363,13 @@ window.I18N_LOCALES['zh-CN'] = {
   'channels.protocolTransformModeUpstream': '上游',
   'channels.protocolTransformModeLocalDescription': '由 ccLoad 在本地转换请求和响应协议。当前支持 Claude Code、Codex、OpenAI、Gemini 之间的基础对话、流式输出及常用工具调用。部分高级工具、图片、推理字段和上下文压缩受上游接口能力限制，可能无法完全兼容；转换失败时会按渠道顺序继续尝试。',
   'channels.protocolTransformModeUpstreamDescription': '协议转换由上游接口完成，ccLoad 不进行本地请求和响应格式转换。',
+  'channels.protocolCapabilitiesTitle': 'Codex 转 OpenAI 上游能力',
+  'channels.protocolCapabilitiesDescription': '保留该上游实际支持的能力；取消勾选后，ccLoad 会在转换前移除对应请求字段。能力由渠道决定，不会按模型名自动判断。',
+  'channels.protocolCapabilityFunctionTools': '函数工具 (Function Tools)',
+  'channels.protocolCapabilityHostedWebSearch': '托管网页搜索 (Hosted Web Search)',
+  'channels.protocolCapabilityToolSearch': '工具搜索 (Tool Search)',
+  'channels.protocolCapabilityReasoning': '推理 / Thinking (Reasoning Effort)',
+  'channels.protocolCapabilityPromptCache': '提示词缓存 (Prompt Cache)',
   'channels.modal.apiUrl': 'API URL',
   'channels.modal.apiKey': 'API Key',
   'channels.modal.keyNote': '备注',
@@ -1365,3 +1372,4 @@ window.I18N_LOCALES['zh-CN'] = {
   'channels.customRules.anyrouterHintBeta': '请求头追加 anthropic-beta: context-1m-2025-08-07（可被下方自定义规则覆盖或移除）',
   'channels.customRules.anyrouterHintThinking': '/v1/messages 缺失 thinking 时补 thinking.type=adaptive；旧 thinking.type=enabled 会归一为 output_config.effort'
 };
+

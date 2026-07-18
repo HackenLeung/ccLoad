@@ -15,10 +15,23 @@ const (
 	// ProtocolTransformModeLocal keeps extra exposed protocols on the existing local-translation path.
 	ProtocolTransformModeLocal = "local"
 	// ProtocolTransformModeUpstream forwards extra exposed protocols to upstream natively.
-	ProtocolTransformModeUpstream = "upstream"
+	ProtocolTransformModeUpstream     = "upstream"
+	ProtocolCapabilityFunctionTools   = "function_tools"
+	ProtocolCapabilityHostedWebSearch = "hosted_web_search"
+	ProtocolCapabilityToolSearch      = "tool_search"
+	ProtocolCapabilityReasoning       = "reasoning"
+	ProtocolCapabilityPromptCache     = "prompt_cache"
 	// ExactUpstreamURLMarker marks a configured channel URL as the exact upstream request URL.
 	ExactUpstreamURLMarker = "#"
 )
+
+var CodexToOpenAICapabilities = []string{
+	ProtocolCapabilityFunctionTools,
+	ProtocolCapabilityHostedWebSearch,
+	ProtocolCapabilityToolSearch,
+	ProtocolCapabilityReasoning,
+	ProtocolCapabilityPromptCache,
+}
 
 // HasExactUpstreamURLMarker reports whether raw ends with the exact upstream URL marker.
 func HasExactUpstreamURLMarker(raw string) bool {
@@ -104,11 +117,12 @@ func (r *CustomRequestRules) IsEmpty() bool {
 
 // Config 渠道配置
 type Config struct {
-	ID                    int64    `json:"id"`
-	Name                  string   `json:"name"`
-	ChannelType           string   `json:"channel_type"` // 渠道类型: "anthropic" | "codex" | "openai" | "gemini"，默认anthropic
-	ProtocolTransformMode string   `json:"protocol_transform_mode,omitempty"`
-	ProtocolTransforms    []string `json:"protocol_transforms,omitempty"`
+	ID                    int64                      `json:"id"`
+	Name                  string                     `json:"name"`
+	ChannelType           string                     `json:"channel_type"` // 渠道类型: "anthropic" | "codex" | "openai" | "gemini"，默认anthropic
+	ProtocolTransformMode string                     `json:"protocol_transform_mode,omitempty"`
+	ProtocolTransforms    []string                   `json:"protocol_transforms,omitempty"`
+	ProtocolCapabilities  map[string]map[string]bool `json:"protocol_capabilities,omitempty"`
 	// ProtocolPriorities 协议级优先级覆盖。key 为客户端协议（anthropic/codex/openai/gemini）。
 	// 缺省时回退到 Priority。
 	ProtocolPriorities    map[string]int `json:"protocol_priorities,omitempty"`
@@ -154,7 +168,7 @@ type Config struct {
 }
 
 // Clone 返回 Config 的深拷贝。
-// 拷贝所有可变字段（ModelEntries / ProtocolTransforms slice），
+// 拷贝所有可变字段（ModelEntries / ProtocolTransforms / ProtocolCapabilities），
 // 重置懒加载索引（modelIndex + indexMu），避免共享 sync.RWMutex 与指向旧 slice 的 map。
 func (c *Config) Clone() *Config {
 	if c == nil {
@@ -194,7 +208,36 @@ func (c *Config) Clone() *Config {
 			dst.ProtocolPriorities[protocol] = priority
 		}
 	}
+	if len(c.ProtocolCapabilities) > 0 {
+		dst.ProtocolCapabilities = make(map[string]map[string]bool, len(c.ProtocolCapabilities))
+		for protocolName, capabilities := range c.ProtocolCapabilities {
+			copied := make(map[string]bool, len(capabilities))
+			for capability, enabled := range capabilities {
+				copied[capability] = enabled
+			}
+			dst.ProtocolCapabilities[protocolName] = copied
+		}
+	}
 	return dst
+}
+
+// ProtocolCapabilityEnabled preserves legacy behavior by treating missing
+// capability configuration as enabled.
+func (c *Config) ProtocolCapabilityEnabled(protocolName, capability string) bool {
+	if c == nil {
+		return true
+	}
+	protocolName = strings.TrimSpace(strings.ToLower(protocolName))
+	capability = strings.TrimSpace(strings.ToLower(capability))
+	capabilities, configured := c.ProtocolCapabilities[protocolName]
+	if !configured {
+		return true
+	}
+	enabled, configured := capabilities[capability]
+	if !configured {
+		return true
+	}
+	return enabled
 }
 
 // GetModels 获取所有支持的模型名称列表

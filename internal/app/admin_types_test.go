@@ -208,3 +208,55 @@ func TestChannelRequestValidate_RejectsInvalidProtocolTransformMode(t *testing.T
 		t.Fatalf("expected invalid mode error, got %v", err)
 	}
 }
+
+func TestChannelRequestValidate_NormalizesCodexToOpenAICapabilities(t *testing.T) {
+	t.Parallel()
+
+	req := ChannelRequest{
+		Name:                  "test",
+		APIKey:                "sk-test",
+		URL:                   "https://example.com",
+		ChannelType:           "OPENAI",
+		ProtocolTransformMode: model.ProtocolTransformModeLocal,
+		ProtocolTransforms:    []string{"CODEX"},
+		ProtocolCapabilities: map[string]map[string]bool{
+			"CODEX": {"HOSTED_WEB_SEARCH": false},
+		},
+		Models: []model.ModelEntry{{Model: "test-model"}},
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if req.ProtocolCapabilities["codex"][model.ProtocolCapabilityHostedWebSearch] {
+		t.Fatal("expected normalized explicit false capability")
+	}
+}
+
+func TestChannelRequestValidate_RejectsMisplacedOrUnknownCapabilities(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		channelType  string
+		mode         string
+		transforms   []string
+		capabilities map[string]map[string]bool
+	}{
+		{"wrong upstream", "anthropic", model.ProtocolTransformModeLocal, []string{"codex"}, map[string]map[string]bool{"codex": {model.ProtocolCapabilityHostedWebSearch: false}}},
+		{"wrong mode", "openai", model.ProtocolTransformModeUpstream, []string{"codex"}, map[string]map[string]bool{"codex": {model.ProtocolCapabilityHostedWebSearch: false}}},
+		{"unknown capability", "openai", model.ProtocolTransformModeLocal, []string{"codex"}, map[string]map[string]bool{"codex": {"magic": false}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := ChannelRequest{
+				Name: "test", APIKey: "sk-test", URL: "https://example.com",
+				ChannelType: tt.channelType, ProtocolTransformMode: tt.mode,
+				ProtocolTransforms: tt.transforms, ProtocolCapabilities: tt.capabilities,
+				Models: []model.ModelEntry{{Model: "test-model"}},
+			}
+			if err := req.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}

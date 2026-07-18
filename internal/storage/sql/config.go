@@ -330,6 +330,9 @@ func (s *SQLStore) CreateConfig(ctx context.Context, c *model.Config) (*model.Co
 		if err := s.saveProtocolTransformsTx(ctx, tx, id, c.GetProtocolTransforms()); err != nil {
 			return fmt.Errorf("save protocol transforms: %w", err)
 		}
+		if err := s.saveProtocolCapabilitiesTx(ctx, tx, id, c.ProtocolCapabilities); err != nil {
+			return fmt.Errorf("save protocol capabilities: %w", err)
+		}
 
 		return nil
 	})
@@ -388,6 +391,9 @@ func (s *SQLStore) UpdateConfig(ctx context.Context, id int64, upd *model.Config
 		}
 		if err := s.saveProtocolTransformsTx(ctx, tx, id, upd.GetProtocolTransforms()); err != nil {
 			return fmt.Errorf("save protocol transforms: %w", err)
+		}
+		if err := s.saveProtocolCapabilitiesTx(ctx, tx, id, upd.ProtocolCapabilities); err != nil {
+			return fmt.Errorf("save protocol capabilities: %w", err)
 		}
 
 		return nil
@@ -460,6 +466,9 @@ func (s *SQLStore) DeleteConfig(ctx context.Context, id int64) error {
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM channel_protocol_priorities WHERE channel_id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel protocol priorities: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM channel_protocol_capabilities WHERE channel_id = ?`, id); err != nil {
+			return fmt.Errorf("delete channel protocol capabilities: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM channel_url_states WHERE channel_id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel url states: %w", err)
@@ -721,18 +730,63 @@ func (s *SQLStore) loadProtocolPrioritiesForConfigs(ctx context.Context, configs
 	return rows.Err()
 }
 
+func (s *SQLStore) loadProtocolCapabilitiesForConfigs(ctx context.Context, configs []*model.Config) error {
+	if len(configs) == 0 {
+		return nil
+	}
+	channelIDs := make([]any, len(configs))
+	placeholders := make([]string, len(configs))
+	idToConfig := make(map[int64]*model.Config, len(configs))
+	for i, cfg := range configs {
+		channelIDs[i] = cfg.ID
+		placeholders[i] = "?"
+		idToConfig[cfg.ID] = cfg
+		cfg.ProtocolCapabilities = nil
+	}
+	query := fmt.Sprintf(
+		`SELECT channel_id, protocol, capability, enabled FROM channel_protocol_capabilities WHERE channel_id IN (%s) ORDER BY channel_id, protocol, capability`,
+		strings.Join(placeholders, ","),
+	)
+	rows, err := s.db.QueryContext(ctx, query, channelIDs...)
+	if err != nil {
+		return fmt.Errorf("query protocol capabilities: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var channelID int64
+		var protocolName, capability string
+		var enabled int
+		if err := rows.Scan(&channelID, &protocolName, &capability, &enabled); err != nil {
+			return fmt.Errorf("scan protocol capability: %w", err)
+		}
+		cfg := idToConfig[channelID]
+		if cfg == nil {
+			continue
+		}
+		if cfg.ProtocolCapabilities == nil {
+			cfg.ProtocolCapabilities = make(map[string]map[string]bool)
+		}
+		if cfg.ProtocolCapabilities[protocolName] == nil {
+			cfg.ProtocolCapabilities[protocolName] = make(map[string]bool)
+		}
+		cfg.ProtocolCapabilities[protocolName][capability] = enabled != 0
+	}
+	return rows.Err()
+}
+
 // loadConfigsAuxConcurrent 并发加载多渠道的模型、协议转换与协议优先级附属数据。
 func (s *SQLStore) loadConfigsAuxConcurrent(ctx context.Context, configs []*model.Config) error {
 	if len(configs) == 0 {
 		return nil
 	}
 	var (
-		wg          sync.WaitGroup
-		modelErr    error
-		protocolErr error
-		priorityErr error
+		wg            sync.WaitGroup
+		modelErr      error
+		protocolErr   error
+		priorityErr   error
+		capabilityErr error
 	)
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		modelErr = s.loadModelEntriesForConfigs(ctx, configs)
@@ -745,6 +799,10 @@ func (s *SQLStore) loadConfigsAuxConcurrent(ctx context.Context, configs []*mode
 		defer wg.Done()
 		priorityErr = s.loadProtocolPrioritiesForConfigs(ctx, configs)
 	}()
+	go func() {
+		defer wg.Done()
+		capabilityErr = s.loadProtocolCapabilitiesForConfigs(ctx, configs)
+	}()
 	wg.Wait()
 	if modelErr != nil {
 		return modelErr
@@ -752,7 +810,10 @@ func (s *SQLStore) loadConfigsAuxConcurrent(ctx context.Context, configs []*mode
 	if protocolErr != nil {
 		return protocolErr
 	}
-	return priorityErr
+	if priorityErr != nil {
+		return priorityErr
+	}
+	return capabilityErr
 }
 
 func normalizeLoadedProtocolTransforms(cfg *model.Config) {
@@ -824,6 +885,21 @@ func (s *SQLStore) saveProtocolTransformsTx(ctx context.Context, tx *sql.Tx, cha
 	}
 	if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
 		return fmt.Errorf("save protocol transforms: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLStore) saveProtocolCapabilitiesTx(ctx context.Context, tx *sql.Tx, channelID int64, capabilities map[string]map[string]bool) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM channel_protocol_capabilities WHERE channel_id = ?`, channelID); err != nil {
+		return fmt.Errorf("delete old protocol capabilities: %w", err)
+	}
+	for protocolName, values := range capabilities {
+		for capability, enabled := range values {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO channel_protocol_capabilities (channel_id, protocol, capability, enabled) VALUES (?, ?, ?, ?)`,
+				channelID, protocolName, capability, boolToInt(enabled)); err != nil {
+				return fmt.Errorf("insert protocol capability: %w", err)
+			}
+		}
 	}
 	return nil
 }

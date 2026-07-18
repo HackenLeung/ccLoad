@@ -7,6 +7,7 @@
 - 新增渠道排序方案保存/切换功能
 - Docker 镜像、Release 下载和自动更新链路指向本 fork
 - 增强 Codex 客户端到 OpenAI/Anthropic 上游的本地协议转换
+- 为 OpenAI 渠道的 Codex 本地转换提供按渠道勾选的上游能力说明
 - GPT 上下文压缩会跳过模型重定向渠道，按优先级尝试同名原生 GPT 渠道
 - HTTP 200 空响应不会直接结束请求，会继续尝试下一个符合条件的渠道
 
@@ -26,6 +27,23 @@
 - Grok 对嵌套 `oneOf` 工具 Schema 的兼容处理
 - data URL 图片转 Anthropic base64 图片，HTTPS 图片保持 URL
 - OpenAI/Anthropic 多文本块、工具调用和最终正文的正确回填
+
+### Codex → OpenAI 上游能力
+
+当渠道类型为 `OpenAI`、转换方式为 `ccLoad(实验性)`，并勾选了 `Codex` 协议转换时，渠道编辑页会显示“Codex 转 OpenAI 上游能力”：
+
+- 函数工具 (Function Tools)
+- 托管网页搜索 (Hosted Web Search)
+- 工具搜索 (Tool Search)
+- 推理 / Thinking (Reasoning Effort)
+- 提示词缓存 (Prompt Cache)
+
+说明：
+
+- 能力按**渠道**配置，不会按 `grok` / `claude` 等模型名自动判断。
+- 默认全部开启，兼容旧渠道；取消勾选后，ccLoad 会在转发前移除对应请求字段。
+- 例如上游不支持 hosted web search 时，关闭“托管网页搜索”即可，避免把 `web_search` 原样发给不兼容接口。
+- 同一会话若混用“支持工具”和“不支持工具”的渠道，不支持工具的渠道只会收到裁剪后的请求；建议把能力不同的渠道分开路由。
 
 部分高级工具、图片格式、推理字段和上下文压缩仍取决于上游接口能力。使用 `ccLoad(实验性)` 时，如果某个渠道返回错误或没有有效正文/工具输出，ccLoad 会在允许重试的情况下继续尝试后续渠道。
 

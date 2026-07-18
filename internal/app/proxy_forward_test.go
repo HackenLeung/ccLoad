@@ -308,6 +308,76 @@ func TestCodexBodyWithoutThinking_RemovesReasoningControls(t *testing.T) {
 	}
 }
 
+func TestApplyCodexToOpenAICapabilities_FiltersDisabledCapabilities(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+		"model":"grok-4.5",
+		"prompt_cache_key":"cache-1",
+		"reasoning":{"effort":"medium"},
+		"include":["reasoning.encrypted_content"],
+		"tools":[
+			{"type":"web_search"},
+			{"type":"function","name":"shell"},
+			{"type":"tool_search"}
+		],
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"keep"}]},
+			{"type":"web_search_call","id":"ws_1"},
+			{"type":"function_call","name":"shell","arguments":"{}"},
+			{"type":"tool_search_call","arguments":{"query":"x"}},
+			{"type":"reasoning","summary":[]}
+		]
+	}`)
+
+	for _, capability := range model.CodexToOpenAICapabilities {
+		t.Run(capability, func(t *testing.T) {
+			cfg := &model.Config{
+				ProtocolTransformMode: model.ProtocolTransformModeLocal,
+				ProtocolCapabilities:  map[string]map[string]bool{"codex": {capability: false}},
+			}
+			got := applyCodexToOpenAICapabilities(cfg, protocol.Codex, protocol.OpenAI, "/v1/responses", body)
+			text := string(got)
+			switch capability {
+			case model.ProtocolCapabilityFunctionTools:
+				if strings.Contains(text, `"type":"function"`) || strings.Contains(text, `"type":"function_call"`) {
+					t.Fatalf("function tools were not removed: %s", text)
+				}
+			case model.ProtocolCapabilityHostedWebSearch:
+				if strings.Contains(text, `"type":"web_search"`) || strings.Contains(text, `"web_search_call"`) {
+					t.Fatalf("hosted web search was not removed: %s", text)
+				}
+			case model.ProtocolCapabilityToolSearch:
+				if strings.Contains(text, `"type":"tool_search"`) || strings.Contains(text, `"tool_search_call"`) {
+					t.Fatalf("tool search was not removed: %s", text)
+				}
+			case model.ProtocolCapabilityReasoning:
+				if strings.Contains(text, `"reasoning"`) {
+					t.Fatalf("reasoning fields were not removed: %s", text)
+				}
+			case model.ProtocolCapabilityPromptCache:
+				if strings.Contains(text, `"prompt_cache_key"`) {
+					t.Fatalf("prompt cache key was not removed: %s", text)
+				}
+			}
+			if !strings.Contains(text, `"type":"message"`) {
+				t.Fatalf("unrelated message input was removed: %s", text)
+			}
+		})
+	}
+}
+
+func TestApplyCodexToOpenAICapabilities_DefaultKeepsGrokHostedSearch(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"grok-4.5","tools":[{"type":"web_search"}]}`)
+	cfg := &model.Config{ProtocolTransformMode: model.ProtocolTransformModeLocal}
+	got := applyCodexToOpenAICapabilities(cfg, protocol.Codex, protocol.OpenAI, "/v1/responses", body)
+	if string(got) != string(body) {
+		t.Fatalf("legacy/default capabilities should keep hosted search, got %s", got)
+	}
+}
+
 func TestCodexRetryBodyFor400_FallsThroughToThinkingWhenAnyrouterBodyUnchanged(t *testing.T) {
 	body := []byte(`{
 		"model":"gpt-5-codex",
@@ -364,7 +434,7 @@ func TestPrepareCodexResponsesBodyForUpstream_StripsAnyrouterUnsupportedInputBef
 	}
 }
 
-func TestPrepareCodexResponsesBodyForUpstream_StripsHostedWebSearchForGrokModel(t *testing.T) {
+func TestPrepareCodexResponsesBodyForUpstream_DoesNotInferHostedWebSearchFromModel(t *testing.T) {
 	body := []byte(`{
 		"model":"grok-4.5",
 		"tools":[
@@ -378,15 +448,14 @@ func TestPrepareCodexResponsesBodyForUpstream_StripsHostedWebSearchForGrokModel(
 			{"type":"function_call","name":"shell","arguments":"{}"}
 		]
 	}`)
-	// Channel name is irrelevant; strip is based on body model only.
 	cfg := &model.Config{Name: "friendly-name", URL: "https://example.com", ChannelType: util.ChannelTypeCodex}
 
 	got := prepareCodexResponsesBodyForUpstream(cfg, protocol.Codex, "/v1/responses", body)
 	text := string(got)
-	if strings.Contains(text, `"type":"web_search"`) ||
-		strings.Contains(text, `"web_search_call"`) ||
-		strings.Contains(text, `"tool_choice"`) {
-		t.Fatalf("non-openai model should drop hosted web_search before forward, got %s", text)
+	if !strings.Contains(text, `"type":"web_search"`) ||
+		!strings.Contains(text, `"web_search_call"`) ||
+		!strings.Contains(text, `"tool_choice"`) {
+		t.Fatalf("hosted web_search support must not be inferred from model name, got %s", text)
 	}
 	if !strings.Contains(text, `"name":"shell"`) ||
 		!strings.Contains(text, `"type":"message"`) ||

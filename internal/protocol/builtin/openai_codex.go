@@ -75,7 +75,16 @@ func convertCodexRequestToOpenAI(model string, rawJSON []byte, stream bool) ([]b
 	if err != nil {
 		return nil, err
 	}
-	return encodeOpenAIRequest(model, conv, stream)
+	encoded, err := encodeOpenAIRequest(model, conv, stream)
+	if err != nil || req.PromptCacheKey == "" {
+		return encoded, err
+	}
+	var payload map[string]any
+	if err := sonic.Unmarshal(encoded, &payload); err != nil {
+		return nil, err
+	}
+	payload["prompt_cache_key"] = req.PromptCacheKey
+	return marshalStableJSON(payload)
 }
 
 func convertOpenAIResponseToCodexNonStream(_ context.Context, model string, rawReq, _ []byte, rawJSON []byte) ([]byte, error) {

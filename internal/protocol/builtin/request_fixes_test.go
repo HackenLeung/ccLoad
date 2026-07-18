@@ -615,6 +615,7 @@ func TestConvertCodexRequestToOpenAI_FieldsPreserved(t *testing.T) {
 		"max_output_tokens":512,
 		"stop":["DONE"],
 		"user":"u1"
+		,"prompt_cache_key":"cache-key-1"
 	}`)
 	out, err := convertCodexRequestToOpenAI("gpt-5", raw, false)
 	if err != nil {
@@ -625,6 +626,7 @@ func TestConvertCodexRequestToOpenAI_FieldsPreserved(t *testing.T) {
 		`"temperature":0.5`, `"top_p":0.8`, `"max_tokens":512`,
 		`"stop":["DONE"]`, `"user":"u1"`,
 		`"reasoning_effort":"medium"`, `"parallel_tool_calls":false`,
+		`"prompt_cache_key":"cache-key-1"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %s in output: %s", want, body)

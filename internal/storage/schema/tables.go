@@ -83,6 +83,19 @@ func DefineChannelProtocolPrioritiesTable() *TableBuilder {
 		Index("idx_channel_protocol_priorities_protocol_priority", "protocol, priority DESC")
 }
 
+// DefineChannelProtocolCapabilitiesTable defines explicit capability switches
+// for locally transformed client protocols.
+func DefineChannelProtocolCapabilitiesTable() *TableBuilder {
+	return NewTable("channel_protocol_capabilities").
+		Column("channel_id INT NOT NULL").
+		Column("protocol VARCHAR(64) NOT NULL").
+		Column("capability VARCHAR(64) NOT NULL").
+		Column("enabled TINYINT NOT NULL DEFAULT 1").
+		Column("PRIMARY KEY (channel_id, protocol, capability)").
+		Column("FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE").
+		Index("idx_channel_protocol_capabilities_protocol", "protocol, capability")
+}
+
 // DefineChannelURLStatesTable 定义渠道URL运行状态持久化表（当前仅记录手动禁用URL）
 // 注意：url_hash 为 url 的 SHA-256 十六进制摘要（CHAR(64)），用作主键以规避 MySQL utf8mb4
 // InnoDB 索引列 767 字节上限（VARCHAR(500) × 4 = 2000 字节 > 767）。

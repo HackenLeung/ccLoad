@@ -327,6 +327,15 @@
               </div>
             </div>
           </div>
+          <div class="channel-protocol-capabilities" id="protocolCapabilitiesPanel" hidden>
+            <div class="channel-protocol-capabilities__header">
+              <span class="channel-protocol-capabilities__title" data-i18n="channels.protocolCapabilitiesTitle">Codex 转 OpenAI 上游能力</span>
+              <span class="channel-protocol-capabilities__description" data-i18n="channels.protocolCapabilitiesDescription">保留该上游实际支持的能力；取消勾选后，ccLoad 会在转换前移除对应请求字段。</span>
+            </div>
+            <div class="channel-protocol-capabilities__options" id="protocolCapabilitiesContainer">
+              <!-- 动态渲染上游能力选项 -->
+            </div>
+          </div>
         </div>
 
         <div class="form-group channel-editor-group channel-editor-group--urls">

@@ -1558,6 +1558,7 @@ func (s *Server) forwardAttempt(
 	// 转发请求（传递实际的API Key字符串和观测回调）
 	// [FIX] 2026-01: 使用传入的 requestPath（可能已替换模型名）而非 reqCtx.requestPath
 	upstreamProtocol := protocol.Protocol(cfg.ResolveUpstreamProtocol(string(reqCtx.clientProtocol)))
+	bodyToSend = applyCodexToOpenAICapabilities(cfg, reqCtx.clientProtocol, upstreamProtocol, requestPath, bodyToSend)
 	bodyToSend = prepareCodexResponsesBodyForUpstream(cfg, upstreamProtocol, requestPath, bodyToSend)
 	plan, err := protocol.BuildTransformPlan(
 		reqCtx.clientProtocol,
@@ -1916,45 +1917,109 @@ func prepareCodexResponsesBodyForUpstream(cfg *model.Config, upstreamProtocol pr
 			body = stripped
 		}
 	}
-	// Hosted web_search is OpenAI Responses capability. Grok/third-party "codex"
-	// routes often fake empty completed web_search_call and waste the turn.
-	// Strip by actual upstream model only (after redirect), not channel name/URL.
-	if shouldStripHostedWebSearch(body) {
+	return body
+}
+
+func applyCodexToOpenAICapabilities(
+	cfg *model.Config,
+	clientProtocol, upstreamProtocol protocol.Protocol,
+	requestPath string,
+	body []byte,
+) []byte {
+	if cfg == nil || clientProtocol != protocol.Codex || upstreamProtocol != protocol.OpenAI ||
+		cfg.GetProtocolTransformMode() != model.ProtocolTransformModeLocal ||
+		protocol.DetectRequestFamily(requestPath) != protocol.RequestFamilyResponses {
+		return body
+	}
+	if !cfg.ProtocolCapabilityEnabled(string(protocol.Codex), model.ProtocolCapabilityHostedWebSearch) {
 		if stripped, ok := codexBodyWithoutHostedWebSearch(body); ok {
+			body = stripped
+		}
+	}
+	functionTools := cfg.ProtocolCapabilityEnabled(string(protocol.Codex), model.ProtocolCapabilityFunctionTools)
+	toolSearch := cfg.ProtocolCapabilityEnabled(string(protocol.Codex), model.ProtocolCapabilityToolSearch)
+	if !functionTools || !toolSearch {
+		if stripped, ok := codexBodyWithoutDisabledToolCapabilities(body, functionTools, toolSearch); ok {
+			body = stripped
+		}
+	}
+	if !cfg.ProtocolCapabilityEnabled(string(protocol.Codex), model.ProtocolCapabilityReasoning) {
+		if stripped, ok := codexBodyWithoutThinking(body); ok {
+			body = stripped
+		}
+	}
+	if !cfg.ProtocolCapabilityEnabled(string(protocol.Codex), model.ProtocolCapabilityPromptCache) {
+		if stripped, ok := codexBodyWithoutPromptCache(body); ok {
 			body = stripped
 		}
 	}
 	return body
 }
 
-// shouldStripHostedWebSearch decides from the body model name only.
-// Channel name/URL is intentionally ignored: a misnamed channel that still
-// forwards a real gpt-* model must keep hosted web_search.
-func shouldStripHostedWebSearch(body []byte) bool {
+func codexBodyWithoutDisabledToolCapabilities(body []byte, functionTools, toolSearch bool) ([]byte, bool) {
 	var root map[string]any
 	if err := sonic.Unmarshal(body, &root); err != nil {
+		return nil, false
+	}
+	changed := false
+	shouldDropType := func(typ string) bool {
+		typ = strings.ToLower(strings.TrimSpace(typ))
+		if !functionTools {
+			switch typ {
+			case "function", "custom", "namespace", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output":
+				return true
+			}
+		}
+		if !toolSearch {
+			switch typ {
+			case "tool_search", "tool_search_call", "tool_search_output", "additional_tools":
+				return true
+			}
+		}
 		return false
 	}
-	modelName, _ := root["model"].(string)
-	return modelLacksHostedWebSearch(modelName)
-}
-
-func modelLacksHostedWebSearch(modelName string) bool {
-	m := strings.ToLower(strings.TrimSpace(modelName))
-	if m == "" {
-		return false
-	}
-	// Common non-OpenAI families without real Responses hosted web_search.
-	markers := []string{
-		"grok", "claude", "gemini", "deepseek", "qwen", "kimi", "moonshot",
-		"llama", "mistral", "doubao", "hunyuan", "glm-", "ernie", "command-r", "sonar",
-	}
-	for _, marker := range markers {
-		if strings.Contains(m, marker) {
-			return true
+	for _, field := range []string{"tools", "input"} {
+		items, ok := root[field].([]any)
+		if !ok {
+			continue
+		}
+		filtered := make([]any, 0, len(items))
+		for _, item := range items {
+			obj, ok := item.(map[string]any)
+			if ok && shouldDropType(stringMapValue(obj, "type")) {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if len(filtered) == 0 {
+			delete(root, field)
+		} else {
+			root[field] = filtered
 		}
 	}
-	return false
+	if choice, ok := root["tool_choice"].(map[string]any); ok && shouldDropType(stringMapValue(choice, "type")) {
+		delete(root, "tool_choice")
+		changed = true
+	}
+	if !changed {
+		return nil, false
+	}
+	out, err := sonic.Marshal(root)
+	return out, err == nil
+}
+
+func codexBodyWithoutPromptCache(body []byte) ([]byte, bool) {
+	var root map[string]any
+	if err := sonic.Unmarshal(body, &root); err != nil {
+		return nil, false
+	}
+	if _, ok := root["prompt_cache_key"]; !ok {
+		return nil, false
+	}
+	delete(root, "prompt_cache_key")
+	out, err := sonic.Marshal(root)
+	return out, err == nil
 }
 
 func isHostedWebSearchToolType(typ string) bool {

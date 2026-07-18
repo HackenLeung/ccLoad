@@ -11,15 +11,16 @@ import (
 // sqliteMigratableTables 允许增量迁移的SQLite表名白名单
 // 安全设计：防止SQL注入，新增表时需在此处注册
 var sqliteMigratableTables = map[string]bool{
-	"logs":                        true,
-	"auth_tokens":                 true,
-	"channel_models":              true,
-	"channel_protocol_transforms": true,
-	"channel_protocol_priorities": true,
-	"api_keys":                    true,
-	"channels":                    true,
-	"debug_logs":                  true,
-	"schema_migrations":           true,
+	"logs":                          true,
+	"auth_tokens":                   true,
+	"channel_models":                true,
+	"channel_protocol_transforms":   true,
+	"channel_protocol_priorities":   true,
+	"channel_protocol_capabilities": true,
+	"api_keys":                      true,
+	"channels":                      true,
+	"debug_logs":                    true,
+	"schema_migrations":             true,
 }
 
 type sqliteColumnDef struct {

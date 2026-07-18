@@ -30,6 +30,7 @@ type codexRequest struct {
 	FrequencyPenalty  *float64          `json:"frequency_penalty,omitempty"`
 	PresencePenalty   *float64          `json:"presence_penalty,omitempty"`
 	User              string            `json:"user,omitempty"`
+	PromptCacheKey    string            `json:"prompt_cache_key,omitempty"`
 }
 
 type codexReasoning struct {

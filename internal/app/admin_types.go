@@ -18,25 +18,26 @@ import (
 
 // ChannelRequest 渠道创建/更新请求结构
 type ChannelRequest struct {
-	Name                  string                    `json:"name" binding:"required"`
-	APIKey                string                    `json:"api_key"`
-	APIKeys               []ChannelAPIKeyRequest    `json:"api_keys,omitempty"`
-	ChannelType           string                    `json:"channel_type,omitempty"` // 渠道类型:anthropic, codex, gemini
-	ProtocolTransformMode string                    `json:"protocol_transform_mode,omitempty"`
-	ProtocolTransforms    []string                  `json:"protocol_transforms,omitempty"`
-	KeyStrategy           string                    `json:"key_strategy,omitempty"` // Key使用策略:sequential, round_robin
-	URL                   string                    `json:"url" binding:"required"`
-	Priority              int                       `json:"priority"`
-	RPMLimit              int                       `json:"rpm_limit"`                       // 每分钟请求数限制，0表示无限制
-	MaxConcurrency        int                       `json:"max_concurrency"`                 // 最大并发请求数，0表示无限制
-	Models                []model.ModelEntry        `json:"models" binding:"required,min=1"` // 模型配置（包含重定向）
-	Enabled               bool                      `json:"enabled"`
-	ScheduledCheckEnabled bool                      `json:"scheduled_check_enabled"`
-	ScheduledCheckModel   string                    `json:"scheduled_check_model"`
-	DailyCostLimit        float64                   `json:"daily_cost_limit"` // 每日成本限额（美元），0表示无限制
-	CostMultiplier        float64                   `json:"cost_multiplier"`  // 成本倍率（默认1，0=免费，>=0）
-	CustomRequestRules    *model.CustomRequestRules `json:"custom_request_rules,omitempty"`
-	ProxyURL              string                    `json:"proxy_url,omitempty"` // 渠道级代理（http/https/socks5/socks5h）
+	Name                  string                     `json:"name" binding:"required"`
+	APIKey                string                     `json:"api_key"`
+	APIKeys               []ChannelAPIKeyRequest     `json:"api_keys,omitempty"`
+	ChannelType           string                     `json:"channel_type,omitempty"` // 渠道类型:anthropic, codex, gemini
+	ProtocolTransformMode string                     `json:"protocol_transform_mode,omitempty"`
+	ProtocolTransforms    []string                   `json:"protocol_transforms,omitempty"`
+	ProtocolCapabilities  map[string]map[string]bool `json:"protocol_capabilities,omitempty"`
+	KeyStrategy           string                     `json:"key_strategy,omitempty"` // Key使用策略:sequential, round_robin
+	URL                   string                     `json:"url" binding:"required"`
+	Priority              int                        `json:"priority"`
+	RPMLimit              int                        `json:"rpm_limit"`                       // 每分钟请求数限制，0表示无限制
+	MaxConcurrency        int                        `json:"max_concurrency"`                 // 最大并发请求数，0表示无限制
+	Models                []model.ModelEntry         `json:"models" binding:"required,min=1"` // 模型配置（包含重定向）
+	Enabled               bool                       `json:"enabled"`
+	ScheduledCheckEnabled bool                       `json:"scheduled_check_enabled"`
+	ScheduledCheckModel   string                     `json:"scheduled_check_model"`
+	DailyCostLimit        float64                    `json:"daily_cost_limit"` // 每日成本限额（美元），0表示无限制
+	CostMultiplier        float64                    `json:"cost_multiplier"`  // 成本倍率（默认1，0=免费，>=0）
+	CustomRequestRules    *model.CustomRequestRules  `json:"custom_request_rules,omitempty"`
+	ProxyURL              string                     `json:"proxy_url,omitempty"` // 渠道级代理（http/https/socks5/socks5h）
 }
 
 // ChannelAPIKeyRequest describes one submitted API key and its admin-only note.
@@ -231,6 +232,15 @@ func (cr *ChannelRequest) Validate() error {
 		return err
 	}
 	cr.ProtocolTransforms = normalizeProtocolTransforms(cr.ChannelType, cr.ProtocolTransformMode, cr.ProtocolTransforms)
+	cr.ProtocolCapabilities, err = normalizeProtocolCapabilities(
+		cr.ChannelType,
+		cr.ProtocolTransformMode,
+		cr.ProtocolTransforms,
+		cr.ProtocolCapabilities,
+	)
+	if err != nil {
+		return err
+	}
 
 	// [FIX] key_strategy 白名单校验 + 标准化
 	// 设计：空值允许（使用默认值sequential），非空值必须合法
@@ -299,6 +309,7 @@ func (cr *ChannelRequest) ToConfig() *model.Config {
 		ChannelType:           strings.TrimSpace(cr.ChannelType), // 传递渠道类型
 		ProtocolTransformMode: cr.ProtocolTransformMode,
 		ProtocolTransforms:    append([]string(nil), cr.ProtocolTransforms...),
+		ProtocolCapabilities:  cr.ProtocolCapabilities,
 		URL:                   strings.TrimSpace(cr.URL),
 		Priority:              cr.Priority,
 		RPMLimit:              cr.RPMLimit,
@@ -312,6 +323,42 @@ func (cr *ChannelRequest) ToConfig() *model.Config {
 		CustomRequestRules:    cr.CustomRequestRules,
 		ProxyURL:              cr.ProxyURL,
 	}
+}
+
+func normalizeProtocolCapabilities(
+	channelType, transformMode string,
+	transforms []string,
+	raw map[string]map[string]bool,
+) (map[string]map[string]bool, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if channelType != util.ChannelTypeOpenAI ||
+		transformMode != model.ProtocolTransformModeLocal ||
+		!slices.Contains(transforms, string(protocol.Codex)) {
+		return nil, fmt.Errorf("protocol_capabilities are only allowed for local Codex to OpenAI transforms")
+	}
+	allowed := make(map[string]struct{}, len(model.CodexToOpenAICapabilities))
+	for _, capability := range model.CodexToOpenAICapabilities {
+		allowed[capability] = struct{}{}
+	}
+	normalized := make(map[string]map[string]bool, 1)
+	for protocolName, capabilities := range raw {
+		protocolName = strings.TrimSpace(strings.ToLower(protocolName))
+		if protocolName != string(protocol.Codex) {
+			return nil, fmt.Errorf("unsupported protocol_capabilities protocol %q", protocolName)
+		}
+		values := make(map[string]bool, len(capabilities))
+		for capability, enabled := range capabilities {
+			capability = strings.TrimSpace(strings.ToLower(capability))
+			if _, ok := allowed[capability]; !ok {
+				return nil, fmt.Errorf("unsupported Codex to OpenAI capability %q", capability)
+			}
+			values[capability] = enabled
+		}
+		normalized[protocolName] = values
+	}
+	return normalized, nil
 }
 
 const (
