@@ -28,6 +28,7 @@ type codexToAnthropicStreamState struct {
 		cachedTokens             int64
 		cacheCreationInputTokens int64
 		reasoningTokens          int64
+		webSearchRequests        int64
 		seen                     bool
 	}
 }
@@ -123,6 +124,12 @@ func convertCodexResponseToAnthropicNonStream(_ context.Context, model string, r
 	if err != nil {
 		return nil, err
 	}
+	if searchBlocks, webSearchRequests := anthropicWebSearchBlocksFromCodexOutput(resp["output"]); len(searchBlocks) > 0 {
+		blocks = append(searchBlocks, blocks...)
+		if usage, ok := resp["usage"].(map[string]any); ok {
+			usage["server_tool_use"] = map[string]any{"web_search_requests": webSearchRequests}
+		}
+	}
 	stopReason := "end_turn"
 	if rawToolCalls, ok := message["tool_calls"].([]map[string]any); ok && len(rawToolCalls) > 0 {
 		stopReason = "tool_use"
@@ -146,6 +153,13 @@ func convertCodexResponseToAnthropicNonStream(_ context.Context, model string, r
 			"cache_read_input_tokens":     usage.cachedTokens,
 			"cache_creation_input_tokens": usage.cacheCreationInputTokens,
 			"reasoning_tokens":            usage.reasoningTokens,
+		}
+		if rawUsage, ok := resp["usage"].(map[string]any); ok {
+			if serverToolUse, ok := rawUsage["server_tool_use"].(map[string]any); ok {
+				if requests := int64Value(serverToolUse["web_search_requests"]); requests > 0 {
+					out["usage"].(map[string]any)["server_tool_use"] = map[string]any{"web_search_requests": requests}
+				}
+			}
 		}
 	}
 	return sonic.Marshal(out)
@@ -565,6 +579,8 @@ func handleCodexOutputItemDone(st *codexToAnthropicStreamState, payload map[stri
 		return handleCodexReasoningItem(st, item)
 	case "function_call":
 		return handleCodexFunctionCallItem(st, item, rawReq, translatedReq)
+	case "web_search_call":
+		return handleCodexWebSearchCallItem(st, item)
 	default:
 		return nil, nil
 	}
@@ -780,6 +796,85 @@ func handleCodexFunctionCallItem(st *codexToAnthropicStreamState, item map[strin
 	return outputs, nil
 }
 
+func handleCodexWebSearchCallItem(st *codexToAnthropicStreamState, item map[string]any) ([][]byte, error) {
+	blocks, completed, convertible := anthropicWebSearchBlocksFromCodexItem(item)
+	if !convertible {
+		return nil, nil
+	}
+	outputs := make([][]byte, 0, 8)
+	if !st.started {
+		msgStart, err := codexAnthropicMessageStartChunk(st)
+		if err != nil {
+			return nil, err
+		}
+		outputs = append(outputs, msgStart)
+		st.started = true
+	}
+	if thinkingOutputs, err := codexAnthropicFinalizeThinking(st); err != nil {
+		return nil, err
+	} else if len(thinkingOutputs) > 0 {
+		outputs = append(outputs, thinkingOutputs...)
+	}
+	if st.openBlock {
+		blockStop, err := codexAnthropicCloseOpenBlock(st)
+		if err != nil {
+			return nil, err
+		}
+		outputs = append(outputs, blockStop)
+	}
+	for _, block := range blocks {
+		contentBlock := block
+		if block["type"] == "server_tool_use" {
+			contentBlock = cloneMapWithoutKeys(block, "input")
+		}
+		blockStart, err := marshalEventSSE("content_block_start", map[string]any{
+			"type":          "content_block_start",
+			"index":         st.blockIndex,
+			"content_block": contentBlock,
+		})
+		if err != nil {
+			return nil, err
+		}
+		outputs = append(outputs, blockStart)
+		if block["type"] == "server_tool_use" {
+			inputDelta, err := marshalEventSSE("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": st.blockIndex,
+				"delta": map[string]any{
+					"type":         "input_json_delta",
+					"partial_json": mustStableJSONString(block["input"]),
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+			outputs = append(outputs, inputDelta)
+		}
+		blockStop, err := marshalEventSSE("content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": st.blockIndex,
+		})
+		if err != nil {
+			return nil, err
+		}
+		outputs = append(outputs, blockStop)
+		st.blockIndex++
+	}
+	if completed {
+		st.usage.webSearchRequests++
+	}
+	st.lastBlock = "server_tool_use"
+	return outputs, nil
+}
+
+func mustStableJSONString(value any) string {
+	raw, err := marshalStableJSON(value)
+	if err != nil || len(raw) == 0 {
+		return "{}"
+	}
+	return string(raw)
+}
+
 func handleCodexOutputTextDelta(st *codexToAnthropicStreamState, payload map[string]any) ([][]byte, error) {
 	content := stringValue(payload["delta"])
 	if content == "" {
@@ -838,7 +933,7 @@ func codexAnthropicDeltaUsage(st *codexToAnthropicStreamState) anthropicStreamUs
 	if st == nil {
 		return anthropicStreamUsage{}
 	}
-	return anthropicStreamUsageFromCounts(
+	usage := anthropicStreamUsageFromCounts(
 		st.usage.inputTokens,
 		st.usage.outputTokens,
 		st.usage.cachedTokens,
@@ -846,6 +941,8 @@ func codexAnthropicDeltaUsage(st *codexToAnthropicStreamState) anthropicStreamUs
 		st.usage.reasoningTokens,
 		st.usage.seen,
 	)
+	usage.webSearchRequests = st.usage.webSearchRequests
+	return usage
 }
 
 // codexAnthropicStartChunks emits message_start + text content_block_start.

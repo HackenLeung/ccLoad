@@ -123,4 +123,80 @@ func TestRegistryCodexAnthropicStream(t *testing.T) {
 			t.Fatalf("expected raw object json in partial_json, got: %s", body)
 		}
 	})
+
+	t.Run("web search call emits anthropic server tool result and usage", func(t *testing.T) {
+		var state any
+		chunks := []string{
+			"event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"latest bun release\"},\"sources\":[{\"url\":\"https://bun.sh/blog\",\"title\":\"Bun Blog\"}]}}\n\n",
+			"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\"}\n\n",
+			"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5-codex\",\"usage\":{\"input_tokens\":9,\"output_tokens\":3,\"total_tokens\":12}}}\n\n",
+		}
+		var joined bytes.Buffer
+		for _, chunk := range chunks {
+			out, err := reg.TranslateResponseStream(
+				context.Background(),
+				protocol.Codex,
+				protocol.Anthropic,
+				"claude-3-5-sonnet",
+				nil,
+				nil,
+				[]byte(chunk),
+				&state,
+			)
+			if err != nil {
+				t.Fatalf("chunk failed: %v", err)
+			}
+			for _, b := range out {
+				joined.Write(b)
+			}
+		}
+		body := joined.String()
+		for _, want := range []string{
+			`"type":"server_tool_use"`,
+			`"partial_json":"{\"query\":\"latest bun release\"}"`,
+			`"type":"web_search_tool_result"`,
+			`"type":"web_search_result"`,
+			`"web_search_requests":1`,
+			`"stop_reason":"end_turn"`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("expected %s in stream, got: %s", want, body)
+			}
+		}
+	})
+
+	t.Run("non-search web search action is ignored", func(t *testing.T) {
+		var state any
+		chunks := []string{
+			"event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"open_page\",\"url\":\"https://bun.sh/blog\"}}}\n\n",
+			"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"opened page\"}\n\n",
+			"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5-codex\",\"usage\":{\"input_tokens\":9,\"output_tokens\":3,\"total_tokens\":12}}}\n\n",
+		}
+		var joined bytes.Buffer
+		for _, chunk := range chunks {
+			out, err := reg.TranslateResponseStream(
+				context.Background(),
+				protocol.Codex,
+				protocol.Anthropic,
+				"claude-3-5-sonnet",
+				nil,
+				nil,
+				[]byte(chunk),
+				&state,
+			)
+			if err != nil {
+				t.Fatalf("chunk failed: %v", err)
+			}
+			for _, b := range out {
+				joined.Write(b)
+			}
+		}
+		body := joined.String()
+		if strings.Contains(body, `"server_tool_use"`) || strings.Contains(body, `"web_search_tool_result"`) || strings.Contains(body, `"web_search_requests"`) {
+			t.Fatalf("non-search web_search_call must not become anthropic search blocks or usage: %s", body)
+		}
+		if !strings.Contains(body, `"opened page"`) {
+			t.Fatalf("expected text delta to remain, got: %s", body)
+		}
+	})
 }

@@ -1029,6 +1029,100 @@ func TestRegistry_TranslateRequest_CodexBareMessageToAnthropic(t *testing.T) {
 	}
 }
 
+func TestRegistry_TranslateRequest_CodexWebSearchCallHistoryToAnthropic(t *testing.T) {
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	raw := []byte(`{"model":"claude-3-5-sonnet","input":[{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"bun 1.3 release"}},{"type":"message","role":"user","content":[{"type":"input_text","text":"and now?"}]}]}`)
+	got, err := reg.TranslateRequest(protocol.Codex, protocol.Anthropic, "claude-3-5-sonnet", raw, false)
+	if err != nil {
+		t.Fatalf("TranslateRequest failed: %v", err)
+	}
+	if !strings.Contains(string(got), `[web search performed: bun 1.3 release]`) || !strings.Contains(string(got), `"and now?"`) {
+		t.Fatalf("expected web_search_call replay as assistant history text, got %s", got)
+	}
+}
+
+func TestRegistry_TranslateRequest_CodexWebSearchCallHistoryToOpenAI(t *testing.T) {
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	raw := []byte(`{"model":"grok-4.5","input":[{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"迅雷极速版 github"}},{"type":"message","role":"user","content":[{"type":"input_text","text":"继续找"}]}]}`)
+	got, err := reg.TranslateRequest(protocol.Codex, protocol.OpenAI, "grok-4.5", raw, false)
+	if err != nil {
+		t.Fatalf("TranslateRequest failed: %v", err)
+	}
+	if !strings.Contains(string(got), `[web search performed: 迅雷极速版 github]`) || !strings.Contains(string(got), `"继续找"`) {
+		t.Fatalf("expected web_search_call replay as OpenAI assistant history text, got %s", got)
+	}
+	if strings.Contains(string(got), `"web_search_call"`) {
+		t.Fatalf("web_search_call must not leak to OpenAI upstream body: %s", got)
+	}
+}
+
+func TestRegistry_TranslateRequest_CodexNonSearchWebSearchCallHistory(t *testing.T) {
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	raw := []byte(`{"model":"grok-4.5","input":[{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"open_page","url":"https://bun.sh/blog"}},{"type":"message","role":"user","content":[{"type":"input_text","text":"继续"}]}]}`)
+	got, err := reg.TranslateRequest(protocol.Codex, protocol.OpenAI, "grok-4.5", raw, false)
+	if err != nil {
+		t.Fatalf("TranslateRequest failed: %v", err)
+	}
+	body := string(got)
+	if !strings.Contains(body, `[web search open_page performed]`) || strings.Contains(body, `[web search performed]`) {
+		t.Fatalf("expected non-search web_search_call replay without fake search text, got %s", got)
+	}
+}
+
+func TestRegistry_TranslateRequest_AnthropicWebSearchHistoryToCodex(t *testing.T) {
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	raw := []byte(`{"model":"gpt-5-codex","messages":[{"role":"assistant","content":[{"type":"server_tool_use","id":"srv_1","name":"web_search","input":{"query":"latest bun release"}},{"type":"web_search_tool_result","tool_use_id":"srv_1","content":[{"type":"web_search_result","title":"Bun Blog","url":"https://bun.sh/blog"}]}]},{"role":"user","content":[{"type":"text","text":"继续"}]}]}`)
+	got, err := reg.TranslateRequest(protocol.Anthropic, protocol.Codex, "gpt-5-codex", raw, false)
+	if err != nil {
+		t.Fatalf("TranslateRequest failed: %v", err)
+	}
+	body := string(got)
+	for _, want := range []string{
+		`[web search requested: latest bun release]`,
+		`[web search results]\n- Bun Blog: https://bun.sh/blog`,
+		`"text":"继续"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in translated Codex body, got %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"server_tool_use"`) || strings.Contains(body, `"web_search_tool_result"`) {
+		t.Fatalf("anthropic web search blocks must not leak to Codex upstream body: %s", got)
+	}
+}
+
+func TestRegistry_TranslateRequest_AnthropicWebSearchHistoryToOpenAI(t *testing.T) {
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	raw := []byte(`{"model":"grok-4.5","messages":[{"role":"assistant","content":[{"type":"server_tool_use","id":"srv_1","name":"web_search","input":{"queries":["迅雷极速版 github","Xunlei lite github"]}},{"type":"web_search_tool_result","tool_use_id":"srv_1","content":[{"type":"web_search_result","url":"https://github.com/example/repo"}]}]},{"role":"user","content":"继续"}]}`)
+	got, err := reg.TranslateRequest(protocol.Anthropic, protocol.OpenAI, "grok-4.5", raw, false)
+	if err != nil {
+		t.Fatalf("TranslateRequest failed: %v", err)
+	}
+	body := string(got)
+	for _, want := range []string{
+		`[web search requested: 迅雷极速版 github; Xunlei lite github]`,
+		`[web search results]\n- https://github.com/example/repo`,
+		`"继续"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in translated OpenAI body, got %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"server_tool_use"`) || strings.Contains(body, `"web_search_tool_result"`) {
+		t.Fatalf("anthropic web search blocks must not leak to OpenAI upstream body: %s", got)
+	}
+}
+
 func TestRegistry_TranslateResponseNonStream_AnthropicToCodex(t *testing.T) {
 	reg := protocol.NewRegistry()
 	builtin.Register(reg)
@@ -1132,6 +1226,76 @@ func TestRegistry_TranslateResponseNonStream_CodexToAnthropic_StringArguments(t 
 	input := toolUse["input"].(map[string]any)
 	if toolUse["type"] != "tool_use" || input["args"] != `skill: "superpowers:using-superpowers"` || input["skill"] != "superpowers:using-superpowers" {
 		t.Fatalf("expected anthropic tool_use input object, got %s", got)
+	}
+}
+
+func TestRegistry_TranslateResponseNonStream_CodexToAnthropic_WebSearchCall(t *testing.T) {
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	rawResp := []byte(`{"id":"resp_1","object":"response","status":"completed","model":"gpt-5-codex","output":[{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"latest bun release"},"sources":[{"url":"https://bun.sh/blog","title":"Bun Blog"},{"url":"https://github.com/oven-sh/bun/releases"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}],"usage":{"input_tokens":9,"output_tokens":3,"total_tokens":12}}`)
+
+	got, err := reg.TranslateResponseNonStream(context.Background(), protocol.Codex, protocol.Anthropic, "gpt-5-codex", nil, nil, rawResp)
+	if err != nil {
+		t.Fatalf("TranslateResponseNonStream failed: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("unmarshal anthropic payload: %v", err)
+	}
+	content := payload["content"].([]any)
+	if content[0].(map[string]any)["type"] != "server_tool_use" || content[1].(map[string]any)["type"] != "web_search_tool_result" {
+		t.Fatalf("expected web search blocks first, got %+v", content)
+	}
+	if payload["stop_reason"] != "end_turn" {
+		t.Fatalf("web_search_call must not force tool_use stop, got %v", payload["stop_reason"])
+	}
+	usage := payload["usage"].(map[string]any)
+	serverToolUse := usage["server_tool_use"].(map[string]any)
+	if serverToolUse["web_search_requests"].(float64) != 1 {
+		t.Fatalf("expected one web_search request in usage, got %+v", usage)
+	}
+}
+
+func TestRegistry_TranslateResponseNonStream_CodexToAnthropic_WebSearchActionSources(t *testing.T) {
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	rawResp := []byte(`{"id":"resp_1","object":"response","status":"completed","model":"gpt-5-codex","output":[{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"latest bun release","sources":[{"uri":"https://bun.sh/blog","title":"Bun Blog"},{"url":"https://github.com/oven-sh/bun/releases","text":"Bun Releases"}]}},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}],"usage":{"input_tokens":9,"output_tokens":3,"total_tokens":12}}`)
+
+	got, err := reg.TranslateResponseNonStream(context.Background(), protocol.Codex, protocol.Anthropic, "gpt-5-codex", nil, nil, rawResp)
+	if err != nil {
+		t.Fatalf("TranslateResponseNonStream failed: %v", err)
+	}
+	body := string(got)
+	for _, want := range []string{
+		`"url":"https://bun.sh/blog"`,
+		`"title":"Bun Blog"`,
+		`"url":"https://github.com/oven-sh/bun/releases"`,
+		`"title":"Bun Releases"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected action source %s in translated response, got %s", want, got)
+		}
+	}
+}
+
+func TestRegistry_TranslateResponseNonStream_CodexToAnthropic_NonSearchWebSearchActionSkipped(t *testing.T) {
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	rawResp := []byte(`{"id":"resp_1","object":"response","status":"completed","model":"gpt-5-codex","output":[{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"open_page","url":"https://bun.sh/blog"}},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"opened page"}]}],"usage":{"input_tokens":9,"output_tokens":3,"total_tokens":12}}`)
+
+	got, err := reg.TranslateResponseNonStream(context.Background(), protocol.Codex, protocol.Anthropic, "gpt-5-codex", nil, nil, rawResp)
+	if err != nil {
+		t.Fatalf("TranslateResponseNonStream failed: %v", err)
+	}
+	body := string(got)
+	if strings.Contains(body, `"server_tool_use"`) || strings.Contains(body, `"web_search_tool_result"`) || strings.Contains(body, `"web_search_requests"`) {
+		t.Fatalf("non-search web_search_call must not become anthropic search blocks or usage: %s", got)
+	}
+	if !strings.Contains(body, `"opened page"`) {
+		t.Fatalf("expected assistant text to remain, got %s", got)
 	}
 }
 

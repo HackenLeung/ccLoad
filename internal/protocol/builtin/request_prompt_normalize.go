@@ -181,6 +181,11 @@ func normalizeCodexConversation(req codexRequest) (conversation, error) {
 			// Provider-specific reasoning history is opaque to local cross-protocol
 			// transforms. Dropping it is preferable to rejecting every continuation.
 			continue
+		case "web_search_call":
+			conv.Turns = append(conv.Turns, conversationTurn{
+				Role:  "assistant",
+				Parts: []conversationPart{{Kind: partKindText, Text: codexWebSearchHistoryText(item)}},
+			})
 		case "additional_tools":
 			if rawTools, ok := item["tools"]; ok {
 				encoded, marshalErr := marshalStableJSON(rawTools)

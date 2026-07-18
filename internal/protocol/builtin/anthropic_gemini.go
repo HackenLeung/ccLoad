@@ -75,6 +75,7 @@ type anthropicMessagesUsage struct {
 	CacheReadInputTokens     int64                   `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int64                   `json:"cache_creation_input_tokens,omitempty"`
 	ReasoningTokens          int64                   `json:"reasoning_tokens,omitempty"`
+	ServerToolUse            map[string]int64        `json:"server_tool_use,omitempty"`
 	CacheCreation            *anthropicCacheCreation `json:"cache_creation,omitempty"`
 }
 

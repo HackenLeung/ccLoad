@@ -30,6 +30,7 @@ type anthropicStreamUsage struct {
 	cacheReadInputTokens     int64
 	cacheCreationInputTokens int64
 	reasoningTokens          int64
+	webSearchRequests        int64
 }
 
 func anthropicStreamUsageFromCounts(inputTokens, outputTokens, cachedTokens, cacheCreationInputTokens, reasoningTokens int64, seen bool) anthropicStreamUsage {
@@ -58,6 +59,9 @@ func anthropicStreamUsagePayload(usage anthropicStreamUsage) map[string]any {
 	}
 	if usage.reasoningTokens > 0 {
 		payload["reasoning_tokens"] = usage.reasoningTokens
+	}
+	if usage.webSearchRequests > 0 {
+		payload["server_tool_use"] = map[string]any{"web_search_requests": usage.webSearchRequests}
 	}
 	return payload
 }

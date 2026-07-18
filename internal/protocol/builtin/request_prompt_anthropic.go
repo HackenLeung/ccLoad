@@ -456,6 +456,24 @@ func decodeAnthropicContentBlock(block map[string]any) (conversationPart, error)
 			IsError: boolValue(block["is_error"]),
 			Parts:   parts,
 		}}, nil
+	case "server_tool_use":
+		if normalizeRole(stringValue(block["name"])) != "web_search" {
+			return conversationPart{}, nil
+		}
+		if text := anthropicWebSearchServerToolHistoryText(block); text != "" {
+			return conversationPart{Kind: partKindText, Text: text}, nil
+		}
+		return conversationPart{}, nil
+	case "web_search_tool_result":
+		if text := anthropicWebSearchToolResultHistoryText(block); text != "" {
+			return conversationPart{Kind: partKindText, Text: text}, nil
+		}
+		return conversationPart{}, nil
+	case "web_search_result":
+		if text := anthropicWebSearchResultHistoryText(block); text != "" {
+			return conversationPart{Kind: partKindText, Text: text}, nil
+		}
+		return conversationPart{}, nil
 	case "thinking":
 		return newReasoningPart("thinking", stringValue(block["thinking"]), stringValue(block["signature"]), ""), nil
 	case "redacted_thinking":
