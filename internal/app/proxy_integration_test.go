@@ -211,7 +211,7 @@ func TestProxy_Success_NonStreaming(t *testing.T) {
 	}
 }
 
-func TestProxy_GPTCompactionUsesSameModelNativeCodexFallback(t *testing.T) {
+func TestProxy_GPTCompactionTriesUpstreamRedirectBeforeNativeFallback(t *testing.T) {
 	t.Parallel()
 
 	const requestedModel = "gpt-5.5"
@@ -219,17 +219,24 @@ func TestProxy_GPTCompactionUsesSameModelNativeCodexFallback(t *testing.T) {
 	var failingNativeCalls atomic.Int32
 	var successfulNativeCalls atomic.Int32
 	var redirectedModel atomic.Value
+	var redirectedPath atomic.Value
 	var successfulPath atomic.Value
 	var successfulModel atomic.Value
 
 	redirectedUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirectedCalls.Add(1)
+		redirectedPath.Store(r.URL.Path)
 		var body struct {
 			Model string `json:"model"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		redirectedModel.Store(body.Model)
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/responses/compact" {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":{"message":"temporary upstream failure"}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"id":"resp_grok","object":"response","output":[]}`))
 	}))
 	defer redirectedUpstream.Close()
@@ -288,8 +295,14 @@ func TestProxy_GPTCompactionUsesSameModelNativeCodexFallback(t *testing.T) {
 	if compactResponse.Code != http.StatusOK {
 		t.Fatalf("compact status=%d body=%s", compactResponse.Code, compactResponse.Body.String())
 	}
-	if redirectedCalls.Load() != 0 {
-		t.Fatalf("redirected channel received %d compact requests, want 0", redirectedCalls.Load())
+	if redirectedCalls.Load() != 1 {
+		t.Fatalf("redirected channel received %d compact requests, want 1", redirectedCalls.Load())
+	}
+	if got, _ := redirectedPath.Load().(string); got != "/v1/responses/compact" {
+		t.Fatalf("redirected path=%q, want /v1/responses/compact", got)
+	}
+	if got, _ := redirectedModel.Load().(string); got != "grok-4.5" {
+		t.Fatalf("redirected compact model=%q, want grok-4.5", got)
 	}
 	if failingNativeCalls.Load() != 1 || successfulNativeCalls.Load() != 1 {
 		t.Fatalf("native calls: failing=%d successful=%d, want 1 each", failingNativeCalls.Load(), successfulNativeCalls.Load())
@@ -301,39 +314,19 @@ func TestProxy_GPTCompactionUsesSameModelNativeCodexFallback(t *testing.T) {
 		t.Fatalf("successful native model=%q, want %q", got, requestedModel)
 	}
 
-	regularResponse := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses", map[string]any{
-		"model": requestedModel,
-		"input": "regular request",
-	}, nil)
-	if regularResponse.Code != http.StatusOK {
-		t.Fatalf("regular status=%d body=%s", regularResponse.Code, regularResponse.Body.String())
-	}
-	if redirectedCalls.Load() != 1 {
-		t.Fatalf("redirected channel received %d regular requests, want 1", redirectedCalls.Load())
-	}
-	if got, _ := redirectedModel.Load().(string); got != "grok-4.5" {
-		t.Fatalf("redirected regular model=%q, want grok-4.5", got)
-	}
 }
 
-func TestProxy_GPTHostedWebSearchUsesSameModelNativeCodexFallback(t *testing.T) {
+func TestProxy_GPTHostedWebSearchKeepsUpstreamRedirect(t *testing.T) {
 	t.Parallel()
 
 	const requestedModel = "gpt-5.4"
 	var redirectedCalls atomic.Int32
+	var redirectedModel atomic.Value
+	var redirectedHasSearch atomic.Bool
 	var nativeCalls atomic.Int32
-	var nativeModel atomic.Value
-	var nativeHasSearch atomic.Bool
 
 	redirectedUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirectedCalls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_grok","object":"response","output":[]}`))
-	}))
-	defer redirectedUpstream.Close()
-
-	nativeUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nativeCalls.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		var payload struct {
 			Model string `json:"model"`
@@ -342,12 +335,19 @@ func TestProxy_GPTHostedWebSearchUsesSameModelNativeCodexFallback(t *testing.T) 
 			} `json:"tools"`
 		}
 		_ = json.Unmarshal(body, &payload)
-		nativeModel.Store(payload.Model)
+		redirectedModel.Store(payload.Model)
 		for _, tool := range payload.Tools {
 			if tool.Type == "web_search" {
-				nativeHasSearch.Store(true)
+				redirectedHasSearch.Store(true)
 			}
 		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_grok","object":"response","output":[]}`))
+	}))
+	defer redirectedUpstream.Close()
+
+	nativeUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		nativeCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"resp_search","object":"response","output":[]}`))
 	}))
@@ -388,17 +388,17 @@ func TestProxy_GPTHostedWebSearchUsesSameModelNativeCodexFallback(t *testing.T) 
 	if searchResponse.Code != http.StatusOK {
 		t.Fatalf("search status=%d body=%s", searchResponse.Code, searchResponse.Body.String())
 	}
-	if redirectedCalls.Load() != 0 {
-		t.Fatalf("redirected channel received %d search requests, want 0", redirectedCalls.Load())
+	if redirectedCalls.Load() != 1 {
+		t.Fatalf("redirected channel received %d search requests, want 1", redirectedCalls.Load())
 	}
-	if nativeCalls.Load() != 1 {
-		t.Fatalf("native channel received %d search requests, want 1", nativeCalls.Load())
+	if nativeCalls.Load() != 0 {
+		t.Fatalf("native channel received %d search requests, want 0", nativeCalls.Load())
 	}
-	if got, _ := nativeModel.Load().(string); got != requestedModel {
-		t.Fatalf("native model=%q, want %q", got, requestedModel)
+	if got, _ := redirectedModel.Load().(string); got != "grok-4.5" {
+		t.Fatalf("redirected model=%q, want grok-4.5", got)
 	}
-	if !nativeHasSearch.Load() {
-		t.Fatal("native request should keep hosted web_search tool")
+	if !redirectedHasSearch.Load() {
+		t.Fatal("upstream redirect should keep hosted web_search tool")
 	}
 }
 

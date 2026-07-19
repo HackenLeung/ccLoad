@@ -21,6 +21,7 @@ type ChannelCache struct {
 	store                      Store
 	channelsByModel            map[string][]*modelpkg.Config            // model → channels
 	channelsByModelAndProtocol map[string]map[string][]*modelpkg.Config // model → protocol → channels
+	channelsByAliasAndProtocol map[string]map[string][]*modelpkg.Config // normalized alias → protocol → channels
 	channelsByType             map[string][]*modelpkg.Config            // type → channels
 	channelsByExposedProtocol  map[string][]*modelpkg.Config            // protocol → channels
 	allChannels                []*modelpkg.Config                       // 所有渠道
@@ -46,6 +47,7 @@ func NewChannelCache(store Store, ttl time.Duration) *ChannelCache {
 		store:                      store,
 		channelsByModel:            make(map[string][]*modelpkg.Config),
 		channelsByModelAndProtocol: make(map[string]map[string][]*modelpkg.Config),
+		channelsByAliasAndProtocol: make(map[string]map[string][]*modelpkg.Config),
 		channelsByType:             make(map[string][]*modelpkg.Config),
 		channelsByExposedProtocol:  make(map[string][]*modelpkg.Config),
 		allChannels:                make([]*modelpkg.Config, 0),
@@ -173,16 +175,37 @@ func (c *ChannelCache) GetEnabledChannelsByModelAndProtocol(ctx context.Context,
 		return applyProtocolPrioritiesToConfigs(deepCopyConfigs(channels), protocol), nil
 	}
 
-	byProtocol, exists := c.channelsByModelAndProtocol[modelName]
-	if !exists {
-		return []*modelpkg.Config{}, nil
+	var channels []*modelpkg.Config
+	if byProtocol, exists := c.channelsByModelAndProtocol[modelName]; exists {
+		channels = appendUniqueConfigs(channels, byProtocol[protocol]...)
 	}
 
-	channels, exists := byProtocol[protocol]
-	if !exists {
+	if byProtocol, exists := c.channelsByAliasAndProtocol[strings.ToLower(strings.TrimSpace(modelName))]; exists {
+		channels = appendUniqueConfigs(channels, byProtocol[protocol]...)
+	}
+	if len(channels) == 0 {
 		return []*modelpkg.Config{}, nil
 	}
 	return applyProtocolPrioritiesToConfigs(deepCopyConfigs(channels), protocol), nil
+}
+
+func appendUniqueConfigs(dst []*modelpkg.Config, configs ...*modelpkg.Config) []*modelpkg.Config {
+	for _, candidate := range configs {
+		if candidate == nil {
+			continue
+		}
+		duplicate := false
+		for _, existing := range dst {
+			if existing == candidate || (candidate.ID != 0 && existing.ID == candidate.ID) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			dst = append(dst, candidate)
+		}
+	}
+	return dst
 }
 
 func normalizeProtocol(protocol string) string {
@@ -264,6 +287,7 @@ func (c *ChannelCache) refreshCache(ctx context.Context) error {
 	// 构建按类型分组的索引（内部共享指针，对外深拷贝隔离）
 	byModel := make(map[string][]*modelpkg.Config)
 	byModelAndProtocol := make(map[string]map[string][]*modelpkg.Config)
+	byAliasAndProtocol := make(map[string]map[string][]*modelpkg.Config)
 	byType := make(map[string][]*modelpkg.Config)
 	byExposedProtocol := make(map[string][]*modelpkg.Config)
 
@@ -275,14 +299,33 @@ func (c *ChannelCache) refreshCache(ctx context.Context) error {
 			byExposedProtocol[protocol] = append(byExposedProtocol[protocol], channel)
 		}
 
-		// 同时填充模型索引（使用 GetModels() 辅助方法）
-		for _, model := range channel.GetModels() {
-			byModel[model] = append(byModel[model], channel) // 内部共享
-			if _, exists := byModelAndProtocol[model]; !exists {
-				byModelAndProtocol[model] = make(map[string][]*modelpkg.Config)
+		// 上游模型对所有暴露协议都可直接请求；协议别名只在对应协议下生效。
+		for _, entry := range channel.ModelEntries {
+			byModel[entry.Model] = append(byModel[entry.Model], channel) // 内部共享
+			if _, exists := byModelAndProtocol[entry.Model]; !exists {
+				byModelAndProtocol[entry.Model] = make(map[string][]*modelpkg.Config)
 			}
 			for _, protocol := range protocols {
-				byModelAndProtocol[model][protocol] = append(byModelAndProtocol[model][protocol], channel)
+				byModelAndProtocol[entry.Model][protocol] = append(byModelAndProtocol[entry.Model][protocol], channel)
+			}
+			if !entry.RedirectEnabled {
+				continue
+			}
+			for protocol, aliases := range entry.ProtocolAliases {
+				protocol = normalizeProtocol(protocol)
+				if !channel.SupportsProtocol(protocol) {
+					continue
+				}
+				for _, alias := range aliases {
+					alias = strings.ToLower(strings.TrimSpace(alias))
+					if alias == "" {
+						continue
+					}
+					if _, exists := byAliasAndProtocol[alias]; !exists {
+						byAliasAndProtocol[alias] = make(map[string][]*modelpkg.Config)
+					}
+					byAliasAndProtocol[alias][protocol] = append(byAliasAndProtocol[alias][protocol], channel)
+				}
 			}
 		}
 	}
@@ -292,6 +335,7 @@ func (c *ChannelCache) refreshCache(ctx context.Context) error {
 	c.allChannels = allChannels
 	c.channelsByModel = byModel
 	c.channelsByModelAndProtocol = byModelAndProtocol
+	c.channelsByAliasAndProtocol = byAliasAndProtocol
 	c.channelsByType = byType
 	c.channelsByExposedProtocol = byExposedProtocol
 	c.lastUpdate = time.Now()

@@ -258,17 +258,19 @@ func codexPayloadHasHostedWebSearch(root map[string]any) bool {
 	return false
 }
 
-// filterNativeGPTCandidates keeps only channels that can send the requested GPT
-// model unchanged to a native Codex Responses upstream. Used by compact and by
-// other native-only capabilities (hosted search / computer).
+// filterNativeGPTCandidates keeps upstream-mode Codex forwarding intact while
+// requiring ccLoad local transforms to send the requested GPT model unchanged.
+// Used by compact and other native-only capabilities (hosted search / computer).
 func filterNativeGPTCandidates(candidates []*model.Config, modelName string) []*model.Config {
 	filtered := make([]*model.Config, 0, len(candidates))
 	for _, cfg := range candidates {
 		if cfg == nil || !cfg.SupportsModel(modelName, string(protocol.Codex)) {
 			continue
 		}
-		if redirectModel, ok := cfg.GetRedirectModel(modelName, string(protocol.Codex)); ok && redirectModel != modelName {
-			continue
+		if cfg.GetProtocolTransformMode() == model.ProtocolTransformModeLocal {
+			if redirectModel, ok := cfg.GetRedirectModel(modelName, string(protocol.Codex)); ok && redirectModel != modelName {
+				continue
+			}
 		}
 		if cfg.ResolveUpstreamProtocol(string(protocol.Codex)) != string(protocol.Codex) {
 			continue

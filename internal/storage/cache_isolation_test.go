@@ -319,6 +319,66 @@ func TestCacheIsolation_GetEnabledChannelsByModelAndProtocol(t *testing.T) {
 
 }
 
+func TestChannelCache_ProtocolAliasParticipatesInPriorityRouting(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.CreateSQLiteStore(filepath.Join(t.TempDir(), "protocol_alias_priority.db"))
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	configs := []*model.Config{
+		{
+			Name:        "fengwind",
+			URL:         "https://fengwind.example.com",
+			Priority:    150,
+			ChannelType: "codex",
+			ModelEntries: []model.ModelEntry{{
+				Model:           "grok-4.5",
+				RedirectEnabled: true,
+				ProtocolAliases: map[string][]string{"codex": {"gpt-5.5"}},
+			}},
+			Enabled: true,
+		},
+		{
+			Name:         "bus",
+			URL:          "https://bus.example.com",
+			Priority:     70,
+			ChannelType:  "codex",
+			ModelEntries: []model.ModelEntry{{Model: "gpt-5.5"}},
+			Enabled:      true,
+		},
+	}
+	for _, cfg := range configs {
+		if _, err := store.CreateConfig(ctx, cfg); err != nil {
+			t.Fatalf("create %s: %v", cfg.Name, err)
+		}
+	}
+
+	cache := storage.NewChannelCache(store, time.Hour)
+	channels, err := cache.GetEnabledChannelsByModelAndProtocol(ctx, "gpt-5.5", "codex")
+	if err != nil {
+		t.Fatalf("query gpt-5.5: %v", err)
+	}
+	if len(channels) != 2 {
+		t.Fatalf("query gpt-5.5 returned %d channels, want 2", len(channels))
+	}
+	if channels[0].Name != "fengwind" || channels[1].Name != "bus" {
+		t.Fatalf("query gpt-5.5 order = %q, %q", channels[0].Name, channels[1].Name)
+	}
+	if got, ok := channels[0].GetRedirectModel("gpt-5.5", "codex"); !ok || got != "grok-4.5" {
+		t.Fatalf("query gpt-5.5 redirect = (%q, %v), want (grok-4.5, true)", got, ok)
+	}
+
+	channels, err = cache.GetEnabledChannelsByModelAndProtocol(ctx, "GPT-5.5", "codex")
+	if err != nil {
+		t.Fatalf("query uppercase alias: %v", err)
+	}
+	if len(channels) != 1 || channels[0].Name != "fengwind" {
+		t.Fatalf("uppercase alias channels = %#v, want fengwind only", channels)
+	}
+}
+
 // TestCacheIsolation_MultipleQueries 验证多次查询的隔离性
 func TestCacheIsolation_MultipleQueries(t *testing.T) {
 	ctx := context.Background()

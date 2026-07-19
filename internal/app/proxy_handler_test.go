@@ -343,14 +343,40 @@ func TestFilterNativeGPTCandidates(t *testing.T) {
 	const requestedModel = "gpt-5.5"
 	candidates := []*model.Config{
 		{
-			Name:         "redirected-to-grok",
-			ChannelType:  util.ChannelTypeCodex,
-			ModelEntries: []model.ModelEntry{{Model: requestedModel, RedirectModel: "grok-4.5"}},
+			Name:                  "upstream-redirected-to-grok",
+			ChannelType:           util.ChannelTypeCodex,
+			ProtocolTransformMode: model.ProtocolTransformModeUpstream,
+			ModelEntries: []model.ModelEntry{{
+				Model:           "grok-4.5",
+				RedirectEnabled: true,
+				ProtocolAliases: map[string][]string{string(protocol.Codex): {requestedModel}},
+			}},
 		},
 		{
 			Name:         "fuzzy-only",
 			ChannelType:  util.ChannelTypeCodex,
 			ModelEntries: []model.ModelEntry{{Model: "gpt-5.5-preview"}},
+		},
+		{
+			Name:                  "local-redirected-to-grok",
+			ChannelType:           util.ChannelTypeCodex,
+			ProtocolTransformMode: model.ProtocolTransformModeLocal,
+			ModelEntries: []model.ModelEntry{{
+				Model:           "grok-4.5",
+				RedirectEnabled: true,
+				ProtocolAliases: map[string][]string{string(protocol.Codex): {requestedModel}},
+			}},
+		},
+		{
+			Name:                  "upstream-exposed-redirected-to-grok",
+			ChannelType:           util.ChannelTypeOpenAI,
+			ProtocolTransformMode: model.ProtocolTransformModeUpstream,
+			ProtocolTransforms:    []string{string(protocol.Codex)},
+			ModelEntries: []model.ModelEntry{{
+				Model:           "grok-4.5",
+				RedirectEnabled: true,
+				ProtocolAliases: map[string][]string{string(protocol.Codex): {requestedModel}},
+			}},
 		},
 		{
 			Name:                  "local-openai-transform",
@@ -374,11 +400,19 @@ func TestFilterNativeGPTCandidates(t *testing.T) {
 	}
 
 	got := filterNativeGPTCandidates(candidates, requestedModel)
-	if len(got) != 2 {
-		t.Fatalf("filtered candidates=%d, want 2", len(got))
+	if len(got) != 4 {
+		t.Fatalf("filtered candidates=%d, want 4", len(got))
 	}
-	if got[0].Name != "native-codex" || got[1].Name != "native-codex-exposed" {
-		t.Fatalf("unexpected filtered order: %q, %q", got[0].Name, got[1].Name)
+	want := []string{
+		"upstream-redirected-to-grok",
+		"upstream-exposed-redirected-to-grok",
+		"native-codex",
+		"native-codex-exposed",
+	}
+	for i := range want {
+		if got[i].Name != want[i] {
+			t.Fatalf("filtered candidate %d=%q, want %q", i, got[i].Name, want[i])
+		}
 	}
 }
 
