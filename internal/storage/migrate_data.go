@@ -6,8 +6,195 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"time"
 )
+
+type migratedUpstreamModel struct {
+	createdAt   int64
+	hasRedirect bool
+	publicNames map[string]struct{}
+}
+
+// migrateChannelModelAliases 把旧的「对外模型 -> redirect_model」记录整理为
+// 「上游模型 + 按客户端协议暴露的对外模型」。旧重定向原本对所有暴露协议生效，
+// 因此迁移时复制到渠道当前支持的每个协议，保持行为一致。
+func migrateChannelModelAliases(ctx context.Context, db *sql.DB, dialect Dialect) error {
+	applied, err := isMigrationApplied(ctx, db, channelModelAliasesMigrationVersion)
+	if err != nil || applied {
+		return err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	channelProtocols := make(map[int64]map[string]struct{})
+	rows, err := tx.QueryContext(ctx, `SELECT id, channel_type FROM channels`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var channelID int64
+		var channelType string
+		if err := rows.Scan(&channelID, &channelType); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		channelType = strings.ToLower(strings.TrimSpace(channelType))
+		if channelType == "" {
+			channelType = "anthropic"
+		}
+		channelProtocols[channelID] = map[string]struct{}{channelType: {}}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	rows, err = tx.QueryContext(ctx, `SELECT channel_id, protocol FROM channel_protocol_transforms`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var channelID int64
+		var protocolName string
+		if err := rows.Scan(&channelID, &protocolName); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		protocolName = strings.ToLower(strings.TrimSpace(protocolName))
+		if protocolName != "" {
+			if channelProtocols[channelID] == nil {
+				channelProtocols[channelID] = make(map[string]struct{})
+			}
+			channelProtocols[channelID][protocolName] = struct{}{}
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	modelsByChannel := make(map[int64]map[string]*migratedUpstreamModel)
+	legacyRedirects := make(map[int64]map[string]string)
+	rows, err = tx.QueryContext(ctx, `SELECT channel_id, model, redirect_model, created_at FROM channel_models ORDER BY channel_id, created_at, model`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var channelID, createdAt int64
+		var publicModel, redirectModel string
+		if err := rows.Scan(&channelID, &publicModel, &redirectModel, &createdAt); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		publicModel = strings.TrimSpace(publicModel)
+		redirectModel = strings.TrimSpace(redirectModel)
+		upstreamModel := publicModel
+		hasRedirect := redirectModel != "" && redirectModel != publicModel
+		if hasRedirect {
+			upstreamModel = redirectModel
+			if legacyRedirects[channelID] == nil {
+				legacyRedirects[channelID] = make(map[string]string)
+			}
+			legacyRedirects[channelID][publicModel] = upstreamModel
+		}
+		if modelsByChannel[channelID] == nil {
+			modelsByChannel[channelID] = make(map[string]*migratedUpstreamModel)
+		}
+		group := modelsByChannel[channelID][upstreamModel]
+		if group == nil {
+			group = &migratedUpstreamModel{createdAt: createdAt, publicNames: make(map[string]struct{})}
+			modelsByChannel[channelID][upstreamModel] = group
+		}
+		if createdAt < group.createdAt {
+			group.createdAt = createdAt
+		}
+		group.hasRedirect = group.hasRedirect || hasRedirect
+		group.publicNames[publicModel] = struct{}{}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	channelIDs := make([]int64, 0, len(modelsByChannel))
+	for channelID := range modelsByChannel {
+		channelIDs = append(channelIDs, channelID)
+	}
+	sort.Slice(channelIDs, func(i, j int) bool { return channelIDs[i] < channelIDs[j] })
+	for _, channelID := range channelIDs {
+		for publicModel, upstreamModel := range legacyRedirects[channelID] {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE channels SET scheduled_check_model = ? WHERE id = ? AND scheduled_check_model = ?`,
+				upstreamModel, channelID, publicModel); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM channel_model_aliases WHERE channel_id = ?`, channelID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM channel_models WHERE channel_id = ?`, channelID); err != nil {
+			return err
+		}
+
+		groups := modelsByChannel[channelID]
+		upstreamModels := make([]string, 0, len(groups))
+		for upstreamModel := range groups {
+			upstreamModels = append(upstreamModels, upstreamModel)
+		}
+		sort.SliceStable(upstreamModels, func(i, j int) bool {
+			left, right := groups[upstreamModels[i]], groups[upstreamModels[j]]
+			if left.createdAt != right.createdAt {
+				return left.createdAt < right.createdAt
+			}
+			return upstreamModels[i] < upstreamModels[j]
+		})
+
+		for _, upstreamModel := range upstreamModels {
+			group := groups[upstreamModel]
+			redirectEnabled := 0
+			if group.hasRedirect {
+				redirectEnabled = 1
+			}
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO channel_models (channel_id, model, redirect_model, redirect_enabled, created_at) VALUES (?, ?, '', ?, ?)`,
+				channelID, upstreamModel, redirectEnabled, group.createdAt); err != nil {
+				return err
+			}
+			if !group.hasRedirect {
+				continue
+			}
+			protocols := make([]string, 0, len(channelProtocols[channelID]))
+			for protocolName := range channelProtocols[channelID] {
+				protocols = append(protocols, protocolName)
+			}
+			sort.Strings(protocols)
+			publicNames := make([]string, 0, len(group.publicNames))
+			for publicName := range group.publicNames {
+				publicNames = append(publicNames, publicName)
+			}
+			sort.Strings(publicNames)
+			aliasCreatedAt := group.createdAt
+			for _, protocolName := range protocols {
+				for _, publicName := range publicNames {
+					if _, err := tx.ExecContext(ctx,
+						`INSERT INTO channel_model_aliases (channel_id, upstream_model, protocol, public_model, created_at) VALUES (?, ?, ?, ?, ?)`,
+						channelID, upstreamModel, protocolName, publicName, aliasCreatedAt); err != nil {
+						return err
+					}
+					aliasCreatedAt++
+				}
+			}
+		}
+	}
+
+	if err := recordMigrationTx(ctx, tx, channelModelAliasesMigrationVersion, dialect); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
 // backfillLogsMinuteBucketSQLite 分批回填 logs.minute_bucket（SQLite）
 func backfillLogsMinuteBucketSQLite(ctx context.Context, db *sql.DB, batchSize int) error {

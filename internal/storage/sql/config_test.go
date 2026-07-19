@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1323,5 +1324,75 @@ func TestConfig_ModelRedirect(t *testing.T) {
 	}
 	if !foundRedirect {
 		t.Error("expected to find gpt-4 -> gpt-4-turbo redirect")
+	}
+}
+
+func TestConfig_ProtocolModelAliasesRoundTripAndQuery(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t, "protocol-model-aliases.db")
+	ctx := context.Background()
+	created, err := store.CreateConfig(ctx, &model.Config{
+		Name:               "protocol-aliases",
+		URL:                "https://api.example.com",
+		Priority:           10,
+		Enabled:            true,
+		ChannelType:        "openai",
+		ProtocolTransforms: []string{"codex", "anthropic"},
+		ModelEntries: []model.ModelEntry{{
+			Model:           "grok-4.5",
+			RedirectEnabled: true,
+			ProtocolAliases: map[string][]string{
+				"codex":     {"gpt-5.5"},
+				"anthropic": {"claude-opus-4-8", "claude-opus-legacy"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+
+	got, err := store.GetConfig(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	if len(got.ModelEntries) != 1 || !got.ModelEntries[0].RedirectEnabled {
+		t.Fatalf("redirect config not restored: %#v", got.ModelEntries)
+	}
+	aliases := got.ModelEntries[0].ProtocolAliases
+	if !slices.Equal(aliases["codex"], []string{"gpt-5.5"}) ||
+		!slices.Equal(aliases["anthropic"], []string{"claude-opus-4-8", "claude-opus-legacy"}) {
+		t.Fatalf("protocol aliases not restored: %#v", aliases)
+	}
+
+	assertChannelCount := func(modelName, protocolName string, want int) {
+		t.Helper()
+		channels, queryErr := store.GetEnabledChannelsByModelAndProtocol(ctx, modelName, protocolName)
+		if queryErr != nil {
+			t.Fatalf("query %s/%s: %v", protocolName, modelName, queryErr)
+		}
+		if len(channels) != want {
+			t.Fatalf("query %s/%s returned %d channels, want %d", protocolName, modelName, len(channels), want)
+		}
+	}
+	assertChannelCount("gpt-5.5", "codex", 1)
+	assertChannelCount("GPT-5.5", "codex", 1)
+	assertChannelCount("claude-opus-4-8", "anthropic", 1)
+	assertChannelCount("gpt-5.5", "anthropic", 0)
+	assertChannelCount("grok-4.5", "codex", 1)
+
+	got.ModelEntries[0].RedirectEnabled = false
+	if _, err := store.UpdateConfig(ctx, got.ID, got); err != nil {
+		t.Fatalf("disable redirect: %v", err)
+	}
+	assertChannelCount("gpt-5.5", "codex", 0)
+	assertChannelCount("grok-4.5", "codex", 1)
+
+	updated, err := store.GetConfig(ctx, got.ID)
+	if err != nil {
+		t.Fatalf("get disabled redirect config: %v", err)
+	}
+	if updated.ModelEntries[0].RedirectEnabled || !slices.Equal(updated.ModelEntries[0].ProtocolAliases["codex"], []string{"gpt-5.5"}) {
+		t.Fatalf("disabled redirect should retain aliases: %#v", updated.ModelEntries[0])
 	}
 }

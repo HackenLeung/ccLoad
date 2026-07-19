@@ -57,8 +57,10 @@ func NormalizeProtocolTransformMode(value string) string {
 
 // ModelEntry 模型配置条目
 type ModelEntry struct {
-	Model         string `json:"model"`                    // 模型名称
-	RedirectModel string `json:"redirect_model,omitempty"` // 重定向目标模型（空表示不重定向）
+	Model           string              `json:"model"`                      // 真实上游模型名称
+	RedirectModel   string              `json:"redirect_model,omitempty"`   // 旧版兼容字段：对外模型 -> 上游模型
+	RedirectEnabled bool                `json:"redirect_enabled,omitempty"` // 是否启用协议级对外模型
+	ProtocolAliases map[string][]string `json:"protocol_aliases,omitempty"` // 客户端协议 -> 对外模型列表
 }
 
 // Validate 验证并规范化模型条目
@@ -76,6 +78,34 @@ func (e *ModelEntry) Validate() error {
 	e.RedirectModel = strings.TrimSpace(e.RedirectModel)
 	if strings.ContainsAny(e.RedirectModel, "\x00\r\n") {
 		return errors.New("redirect_model contains illegal characters")
+	}
+	if len(e.ProtocolAliases) > 0 {
+		normalized := make(map[string][]string, len(e.ProtocolAliases))
+		for rawProtocol, aliases := range e.ProtocolAliases {
+			protocolName := strings.ToLower(strings.TrimSpace(rawProtocol))
+			switch protocolName {
+			case "anthropic", "openai", "gemini", "codex":
+			default:
+				return errors.New("protocol_aliases contains invalid protocol")
+			}
+			seen := make(map[string]struct{}, len(aliases))
+			for _, rawAlias := range aliases {
+				alias := strings.TrimSpace(rawAlias)
+				if alias == "" {
+					continue
+				}
+				if strings.ContainsAny(alias, "\x00\r\n") {
+					return errors.New("protocol_aliases contains illegal characters")
+				}
+				key := strings.ToLower(alias)
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				normalized[protocolName] = append(normalized[protocolName], alias)
+			}
+		}
+		e.ProtocolAliases = normalized
 	}
 	return nil
 }
@@ -164,6 +194,7 @@ type Config struct {
 
 	// 模型查找索引（懒加载，不序列化）
 	modelIndex map[string]*ModelEntry `json:"-"`
+	aliasIndex map[string]*ModelEntry `json:"-"`
 	indexMu    sync.RWMutex           `json:"-"` // 保护索引的并发访问
 }
 
@@ -200,7 +231,15 @@ func (c *Config) Clone() *Config {
 	}
 	if c.ModelEntries != nil {
 		dst.ModelEntries = make([]ModelEntry, len(c.ModelEntries))
-		copy(dst.ModelEntries, c.ModelEntries)
+		for i := range c.ModelEntries {
+			dst.ModelEntries[i] = c.ModelEntries[i]
+			if len(c.ModelEntries[i].ProtocolAliases) > 0 {
+				dst.ModelEntries[i].ProtocolAliases = make(map[string][]string, len(c.ModelEntries[i].ProtocolAliases))
+				for protocolName, aliases := range c.ModelEntries[i].ProtocolAliases {
+					dst.ModelEntries[i].ProtocolAliases[protocolName] = append([]string(nil), aliases...)
+				}
+			}
+		}
 	}
 	if len(c.ProtocolPriorities) > 0 {
 		dst.ProtocolPriorities = make(map[string]int, len(c.ProtocolPriorities))
@@ -386,30 +425,83 @@ func (c *Config) buildIndexIfNeeded() {
 		return
 	}
 	c.modelIndex = make(map[string]*ModelEntry, len(c.ModelEntries))
+	c.aliasIndex = make(map[string]*ModelEntry)
 	for i := range c.ModelEntries {
-		c.modelIndex[c.ModelEntries[i].Model] = &c.ModelEntries[i]
+		entry := &c.ModelEntries[i]
+		c.modelIndex[entry.Model] = entry
+		if !entry.RedirectEnabled {
+			continue
+		}
+		for protocolName, aliases := range entry.ProtocolAliases {
+			for _, alias := range aliases {
+				c.aliasIndex[modelAliasIndexKey(protocolName, alias)] = entry
+			}
+		}
 	}
+}
+
+func modelAliasIndexKey(protocolName, alias string) string {
+	return strings.ToLower(strings.TrimSpace(protocolName)) + "\x00" + strings.ToLower(strings.TrimSpace(alias))
 }
 
 // GetRedirectModel 获取模型的重定向目标
 // 返回 (目标模型, 是否有重定向)
-func (c *Config) GetRedirectModel(model string) (string, bool) {
+func (c *Config) GetRedirectModel(model string, clientProtocol ...string) (string, bool) {
 	c.buildIndexIfNeeded()
 	c.indexMu.RLock()
 	defer c.indexMu.RUnlock()
+	if len(clientProtocol) > 0 {
+		if entry, exists := c.aliasIndex[modelAliasIndexKey(clientProtocol[0], model)]; exists {
+			return entry.Model, entry.Model != model
+		}
+	}
+	// 兼容旧配置对象：旧语义是 Model 为对外模型、RedirectModel 为上游模型。
 	if entry, exists := c.modelIndex[model]; exists && entry.RedirectModel != "" {
 		return entry.RedirectModel, true
+	}
+	if len(clientProtocol) == 0 {
+		for _, entry := range c.ModelEntries {
+			if !entry.RedirectEnabled {
+				continue
+			}
+			for _, aliases := range entry.ProtocolAliases {
+				if slices.ContainsFunc(aliases, func(alias string) bool {
+					return strings.EqualFold(alias, model)
+				}) {
+					return entry.Model, entry.Model != model
+				}
+			}
+		}
 	}
 	return "", false
 }
 
 // SupportsModel 检查渠道是否支持指定模型
-func (c *Config) SupportsModel(model string) bool {
+func (c *Config) SupportsModel(model string, clientProtocol ...string) bool {
 	c.buildIndexIfNeeded()
 	c.indexMu.RLock()
 	defer c.indexMu.RUnlock()
-	_, exists := c.modelIndex[model]
-	return exists
+	if len(clientProtocol) > 0 {
+		if _, exists := c.aliasIndex[modelAliasIndexKey(clientProtocol[0], model)]; exists {
+			return true
+		}
+	}
+	if _, exists := c.modelIndex[model]; exists {
+		// 真实上游模型始终直接可用；协议别名只是额外入口。
+		return true
+	}
+	if len(clientProtocol) == 0 {
+		for _, entry := range c.ModelEntries {
+			for _, aliases := range entry.ProtocolAliases {
+				if slices.ContainsFunc(aliases, func(alias string) bool {
+					return strings.EqualFold(alias, model)
+				}) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // GetChannelType 默认返回"anthropic"（Claude API）
@@ -470,7 +562,7 @@ type ChannelWithKeys struct {
 // FuzzyMatchModel 模糊匹配模型名称
 // 当精确匹配失败时，查找包含 query 子串的模型，按版本排序返回最新的
 // 返回 (匹配到的模型名, 是否匹配成功)
-func (c *Config) FuzzyMatchModel(query string) (string, bool) {
+func (c *Config) FuzzyMatchModel(query string, clientProtocol ...string) (string, bool) {
 	if query == "" {
 		return "", false
 	}
@@ -479,8 +571,16 @@ func (c *Config) FuzzyMatchModel(query string) (string, bool) {
 	var matches []string
 
 	for _, entry := range c.ModelEntries {
-		if strings.Contains(strings.ToLower(entry.Model), queryLower) {
-			matches = append(matches, entry.Model)
+		if entry.RedirectEnabled && len(clientProtocol) > 0 {
+			for _, alias := range entry.ProtocolAliases[strings.ToLower(strings.TrimSpace(clientProtocol[0]))] {
+				if strings.Contains(strings.ToLower(alias), queryLower) {
+					matches = append(matches, alias)
+				}
+			}
+		}
+		candidate := entry.Model
+		if strings.Contains(strings.ToLower(candidate), queryLower) {
+			matches = append(matches, candidate)
 		}
 	}
 

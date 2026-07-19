@@ -264,10 +264,10 @@ func codexPayloadHasHostedWebSearch(root map[string]any) bool {
 func filterNativeGPTCandidates(candidates []*model.Config, modelName string) []*model.Config {
 	filtered := make([]*model.Config, 0, len(candidates))
 	for _, cfg := range candidates {
-		if cfg == nil || !cfg.SupportsModel(modelName) {
+		if cfg == nil || !cfg.SupportsModel(modelName, string(protocol.Codex)) {
 			continue
 		}
-		if redirectModel, ok := cfg.GetRedirectModel(modelName); ok && redirectModel != modelName {
+		if redirectModel, ok := cfg.GetRedirectModel(modelName, string(protocol.Codex)); ok && redirectModel != modelName {
 			continue
 		}
 		if cfg.ResolveUpstreamProtocol(string(protocol.Codex)) != string(protocol.Codex) {
@@ -352,6 +352,14 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 	if !s.enforceTokenLimits(c, tokenHashStr, originalModel) {
 		return
 	}
+	if s.isGlobalModelDisabled(originalModel) {
+		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
+			"message": "model " + originalModel + " is globally disabled",
+			"type":    "model_disabled",
+			"code":    "model_disabled",
+		}})
+		return
+	}
 
 	// 注册活跃请求（内存状态，用于前端实时显示）
 	activeID := s.activeRequests.Register(startTime, originalModel, c.ClientIP(), isStreaming)
@@ -383,8 +391,20 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 	if requireNativeGPT {
 		cands = filterNativeGPTCandidates(cands, originalModel)
 	}
+	blockedByDisabledUpstream := false
+	if len(cands) > 0 {
+		cands, blockedByDisabledUpstream = s.filterGlobalDisabledModelCandidates(cands, originalModel, string(clientProtocol))
+	}
 
 	if len(cands) == 0 {
+		if blockedByDisabledUpstream {
+			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
+				"message": "all matching upstream models are globally disabled",
+				"type":    "model_disabled",
+				"code":    "model_disabled",
+			}})
+			return
+		}
 		s.AddLogAsync(&model.LogEntry{
 			Time:           model.JSONTime{Time: time.Now()},
 			Model:          originalModel,
@@ -414,22 +434,22 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 	}
 
 	reqCtx := &proxyRequestContext{
-		originalModel:     originalModel,
-		clientProtocol:    clientProtocol,
-		requestMethod:     requestMethod,
-		requestPath:       effectiveRequestPath,
-		rawQuery:          c.Request.URL.RawQuery,
-		body:              all,
-		translatedBody:    all,
-		header:            c.Request.Header,
-		isStreaming:       isStreaming,
-		tokenHash:         tokenHashStr,
-		tokenID:           tokenIDInt64,
-		clientIP:          c.ClientIP(),
-		activeReqID:       activeID,
-		startTime:         startTime,
-		thinkingEffort:    thinkingEffort,
-		requireNativeGPT:    requireNativeGPT,
+		originalModel:    originalModel,
+		clientProtocol:   clientProtocol,
+		requestMethod:    requestMethod,
+		requestPath:      effectiveRequestPath,
+		rawQuery:         c.Request.URL.RawQuery,
+		body:             all,
+		translatedBody:   all,
+		header:           c.Request.Header,
+		isStreaming:      isStreaming,
+		tokenHash:        tokenHashStr,
+		tokenID:          tokenIDInt64,
+		clientIP:         c.ClientIP(),
+		activeReqID:      activeID,
+		startTime:        startTime,
+		thinkingEffort:   thinkingEffort,
+		requireNativeGPT: requireNativeGPT,
 	}
 	reqCtx.observer = &ForwardObserver{
 		OnBytesRead: func(n int64) {
@@ -449,6 +469,20 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 	}
 
 	s.writeFinalProxyResponse(c, reqCtx, originalModel, isStreaming, lastResult, len(cands))
+}
+
+func (s *Server) filterGlobalDisabledModelCandidates(candidates []*model.Config, originalModel, clientProtocol string) ([]*model.Config, bool) {
+	filtered := make([]*model.Config, 0, len(candidates))
+	blocked := false
+	for _, cfg := range candidates {
+		actualModel := s.resolveActualModel(cfg, originalModel, clientProtocol)
+		if s.isGlobalModelDisabled(actualModel) {
+			blocked = true
+			continue
+		}
+		filtered = append(filtered, cfg)
+	}
+	return filtered, blocked
 }
 
 func determineFinalClientStatus(lastResult *proxyResult) int {

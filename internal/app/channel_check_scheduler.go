@@ -107,6 +107,13 @@ func (s *Server) runScheduledChannelChecks(ctx context.Context) error {
 			s.persistDetectionLog(ctx, detectionSkipLog(cfg, model.LogSourceScheduledCheck, modelName, skipReason))
 			continue
 		}
+		actualModel := s.resolveActualModel(cfg, modelName, cfg.GetChannelType())
+		if s.isGlobalModelDisabled(modelName) || s.isGlobalModelDisabled(actualModel) {
+			skipReason = "模型已被全局禁用"
+			log.Printf("[INFO] [channel-check] 跳过渠道 #%d %s：%s", cfg.ID, cfg.Name, skipReason)
+			s.persistDetectionLog(ctx, detectionSkipLog(cfg, model.LogSourceScheduledCheck, modelName, skipReason))
+			continue
+		}
 
 		apiKeys := apiKeysByChannel[cfg.ID]
 		if len(apiKeys) == 0 {

@@ -407,6 +407,7 @@ function initChannelEditorActions() {
         'download-export-keys': () => invokeChannelEditorAction('downloadExportKeys'),
         'close-model-import-modal': () => invokeChannelEditorAction('closeModelImportModal'),
         'confirm-model-import': () => invokeChannelEditorAction('confirmModelImport'),
+        'set-model-add-mode': (actionTarget) => invokeChannelEditorAction('setModelAddMode', actionTarget?.dataset?.mode || 'single'),
         'open-custom-rules-modal': () => invokeChannelEditorAction('openCustomRulesModal'),
         'close-custom-rules-modal': () => invokeChannelEditorAction('closeCustomRulesModal'),
         'apply-custom-rules': () => invokeChannelEditorAction('applyCustomRulesFromForm'),
@@ -449,6 +450,7 @@ function initChannelEditorActions() {
       if (event.target && event.target.name === 'channelType') {
         renderProtocolTransformOptions(event.target.value, getSelectedProtocolTransforms(''));
         syncProtocolCapabilityVisibility();
+        renderRedirectTable();
         scheduleChannelDuplicateHintCheck();
       }
     });
@@ -457,7 +459,10 @@ function initChannelEditorActions() {
 
   const protocolTransformsContainer = document.getElementById('protocolTransformsContainer');
   if (protocolTransformsContainer && !protocolTransformsContainer.dataset.capabilitiesBound) {
-    protocolTransformsContainer.addEventListener('change', syncProtocolCapabilityVisibility);
+    protocolTransformsContainer.addEventListener('change', () => {
+      syncProtocolCapabilityVisibility();
+      renderRedirectTable();
+    });
     protocolTransformsContainer.dataset.capabilitiesBound = '1';
   }
 
@@ -580,11 +585,8 @@ async function editChannel(id) {
   document.getElementById('channelScheduledCheckEnabled').checked = !!channel.scheduled_check_enabled;
   document.getElementById('channelScheduledCheckModel').value = channel.scheduled_check_model || '';
 
-  // 加载模型配置（新格式：models是 {model, redirect_model} 数组）
-  redirectTableData = (channel.models || []).map(m => ({
-    model: m.model || '',
-    redirect_model: m.redirect_model || ''
-  }));
+  // 加载以上游模型为主、按协议保存对外模型的配置。
+  redirectTableData = (channel.models || []).map(normalizeEditorModelRow);
   selectedModelIndices.clear();
   currentModelFilter = '';
   const modelFilterInput = document.getElementById('modelFilterInput');
@@ -780,7 +782,8 @@ async function saveChannel(event) {
     .filter(r => r.model && r.model.trim())
     .map(r => ({
       model: r.model.trim(),
-      redirect_model: (r.redirect_model || '').trim()
+      redirect_enabled: !!r.redirect_enabled,
+      protocol_aliases: cloneProtocolAliases(r.protocol_aliases)
     }));
   const seenModels = new Set();
   const duplicateModels = [];
@@ -795,6 +798,32 @@ async function saveChannel(event) {
   if (duplicateModels.length > 0) {
     const uniqueDuplicates = [...new Set(duplicateModels)];
     const msg = window.t('channels.duplicateModelsNotAllowed', { models: uniqueDuplicates.join(', ') });
+    if (window.showError) {
+      window.showError(msg);
+    } else {
+      await window.showAlertDialog({ message: msg });
+    }
+    return;
+  }
+
+  const publicModelConflicts = findPublicModelUpstreamConflicts(models);
+  if (publicModelConflicts.length > 0) {
+    const msg = window.t('channels.publicModelConflictsWithUpstream', {
+      models: publicModelConflicts.join(', ')
+    });
+    if (window.showError) {
+      window.showError(msg);
+    } else {
+      await window.showAlertDialog({ message: msg });
+    }
+    return;
+  }
+
+  const duplicatePublicModels = findDuplicatePublicModels(models);
+  if (duplicatePublicModels.length > 0) {
+    const msg = window.t('channels.duplicatePublicModelsNotAllowed', {
+      models: duplicatePublicModels.join(', ')
+    });
     if (window.showError) {
       window.showError(msg);
     } else {
@@ -1513,11 +1542,8 @@ async function copyChannel(id, name) {
   document.getElementById('channelScheduledCheckEnabled').checked = !!channel.scheduled_check_enabled;
   document.getElementById('channelScheduledCheckModel').value = channel.scheduled_check_model || '';
 
-  // 加载模型配置（新格式：models是 {model, redirect_model} 数组）
-  redirectTableData = (channel.models || []).map(m => ({
-    model: m.model || '',
-    redirect_model: m.redirect_model || ''
-  }));
+  // 加载以上游模型为主、按协议保存对外模型的配置。
+  redirectTableData = (channel.models || []).map(normalizeEditorModelRow);
   selectedModelIndices.clear();
   currentModelFilter = '';
   const modelFilterInput = document.getElementById('modelFilterInput');
@@ -1570,14 +1596,14 @@ function splitModelMapping(entry) {
 
 // 解析模型输入，支持逗号和换行分隔
 // 支持格式：model 或 model:redirect 或 model->redirect
-// 返回 [{model, redirect_model}] 数组
+// 返回以上游模型为主的编辑行；旧的 public->upstream 写法仍兼容。
 function parseModels(input) {
   const entries = input
     .split(/[,\n]/)
     .map(m => m.trim())
     .filter(m => m);
 
-  const seen = new Set();
+  const seen = new Map();
   const result = [];
 
   for (const entry of entries) {
@@ -1585,12 +1611,22 @@ function parseModels(input) {
     const model = modelRaw.trim();
     if (!model) continue;
 
-    const redirect = redirectRaw.trim() || model;
-    const modelKey = model.toLowerCase();
-
-    if (!seen.has(modelKey)) {
-      seen.add(modelKey);
-      result.push({ model, redirect_model: redirect });
+    const upstreamModel = redirectRaw.trim() || model;
+    const modelKey = upstreamModel.toLowerCase();
+    let row = seen.get(modelKey);
+    if (!row) {
+      row = normalizeEditorModelRow({ model: upstreamModel });
+      seen.set(modelKey, row);
+      result.push(row);
+    }
+    if (redirectRaw.trim()) {
+      row.redirect_enabled = true;
+      getModelEditorProtocols().forEach(protocolName => {
+        row.protocol_aliases[protocolName] ||= [];
+        if (!row.protocol_aliases[protocolName].some(alias => alias.toLowerCase() === model.toLowerCase())) {
+          row.protocol_aliases[protocolName].push(model);
+        }
+      });
     }
   }
 
@@ -1601,11 +1637,57 @@ function addRedirectRow() {
   openModelImportModal();
 }
 
+let modelAddMode = 'single';
+let modelSingleAddCombobox = null;
+
+function getSingleAddModelOptions() {
+  const channelType = document.querySelector('input[name="channelType"]:checked')?.value || 'anthropic';
+  return getCommonPublicModelOptions(channelType);
+}
+
+function ensureModelSingleAddCombobox() {
+  if (modelSingleAddCombobox) return modelSingleAddCombobox;
+  if (typeof createSearchableCombobox !== 'function') return null;
+  modelSingleAddCombobox = createSearchableCombobox({
+    attachMode: true,
+    inputId: 'modelSingleInput',
+    dropdownId: 'modelSingleDropdown',
+    initialValue: '',
+    initialLabel: '',
+    allowCustomInput: true,
+    browseAllOnOpen: true,
+    getOptions: getSingleAddModelOptions,
+    onSelect: () => {}
+  });
+  return modelSingleAddCombobox;
+}
+
+function setModelAddMode(mode) {
+  modelAddMode = mode === 'batch' ? 'batch' : 'single';
+  document.getElementById('modelSingleAddPanel')?.classList.toggle('hidden', modelAddMode !== 'single');
+  document.getElementById('modelBatchAddPanel')?.classList.toggle('hidden', modelAddMode !== 'batch');
+  document.querySelectorAll('.model-add-mode-tab').forEach(tab => {
+    const active = tab.dataset.mode === modelAddMode;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  const target = modelAddMode === 'single'
+    ? document.getElementById('modelSingleInput')
+    : document.getElementById('modelImportTextarea');
+  setTimeout(() => target?.focus(), 50);
+}
+
 function openModelImportModal() {
+  const singleInput = document.getElementById('modelSingleInput');
+  if (singleInput) singleInput.value = '';
   document.getElementById('modelImportTextarea').value = '';
   document.getElementById('modelImportPreviewContent').classList.add('hidden');
+  const combobox = ensureModelSingleAddCombobox();
+  combobox?.setValue('', '');
+  combobox?.refresh();
+  setModelAddMode('single');
   document.getElementById('modelImportModal').classList.add('show');
-  setTimeout(() => document.getElementById('modelImportTextarea').focus(), 100);
+  setTimeout(() => document.getElementById('modelSingleInput')?.focus(), 100);
 }
 
 function closeModelImportModal() {
@@ -1635,16 +1717,25 @@ function setupModelImportPreview() {
   });
 }
 
+function parseModelAddEntries(mode, singleValue, batchValue) {
+  if (mode === 'single') {
+    const modelName = String(singleValue || '').trim();
+    return modelName ? [normalizeEditorModelRow({ model: modelName })] : [];
+  }
+  return parseModels(String(batchValue || ''));
+}
+
 function confirmModelImport() {
-  const textarea = document.getElementById('modelImportTextarea');
-  const input = textarea.value.trim();
+  const singleValue = document.getElementById('modelSingleInput')?.value || '';
+  const batchValue = document.getElementById('modelImportTextarea')?.value || '';
+  const input = modelAddMode === 'single' ? singleValue.trim() : batchValue.trim();
 
   if (!input) {
     window.showNotification(window.t('channels.enterModelName'), 'warning');
     return;
   }
 
-  const newModels = parseModels(input);
+  const newModels = parseModelAddEntries(modelAddMode, singleValue, batchValue);
   if (newModels.length === 0) {
     window.showNotification(window.t('channels.noValidModelParsed'), 'warning');
     return;
@@ -1661,7 +1752,7 @@ function confirmModelImport() {
   newModels.forEach(entry => {
     const modelKey = entry.model.toLowerCase();
     if (!existingModels.has(modelKey)) {
-      redirectTableData.push({ model: entry.model, redirect_model: entry.redirect_model });
+      redirectTableData.push(normalizeEditorModelRow(entry));
       existingModels.add(modelKey);
       addedCount++;
     }
@@ -1699,23 +1790,228 @@ function deleteRedirectRow(index) {
   markChannelFormDirty();
 }
 
+function cloneProtocolAliases(rawAliases) {
+  const result = {};
+  if (!rawAliases || typeof rawAliases !== 'object') return result;
+  Object.entries(rawAliases).forEach(([protocolName, aliases]) => {
+    const normalizedProtocol = String(protocolName || '').trim().toLowerCase();
+    if (!normalizedProtocol) return;
+    const values = Array.isArray(aliases) ? aliases : [aliases];
+    const seen = new Set();
+    result[normalizedProtocol] = values
+      .map(alias => String(alias || '').trim())
+      .filter(alias => {
+        if (!alias) return false;
+        const key = alias.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  });
+  return result;
+}
+
+function findPublicModelUpstreamConflicts(models) {
+  const upstreamOwners = new Map();
+  (models || []).forEach((entry, index) => {
+    const modelName = String(entry?.model || '').trim();
+    if (modelName) upstreamOwners.set(modelName.toLowerCase(), index);
+  });
+
+  const conflicts = new Set();
+  (models || []).forEach((entry, index) => {
+    if (!entry?.redirect_enabled) return;
+    Object.values(entry.protocol_aliases || {}).flat().forEach(alias => {
+      const publicModel = String(alias || '').trim();
+      const upstreamIndex = upstreamOwners.get(publicModel.toLowerCase());
+      if (publicModel && upstreamIndex !== undefined && upstreamIndex !== index) {
+        conflicts.add(publicModel);
+      }
+    });
+  });
+  return [...conflicts];
+}
+
+function findDuplicatePublicModels(models) {
+  const seen = new Map();
+  const duplicates = new Set();
+  (models || []).forEach((entry, index) => {
+    if (!entry?.redirect_enabled) return;
+    Object.entries(entry.protocol_aliases || {}).forEach(([protocolName, aliases]) => {
+      const protocol = String(protocolName || '').trim().toLowerCase();
+      (Array.isArray(aliases) ? aliases : [aliases]).forEach(alias => {
+        const publicModel = String(alias || '').trim();
+        if (!protocol || !publicModel) return;
+        const key = `${protocol}\0${publicModel.toLowerCase()}`;
+        if (seen.has(key) && seen.get(key) !== index) {
+          duplicates.add(publicModel);
+          return;
+        }
+        if (!seen.has(key)) seen.set(key, index);
+      });
+    });
+  });
+  return [...duplicates];
+}
+
+function normalizeEditorModelRow(rawRow) {
+  const row = rawRow || {};
+	const submittedModel = String(row.model || '').trim();
+	const legacyTarget = String(row.redirect_model || '').trim();
+	const hasLegacyRedirect = !row.redirect_enabled && !row.protocol_aliases && legacyTarget && legacyTarget !== submittedModel;
+	const normalized = {
+	  model: hasLegacyRedirect ? legacyTarget : submittedModel,
+    redirect_enabled: !!row.redirect_enabled,
+    protocol_aliases: cloneProtocolAliases(row.protocol_aliases)
+  };
+	if (hasLegacyRedirect) {
+	  normalized.redirect_enabled = true;
+	  getModelEditorProtocols().forEach(protocolName => {
+	    normalized.protocol_aliases[protocolName] = [submittedModel];
+	  });
+	}
+	return normalized;
+}
+
+function getModelEditorProtocols() {
+  const channelType = document.querySelector('input[name="channelType"]:checked')?.value || 'anthropic';
+  const protocols = [channelType, ...getSelectedProtocolTransforms(channelType)];
+  return [...new Set(protocols.map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
+}
+
+function ensureModelAliasesForVisibleProtocols(modelRow) {
+  modelRow.protocol_aliases ||= {};
+  getModelEditorProtocols().forEach(protocolName => {
+    if (!Array.isArray(modelRow.protocol_aliases[protocolName]) || modelRow.protocol_aliases[protocolName].length === 0) {
+      modelRow.protocol_aliases[protocolName] = modelRow.model ? [modelRow.model] : [];
+    }
+  });
+}
+
+function setModelRedirectEnabled(modelRow, enabled) {
+  modelRow.redirect_enabled = !!enabled;
+  if (modelRow.redirect_enabled) ensureModelAliasesForVisibleProtocols(modelRow);
+}
+
+function getCommonPublicModelOptions(protocolName) {
+  const models = (typeof COMMON_MODELS !== 'undefined' && COMMON_MODELS[protocolName]) || [];
+  return models.map(modelName => ({ value: modelName, label: modelName }));
+}
+
+function renderProtocolAliases(rowElement, modelRow, modelIndex) {
+  const panel = rowElement.querySelector('.model-alias-panel');
+  const list = rowElement.querySelector('.model-protocol-alias-list');
+  if (!panel || !list) return;
+  panel.hidden = !modelRow.redirect_enabled;
+  list.innerHTML = '';
+  if (!modelRow.redirect_enabled) return;
+
+  ensureModelAliasesForVisibleProtocols(modelRow);
+  const nativeProtocol = document.querySelector('input[name="channelType"]:checked')?.value || 'anthropic';
+  getModelEditorProtocols().forEach(protocolName => {
+    const section = document.createElement('div');
+    section.className = 'model-protocol-alias-section';
+
+    const protocolLabel = document.createElement('div');
+    protocolLabel.className = 'model-protocol-alias-label';
+    protocolLabel.innerHTML = `<span class="model-protocol-dot"></span><strong>${protocolTransformLabel(protocolName)}</strong>${protocolName === nativeProtocol ? `<span class="model-native-tag">${window.i18nText('channels.protocolTransformNative', '原生')}</span>` : ''}`;
+
+    const inputs = document.createElement('div');
+    inputs.className = 'model-protocol-alias-inputs';
+    const aliases = modelRow.protocol_aliases[protocolName];
+    aliases.forEach((alias, aliasIndex) => {
+      const inputRow = document.createElement('div');
+      inputRow.className = 'model-protocol-alias-input-row';
+      const inputContainer = document.createElement('div');
+      inputContainer.className = 'model-alias-combobox-container';
+      inputRow.appendChild(inputContainer);
+
+      const inputID = `protocol-alias-${modelIndex}-${protocolName}-${aliasIndex}`;
+      const dropdownID = `${inputID}-dropdown`;
+      if (typeof createSearchableCombobox === 'function') {
+        const combobox = createSearchableCombobox({
+          container: inputContainer,
+          inputId: inputID,
+          dropdownId: dropdownID,
+          initialValue: alias,
+          initialLabel: alias,
+          placeholder: modelRow.model || window.t('channels.upstreamModel'),
+          minWidth: 0,
+          allowCustomInput: true,
+          browseAllOnOpen: true,
+          getOptions: () => getCommonPublicModelOptions(protocolName),
+          onSelect: (value) => {
+            modelRow.protocol_aliases[protocolName][aliasIndex] = String(value || '').trim();
+            markChannelFormDirty();
+          }
+        });
+        combobox?.getInput()?.classList.add('protocol-alias-input');
+      } else {
+        const input = document.createElement('input');
+        input.id = inputID;
+        input.type = 'text';
+        input.className = 'modal-inline-input protocol-alias-input';
+        input.value = alias;
+        input.placeholder = modelRow.model || window.t('channels.upstreamModel');
+        input.addEventListener('change', () => {
+          modelRow.protocol_aliases[protocolName][aliasIndex] = input.value.trim();
+          markChannelFormDirty();
+        });
+        inputContainer.appendChild(input);
+      }
+
+      if (aliases.length > 1) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'model-alias-remove-btn';
+        remove.textContent = '×';
+        remove.title = window.t('channels.deleteThisModel');
+        remove.addEventListener('click', () => {
+          modelRow.protocol_aliases[protocolName].splice(aliasIndex, 1);
+          renderProtocolAliases(rowElement, modelRow, modelIndex);
+          markChannelFormDirty();
+        });
+        inputRow.appendChild(remove);
+      }
+      inputs.appendChild(inputRow);
+    });
+
+    const addAlias = document.createElement('button');
+    addAlias.type = 'button';
+    addAlias.className = 'model-alias-add-btn';
+    addAlias.textContent = `+ ${window.i18nText('channels.addPublicModel', '添加对外模型')}`;
+    addAlias.addEventListener('click', () => {
+      modelRow.protocol_aliases[protocolName].push(modelRow.model || '');
+      renderProtocolAliases(rowElement, modelRow, modelIndex);
+      markChannelFormDirty();
+    });
+
+    const arrow = document.createElement('span');
+    arrow.className = 'model-alias-arrow';
+    arrow.textContent = '→';
+    const upstream = document.createElement('span');
+    upstream.className = 'model-alias-upstream-preview';
+    upstream.textContent = modelRow.model;
+
+    section.append(protocolLabel, inputs, arrow, upstream, addAlias);
+    list.appendChild(section);
+  });
+}
+
 function updateRedirectRow(index, field, value) {
   if (redirectTableData[index]) {
     const nextValue = value.trim();
     if (redirectTableData[index][field] === nextValue) return;
 
+	const previousValue = redirectTableData[index][field];
     redirectTableData[index][field] = nextValue;
-
-    // 当模型名称变化时，更新重定向目标的 placeholder
     if (field === 'model') {
-      const tbody = document.getElementById('redirectTableBody');
-      const row = tbody?.children[index];
-      if (row) {
-        const toInput = row.querySelector('.redirect-to-input');
-        if (toInput) {
-          toInput.placeholder = nextValue || window.t('channels.leaveEmptyNoRedirect');
-        }
-      }
+	  Object.values(redirectTableData[index].protocol_aliases || {}).forEach(aliases => {
+	    aliases.forEach((alias, aliasIndex) => {
+	      if (alias === previousValue) aliases[aliasIndex] = nextValue;
+	    });
+	  });
+	  renderRedirectTable();
     }
 
     markChannelFormDirty();
@@ -1734,10 +2030,11 @@ function createRedirectRow(redirect, index) {
     index: index,
     displayIndex: index + 1,
     from: modelName,
-    to: redirect.redirect_model || '',
-    toPlaceholder: modelName || window.t('channels.leaveEmptyNoRedirect'),
-    mobileLabelModel: window.t('channels.modal.modelName'),
-    mobileLabelTarget: window.t('channels.modal.redirectTarget'),
+    redirectState: redirect.redirect_enabled
+      ? window.t('channels.redirectEnabled')
+      : window.t('channels.redirectDisabled'),
+    mobileLabelModel: window.t('channels.upstreamModel'),
+    mobileLabelRedirect: window.t('channels.modelRedirectSwitch'),
     mobileLabelActions: window.t('common.actions')
   };
 
@@ -1752,6 +2049,27 @@ function createRedirectRow(redirect, index) {
   if (checkbox) {
     checkbox.checked = selectedModelIndices.has(index);
   }
+
+  const toggle = row.querySelector('.redirect-enable-toggle');
+  if (toggle) {
+    toggle.checked = !!redirect.redirect_enabled;
+    toggle.addEventListener('change', () => {
+      setModelRedirectEnabled(redirect, toggle.checked);
+      renderRedirectTable();
+      markChannelFormDirty();
+    });
+  }
+  const copyAll = row.querySelector('.model-alias-copy-all');
+  if (copyAll) {
+    copyAll.addEventListener('click', () => {
+      getModelEditorProtocols().forEach(protocolName => {
+        redirect.protocol_aliases[protocolName] = redirect.model ? [redirect.model] : [];
+      });
+      renderRedirectTable();
+      markChannelFormDirty();
+    });
+  }
+  renderProtocolAliases(row, redirect, index);
 
   return row;
 }
@@ -1781,11 +2099,6 @@ function initRedirectTableEventDelegation() {
       return;
     }
 
-    const toInput = e.target.closest('.redirect-to-input');
-    if (toInput) {
-      const index = parseInt(toInput.dataset.index, 10);
-      updateRedirectRow(index, 'redirect_model', toInput.value);
-    }
   });
 
   // 处理删除按钮和转小写按钮点击
@@ -1822,8 +2135,8 @@ function getVisibleModelIndices() {
   return redirectTableData
     .map((item, index) => {
       const model = (item.model || '').toLowerCase();
-      const redirect = (item.redirect_model || '').toLowerCase();
-      if (model.includes(keyword) || redirect.includes(keyword)) {
+      const aliases = Object.values(item.protocol_aliases || {}).flat().join(' ').toLowerCase();
+      if (model.includes(keyword) || aliases.includes(keyword)) {
         return index;
       }
       return null;
@@ -2083,13 +2396,7 @@ function normalizeFetchedModelRows(fetchedModels) {
     if (seenModelKeys.has(modelKey)) continue;
     seenModelKeys.add(modelKey);
 
-    const fetchedRedirect = (typeof entry === 'object' && entry?.redirect_model)
-      ? String(entry.redirect_model).trim()
-      : modelName;
-    rows.push({
-      model: modelName,
-      redirect_model: fetchedRedirect
-    });
+    rows.push(normalizeEditorModelRow({ model: modelName }));
   }
 
   return rows;
@@ -2105,10 +2412,7 @@ function normalizeCurrentModelRows(currentRows) {
     const modelKey = model.toLowerCase();
     if (seenModelKeys.has(modelKey)) return;
     seenModelKeys.add(modelKey);
-    rows.push({
-      model,
-      redirect_model: (row?.redirect_model || '').trim()
-    });
+    rows.push(normalizeEditorModelRow(row));
   });
 
   return { rows, seenModelKeys };
@@ -2117,11 +2421,13 @@ function normalizeCurrentModelRows(currentRows) {
 function mergeModelRowsWithFetchedModels(currentRows, fetchedModels) {
   const current = normalizeCurrentModelRows(currentRows);
   const fetchedRows = normalizeFetchedModelRows(fetchedModels);
+	const currentByKey = new Map(current.rows.map(row => [row.model.toLowerCase(), row]));
 
   if (fetchedRows.length > 0 && fetchedRows.length < current.rows.length) {
     const fetchedKeys = new Set(fetchedRows.map(row => row.model.toLowerCase()));
     const removed = current.rows.filter(row => !fetchedKeys.has(row.model.toLowerCase())).length;
-    return { rows: fetchedRows, added: 0, removed, mode: 'replace' };
+	const rows = fetchedRows.map(row => currentByKey.get(row.model.toLowerCase()) || row);
+	return { rows, added: 0, removed, mode: 'replace' };
   }
 
   const existingModelKeys = new Set(current.seenModelKeys);
@@ -2143,7 +2449,8 @@ function areModelRowsEqual(left, right) {
   return (left || []).every((row, index) => {
     const other = right[index] || {};
     return (row.model || '') === (other.model || '') &&
-      (row.redirect_model || '') === (other.redirect_model || '');
+      !!row.redirect_enabled === !!other.redirect_enabled &&
+      JSON.stringify(cloneProtocolAliases(row.protocol_aliases)) === JSON.stringify(cloneProtocolAliases(other.protocol_aliases));
   });
 }
 
@@ -2190,10 +2497,7 @@ async function fetchModelsFromAPI() {
       throw new Error(window.t('channels.noModelsFromApi'));
     }
 
-    const previousRows = redirectTableData.map(row => ({
-      model: row.model || '',
-      redirect_model: row.redirect_model || ''
-    }));
+    const previousRows = redirectTableData.map(normalizeEditorModelRow);
     const replacement = mergeModelRowsWithFetchedModels(redirectTableData, data.models);
     if (replacement.rows.length === 0) {
       throw new Error(window.t('channels.noModelsFromApi'));
@@ -2249,6 +2553,13 @@ const COMMON_MODELS = {
     'gpt-5.6-luna',
     'gpt-5.6-terra'
   ],
+  openai: [
+    'gpt-4o',
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5.5',
+    'grok-4.5'
+  ],
   gemini: [
     'gemini-3.5-flash',
     'gemini-2.5-pro',
@@ -2282,7 +2593,7 @@ function addCommonModels() {
   for (const modelName of commonModels) {
     const modelKey = modelName.toLowerCase();
     if (!existingModels.has(modelKey)) {
-      redirectTableData.push({ model: modelName, redirect_model: '' });
+      redirectTableData.push(normalizeEditorModelRow({ model: modelName }));
       existingModels.add(modelKey);
       addedCount++;
     }
@@ -2297,5 +2608,14 @@ function addCommonModels() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { addCommonModels };
+  module.exports = {
+    COMMON_MODELS,
+    addCommonModels,
+    getCommonPublicModelOptions,
+    findPublicModelUpstreamConflicts,
+    findDuplicatePublicModels,
+    normalizeEditorModelRow,
+    parseModelAddEntries,
+    setModelRedirectEnabled
+  };
 }

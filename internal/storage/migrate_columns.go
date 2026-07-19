@@ -14,6 +14,7 @@ var sqliteMigratableTables = map[string]bool{
 	"logs":                          true,
 	"auth_tokens":                   true,
 	"channel_models":                true,
+	"channel_model_aliases":         true,
 	"channel_protocol_transforms":   true,
 	"channel_protocol_priorities":   true,
 	"channel_protocol_capabilities": true,
@@ -524,6 +525,12 @@ func ensureChannelModelsRedirectField(ctx context.Context, db *sql.DB, dialect D
 	return ensureColumn(ctx, db, dialect, "channel_models", "redirect_model",
 		"VARCHAR(191) NOT NULL DEFAULT '' COMMENT '重定向目标模型(空表示不重定向)'",
 		"TEXT NOT NULL DEFAULT ''")
+}
+
+func ensureChannelModelsRedirectEnabled(ctx context.Context, db *sql.DB, dialect Dialect) error {
+	return ensureColumn(ctx, db, dialect, "channel_models", "redirect_enabled",
+		"TINYINT NOT NULL DEFAULT 0",
+		"INTEGER NOT NULL DEFAULT 0")
 }
 
 func ensureAPIKeysDisabled(ctx context.Context, db *sql.DB, dialect Dialect) error {

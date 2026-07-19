@@ -33,7 +33,7 @@ func TestMigrate_SQLite_FullFlow(t *testing.T) {
 	}
 
 	// 验证核心表存在
-	tables := []string{"channels", "api_keys", "channel_models", "auth_tokens",
+	tables := []string{"channels", "api_keys", "channel_models", "channel_model_aliases", "global_disabled_models", "auth_tokens",
 		"system_settings", "web_sessions", "logs", "schema_migrations"}
 	for _, tbl := range tables {
 		var name string
@@ -63,6 +63,58 @@ func TestMigrate_SQLite_FullFlow(t *testing.T) {
 	}
 	if val != "7" {
 		t.Errorf("log_retention_days=%q, want %q", val, "7")
+	}
+}
+
+func TestMigrateChannelModelAliases_PreservesLegacyRedirectsByProtocol(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	if err := migrate(ctx, db, DialectSQLite); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, channelModelAliasesMigrationVersion); err != nil {
+		t.Fatalf("delete migration marker: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO channels(id,name,url,channel_type,protocol_transform_mode,enabled,scheduled_check_model,created_at,updated_at)
+		VALUES(91,'legacy','https://example.com','openai','local',1,'gpt-5.5',1,1)
+	`); err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO channel_protocol_transforms(channel_id,protocol) VALUES(91,'codex')`); err != nil {
+		t.Fatalf("insert transform: %v", err)
+	}
+	for i, values := range [][2]string{{"gpt-5.5", "grok-4.5"}, {"claude-opus-4-8", "grok-4.5"}, {"grok-4.5", ""}} {
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO channel_models(channel_id,model,redirect_model,redirect_enabled,created_at) VALUES(91,?,?,0,?)`,
+			values[0], values[1], i+1); err != nil {
+			t.Fatalf("insert legacy model: %v", err)
+		}
+	}
+
+	if err := migrateChannelModelAliases(ctx, db, DialectSQLite); err != nil {
+		t.Fatalf("migrate aliases: %v", err)
+	}
+	var upstream string
+	var enabled, aliasCount int
+	if err := db.QueryRowContext(ctx, `SELECT model,redirect_enabled FROM channel_models WHERE channel_id=91`).Scan(&upstream, &enabled); err != nil {
+		t.Fatalf("load migrated upstream: %v", err)
+	}
+	if upstream != "grok-4.5" || enabled != 1 {
+		t.Fatalf("migrated model=(%q,%d), want (grok-4.5,1)", upstream, enabled)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM channel_model_aliases WHERE channel_id=91`).Scan(&aliasCount); err != nil {
+		t.Fatalf("count aliases: %v", err)
+	}
+	if aliasCount != 6 {
+		t.Fatalf("alias count=%d, want 6", aliasCount)
+	}
+	var scheduled string
+	if err := db.QueryRowContext(ctx, `SELECT scheduled_check_model FROM channels WHERE id=91`).Scan(&scheduled); err != nil {
+		t.Fatalf("load scheduled model: %v", err)
+	}
+	if scheduled != "grok-4.5" {
+		t.Fatalf("scheduled_check_model=%q, want grok-4.5", scheduled)
 	}
 }
 

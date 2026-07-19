@@ -121,7 +121,7 @@ func (s *Server) selectCandidatesByModelAndType(ctx context.Context, model strin
 			if channelType != "" && !cfg.SupportsProtocol(normalizedType) {
 				continue
 			}
-			if s.configSupportsModelWithFuzzyMatch(cfg, model) {
+			if s.configSupportsModelWithFuzzyMatch(cfg, model, normalizedType) {
 				allCandidates = append(allCandidates, cfg)
 			}
 		}

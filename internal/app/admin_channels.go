@@ -144,15 +144,6 @@ func (s *Server) handleListChannels(c *gin.Context) {
 		out = append(out, ectx.enrichChannel(cfg))
 	}
 
-	// 填充空的重定向模型为请求模型（方便前端编辑时显示）
-	for i := range out {
-		for j := range out[i].ModelEntries {
-			if out[i].Config.ModelEntries[j].RedirectModel == "" {
-				out[i].Config.ModelEntries[j].RedirectModel = out[i].Config.ModelEntries[j].Model
-			}
-		}
-	}
-
 	if hasPagination {
 		RespondPaginated(c, http.StatusOK, out, totalCount)
 		return
@@ -485,13 +476,6 @@ func (s *Server) handleGetChannel(c *gin.Context, id int64) {
 		RespondError(c, http.StatusNotFound, fmt.Errorf("channel not found"))
 		return
 	}
-	// 填充空的重定向模型为请求模型（方便前端编辑时显示）
-	for i := range cfg.ModelEntries {
-		if cfg.ModelEntries[i].RedirectModel == "" {
-			cfg.ModelEntries[i].RedirectModel = cfg.ModelEntries[i].Model
-		}
-	}
-
 	apiKeys, err := s.getAPIKeys(c.Request.Context(), id)
 	if err != nil {
 		RespondError(c, http.StatusInternalServerError, err)

@@ -59,8 +59,8 @@ func TestAdminModels_FetchModelsPreview(t *testing.T) {
 		if !resp.Success || resp.Data.Source != "api" || len(resp.Data.Models) != 2 {
 			t.Fatalf("unexpected resp: %+v", resp)
 		}
-		if resp.Data.Models[0].RedirectModel != resp.Data.Models[0].Model {
-			t.Fatalf("expected redirect_model filled, got %+v", resp.Data.Models[0])
+		if resp.Data.Models[0].RedirectModel != "" || resp.Data.Models[0].RedirectEnabled {
+			t.Fatalf("expected fetched model to remain a direct upstream model, got %+v", resp.Data.Models[0])
 		}
 		if gotAuth != "Bearer sk-test" {
 			t.Fatalf("Authorization=%q, want %q", gotAuth, "Bearer sk-test")

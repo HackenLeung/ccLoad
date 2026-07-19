@@ -356,6 +356,30 @@ func (h *HybridStore) CleanupOrphanedURLStates(ctx context.Context, channelID in
 	return nil
 }
 
+func (h *HybridStore) ListGlobalDisabledModels(ctx context.Context) ([]model.GlobalDisabledModel, error) {
+	return h.sqlite.ListGlobalDisabledModels(ctx)
+}
+
+func (h *HybridStore) UpsertGlobalDisabledModel(ctx context.Context, entry model.GlobalDisabledModel) error {
+	if err := h.mysql.UpsertGlobalDisabledModel(ctx, entry); err != nil {
+		return err
+	}
+	h.syncToSQLite("UpsertGlobalDisabledModel", func() error {
+		return h.sqlite.UpsertGlobalDisabledModel(ctx, entry)
+	})
+	return nil
+}
+
+func (h *HybridStore) DeleteGlobalDisabledModel(ctx context.Context, modelName string) error {
+	if err := h.mysql.DeleteGlobalDisabledModel(ctx, modelName); err != nil {
+		return err
+	}
+	h.syncToSQLite("DeleteGlobalDisabledModel", func() error {
+		return h.sqlite.DeleteGlobalDisabledModel(ctx, modelName)
+	})
+	return nil
+}
+
 // === API Key Management ===
 
 func (h *HybridStore) GetAPIKeys(ctx context.Context, channelID int64) ([]*model.APIKey, error) {

@@ -178,20 +178,9 @@ func (cr *ChannelRequest) Validate() error {
 	if len(cr.Models) == 0 {
 		return fmt.Errorf("models cannot be empty")
 	}
-	// 验证模型条目（DRY: 使用 ModelEntry.Validate()）
-	for i := range cr.Models {
-		if err := cr.Models[i].Validate(); err != nil {
-			return fmt.Errorf("models[%d]: %w", i, err)
-		}
-	}
-	// Fail-Fast: 同一渠道内模型名必须唯一（大小写不敏感，匹配数据库唯一约束语义）
-	seenModels := make(map[string]int, len(cr.Models))
-	for i := range cr.Models {
-		modelKey := strings.ToLower(cr.Models[i].Model)
-		if firstIdx, exists := seenModels[modelKey]; exists {
-			return fmt.Errorf("models[%d]: duplicate model %q (already defined at models[%d])", i, cr.Models[i].Model, firstIdx)
-		}
-		seenModels[modelKey] = i
+	seenModels, err := validateChannelModelEntries(cr.Models)
+	if err != nil {
+		return err
 	}
 
 	cr.ScheduledCheckModel = strings.TrimSpace(cr.ScheduledCheckModel)
@@ -292,16 +281,56 @@ func (cr *ChannelRequest) Validate() error {
 	return nil
 }
 
-// ToConfig 转换为Config结构(不包含API Key,API Key单独处理)
-// 规范化重定向模型：如果 RedirectModel == Model 则清空（透传语义，节省存储）
-func (cr *ChannelRequest) ToConfig() *model.Config {
-	// 规范化模型条目：同名重定向清空为透传
-	normalizedModels := make([]model.ModelEntry, len(cr.Models))
-	for i, m := range cr.Models {
-		normalizedModels[i] = m
-		if m.RedirectModel == m.Model {
-			normalizedModels[i].RedirectModel = ""
+func validateChannelModelEntries(entries []model.ModelEntry) (map[string]int, error) {
+	seenModels := make(map[string]int, len(entries))
+	for i := range entries {
+		if err := entries[i].Validate(); err != nil {
+			return nil, fmt.Errorf("models[%d]: %w", i, err)
 		}
+		modelKey := strings.ToLower(entries[i].Model)
+		if firstIdx, exists := seenModels[modelKey]; exists {
+			return nil, fmt.Errorf("models[%d]: duplicate model %q (already defined at models[%d])", i, entries[i].Model, firstIdx)
+		}
+		seenModels[modelKey] = i
+	}
+
+	seenProtocolAliases := make(map[string]int)
+	for i := range entries {
+		if !entries[i].RedirectEnabled {
+			continue
+		}
+		aliasCount := 0
+		for protocolName, aliases := range entries[i].ProtocolAliases {
+			for _, alias := range aliases {
+				aliasCount++
+				aliasModelKey := strings.ToLower(alias)
+				if upstreamIdx, exists := seenModels[aliasModelKey]; exists && upstreamIdx != i {
+					return nil, fmt.Errorf("models[%d]: public model %q for protocol %q conflicts with upstream model at models[%d]", i, alias, protocolName, upstreamIdx)
+				}
+				key := protocolName + "\x00" + aliasModelKey
+				if firstIdx, exists := seenProtocolAliases[key]; exists {
+					return nil, fmt.Errorf("models[%d]: duplicate public model %q for protocol %q (already defined at models[%d])", i, alias, protocolName, firstIdx)
+				}
+				seenProtocolAliases[key] = i
+			}
+		}
+		if aliasCount == 0 {
+			return nil, fmt.Errorf("models[%d]: redirect_enabled requires at least one protocol alias", i)
+		}
+	}
+	return seenModels, nil
+}
+
+// ToConfig 转换为Config结构(不包含API Key,API Key单独处理)
+func (cr *ChannelRequest) ToConfig() *model.Config {
+	protocols := append([]string{util.NormalizeChannelType(cr.ChannelType)}, cr.ProtocolTransforms...)
+	if protocols[0] == "" {
+		protocols[0] = string(protocol.Anthropic)
+	}
+	normalizedModels, legacyRedirects := normalizeModelEntries(cr.Models, protocols)
+	scheduledCheckModel := cr.ScheduledCheckModel
+	if redirected, ok := legacyRedirects[scheduledCheckModel]; ok {
+		scheduledCheckModel = redirected
 	}
 
 	return &model.Config{
@@ -317,12 +346,96 @@ func (cr *ChannelRequest) ToConfig() *model.Config {
 		ModelEntries:          normalizedModels,
 		Enabled:               cr.Enabled,
 		ScheduledCheckEnabled: cr.ScheduledCheckEnabled,
-		ScheduledCheckModel:   cr.ScheduledCheckModel,
+		ScheduledCheckModel:   scheduledCheckModel,
 		DailyCostLimit:        cr.DailyCostLimit,
 		CostMultiplier:        cr.CostMultiplier,
 		CustomRequestRules:    cr.CustomRequestRules,
 		ProxyURL:              cr.ProxyURL,
 	}
+}
+
+type normalizedModelGroup struct {
+	entry          model.ModelEntry
+	legacyNames    []string
+	legacyRedirect bool
+}
+
+func normalizeModelEntries(entries []model.ModelEntry, protocols []string) ([]model.ModelEntry, map[string]string) {
+	groups := make([]normalizedModelGroup, 0, len(entries))
+	groupIndex := make(map[string]int, len(entries))
+	legacyRedirects := make(map[string]string)
+
+	for _, submitted := range entries {
+		isProtocolModel := submitted.RedirectEnabled || len(submitted.ProtocolAliases) > 0
+		upstreamModel := submitted.Model
+		legacyRedirect := !isProtocolModel && submitted.RedirectModel != "" && submitted.RedirectModel != submitted.Model
+		if legacyRedirect {
+			upstreamModel = submitted.RedirectModel
+			legacyRedirects[submitted.Model] = upstreamModel
+		}
+		key := strings.ToLower(upstreamModel)
+		idx, exists := groupIndex[key]
+		if !exists {
+			idx = len(groups)
+			groupIndex[key] = idx
+			groups = append(groups, normalizedModelGroup{entry: model.ModelEntry{
+				Model:           upstreamModel,
+				RedirectEnabled: submitted.RedirectEnabled,
+				ProtocolAliases: make(map[string][]string),
+			}})
+		}
+		group := &groups[idx]
+		group.entry.RedirectEnabled = group.entry.RedirectEnabled || submitted.RedirectEnabled
+		for protocolName, aliases := range submitted.ProtocolAliases {
+			group.entry.ProtocolAliases[protocolName] = appendUniqueModelAliases(group.entry.ProtocolAliases[protocolName], aliases...)
+		}
+		if !isProtocolModel {
+			group.legacyNames = appendUniqueModelAliases(group.legacyNames, submitted.Model)
+			group.legacyRedirect = group.legacyRedirect || legacyRedirect
+		}
+	}
+
+	normalized := make([]model.ModelEntry, 0, len(groups))
+	for i := range groups {
+		group := &groups[i]
+		if group.legacyRedirect {
+			group.entry.RedirectEnabled = true
+			for _, protocolName := range protocols {
+				protocolName = strings.ToLower(strings.TrimSpace(protocolName))
+				if protocolName == "" {
+					continue
+				}
+				group.entry.ProtocolAliases[protocolName] = appendUniqueModelAliases(
+					group.entry.ProtocolAliases[protocolName], group.legacyNames...,
+				)
+			}
+		}
+		if len(group.entry.ProtocolAliases) == 0 {
+			group.entry.ProtocolAliases = nil
+		}
+		normalized = append(normalized, group.entry)
+	}
+	return normalized, legacyRedirects
+}
+
+func appendUniqueModelAliases(existing []string, values ...string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(values))
+	for _, value := range existing {
+		seen[strings.ToLower(value)] = struct{}{}
+	}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		existing = append(existing, value)
+	}
+	return existing
 }
 
 func normalizeProtocolCapabilities(

@@ -1748,6 +1748,7 @@ window.WebAuth = window.WebAuth || {
    * @param {boolean} [config.attachMode] - 附着模式，使用已存在的 HTML 元素
    * @param {boolean} [config.allowCustomInput] - 允许提交非下拉选项的自定义输入
    * @param {boolean} [config.commitEmptyAsFirst] - 输入为空回车/失焦时提交第一项（通常为“全部”），覆盖默认的取消/恢复行为
+   * @param {boolean} [config.browseAllOnOpen] - 每次点击先清空显示值，以便浏览全部选项；取消时恢复原值
    * @returns {Object} 组件实例
    */
   function createSearchableCombobox(config) {
@@ -1764,7 +1765,8 @@ window.WebAuth = window.WebAuth || {
       minWidth = 150,
       attachMode = false,
       allowCustomInput = false,
-      commitEmptyAsFirst = false
+      commitEmptyAsFirst = false,
+      browseAllOnOpen = false
     } = config;
 
     let input, dropdown, wrapper, dropdownHome, container = null;
@@ -1806,8 +1808,8 @@ window.WebAuth = window.WebAuth || {
         </div>
       `;
 
-      input = document.getElementById(inputId);
-      dropdown = document.getElementById(dropdownId);
+      input = container.querySelector('.filter-combobox');
+      dropdown = container.querySelector('.filter-dropdown');
       wrapper = input.closest('.filter-combobox-wrapper');
       dropdownHome = dropdown.parentElement;
     }
@@ -1850,7 +1852,7 @@ window.WebAuth = window.WebAuth || {
       // - 当前值为空（全量态）→ 清空，避免把“所有渠道”这类占位标签当成过滤关键字
       // - 当前值精确命中下拉选项（用户已从下拉选中而非输入自定义词）→ 清空，便于再次浏览全部选项
       // - 其余情况（自定义搜索词）→ 保留以便继续编辑
-      let shouldClear = !allowCustomInput;
+      let shouldClear = browseAllOnOpen || !allowCustomInput;
       if (allowCustomInput) {
         const trimmedCurrent = String(currentValue || '').trim();
         if (!trimmedCurrent) {

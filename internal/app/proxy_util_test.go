@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ccLoad/internal/model"
+	"ccLoad/internal/protocol"
 	"ccLoad/internal/util"
 )
 
@@ -490,11 +491,74 @@ func TestPrepareRequestBody_FuzzyMatch(t *testing.T) {
 		name            string
 		modelFuzzyMatch bool
 		configModels    []model.ModelEntry
+		clientProtocol  protocol.Protocol
 		originalModel   string
 		requestBody     string
 		wantModel       string
 		wantBodyModel   string // 期望请求体中的模型名
 	}{
+		{
+			name:            "Codex协议别名重定向到真实上游模型",
+			modelFuzzyMatch: false,
+			clientProtocol:  protocol.Codex,
+			configModels: []model.ModelEntry{{
+				Model:           "grok-4.5",
+				RedirectEnabled: true,
+				ProtocolAliases: map[string][]string{
+					"codex":     {"gpt-5.5"},
+					"anthropic": {"claude-opus-4-8"},
+				},
+			}},
+			originalModel: "gpt-5.5",
+			requestBody:   `{"model":"gpt-5.5","messages":[]}`,
+			wantModel:     "grok-4.5",
+			wantBodyModel: "grok-4.5",
+		},
+		{
+			name:            "Anthropic协议使用独立对外模型",
+			modelFuzzyMatch: false,
+			clientProtocol:  protocol.Anthropic,
+			configModels: []model.ModelEntry{{
+				Model:           "grok-4.5",
+				RedirectEnabled: true,
+				ProtocolAliases: map[string][]string{
+					"codex":     {"gpt-5.5"},
+					"anthropic": {"claude-opus-4-8"},
+				},
+			}},
+			originalModel: "claude-opus-4-8",
+			requestBody:   `{"model":"claude-opus-4-8","messages":[]}`,
+			wantModel:     "grok-4.5",
+			wantBodyModel: "grok-4.5",
+		},
+		{
+			name:            "开启重定向后上游模型名仍可直接请求",
+			modelFuzzyMatch: false,
+			clientProtocol:  protocol.Codex,
+			configModels: []model.ModelEntry{{
+				Model:           "grok-4.5",
+				RedirectEnabled: true,
+				ProtocolAliases: map[string][]string{"codex": {"gpt-5.5"}},
+			}},
+			originalModel: "grok-4.5",
+			requestBody:   `{"model":"grok-4.5","messages":[]}`,
+			wantModel:     "grok-4.5",
+			wantBodyModel: "grok-4.5",
+		},
+		{
+			name:            "关闭重定向后直接使用上游模型名",
+			modelFuzzyMatch: false,
+			clientProtocol:  protocol.Codex,
+			configModels: []model.ModelEntry{{
+				Model:           "grok-4.5",
+				RedirectEnabled: false,
+				ProtocolAliases: map[string][]string{"codex": {"gpt-5.5"}},
+			}},
+			originalModel: "grok-4.5",
+			requestBody:   `{"model":"grok-4.5","messages":[]}`,
+			wantModel:     "grok-4.5",
+			wantBodyModel: "grok-4.5",
+		},
 		{
 			name:            "精确匹配_不修改模型名",
 			modelFuzzyMatch: true,
@@ -619,8 +683,9 @@ func TestPrepareRequestBody_FuzzyMatch(t *testing.T) {
 
 			// 构造请求上下文
 			reqCtx := &proxyRequestContext{
-				originalModel: tt.originalModel,
-				body:          []byte(tt.requestBody),
+				originalModel:  tt.originalModel,
+				clientProtocol: tt.clientProtocol,
+				body:           []byte(tt.requestBody),
 			}
 
 			// 调用被测函数

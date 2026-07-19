@@ -38,6 +38,7 @@
   <script defer src="/web/assets/js/channels-modals.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/channels-custom-rules.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/channels-test.js?v=__VERSION__"></script>
+  <script defer src="/web/assets/js/channels-disabled-models.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/channels-sort.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/channels-init.js?v=__VERSION__"></script>
 </head>
@@ -108,6 +109,10 @@
                 </div>
               </div>
             </div>
+            <button id="globalDisabledModelsBtn" type="button" class="btn btn-secondary btn-sm global-disabled-models-btn">
+              <span data-i18n="channels.disabledModels">禁用模型</span>
+              <span id="globalDisabledModelsCount" class="global-disabled-models-count">0</span>
+            </button>
             <div class="channel-filter-summary">
               <div class="filter-info" id="filterInfo"><span id="filteredCount">0</span> / <span id="totalCount">0</span>
                 <span data-i18n="channels.channelCount">个渠道</span>
@@ -600,12 +605,12 @@
                       <span>#</span>
                     </div>
                   </th>
-                  <th style="width: 42%;">
+                  <th style="width: 170px;" data-i18n="channels.modelRedirectSwitch">模型重定向</th>
+                  <th>
                     <input type="text" id="modelFilterInput" class="table-filter-input"
                       data-i18n-placeholder="channels.searchModelPlaceholder" placeholder="搜索模型名称..."
                       data-input-action="filter-models-by-keyword">
                   </th>
-                  <th style="width: 42%;" data-i18n="channels.redirectTarget">重定向目标（可选）</th>
                   <th style="width: 60px;"></th>
                 </tr>
               </thead>
@@ -1031,11 +1036,11 @@
     </div>
   </div>
 
-  <!-- 模型导入模态框 -->
+  <!-- 添加模型模态框 -->
   <div id="modelImportModal" class="modal">
     <div class="modal-content modal-content--md">
       <div class="modal-header">
-        <h2 class="modal-title" data-i18n="channels.importModelsTitle">批量添加模型</h2>
+        <h2 class="modal-title" data-i18n="channels.addModelsTitle">添加模型</h2>
         <button type="button" class="close-btn channel-modal-close-btn channel-hover-modal-close-btn"
           data-action="close-model-import-modal">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -1045,41 +1050,62 @@
         </button>
       </div>
       <div class="channel-import-modal-body">
-        <div class="form-group">
-          <label class="form-label"><span data-i18n="channels.inputModelNames">输入模型名称</span>
-            <span class="channel-import-hint"
-              data-i18n="channels.keysSeparatorHint">(支持逗号或换行分隔)</span></label>
-          <textarea id="modelImportTextarea" class="form-input channel-import-textarea" rows="10"
-            placeholder="gpt-4o,gpt-4o-mini&#10;claude-3-5-sonnet-20241022&#10;claude-3-5-haiku-latest"></textarea>
+        <div class="model-add-mode-tabs" role="tablist" aria-label="添加模式">
+          <button type="button" class="model-add-mode-tab active" data-action="set-model-add-mode" data-mode="single"
+            data-i18n="channels.singleAddMode">单独添加</button>
+          <button type="button" class="model-add-mode-tab" data-action="set-model-add-mode" data-mode="batch"
+            data-i18n="channels.batchAddMode">批量添加</button>
         </div>
-        <div class="channel-import-info">
-          <div class="channel-import-info-row">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"
-              class="channel-import-info-icon">
-              <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5" />
-              <path d="M8 5V8.5M8 11H8.005" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-            </svg>
-            <div>
-              <strong data-i18n="channels.usageInstructions">使用说明：</strong>
-              <ul class="channel-import-info-list">
-                <li><span data-i18n="channels.commaSeparatedModel">支持逗号分隔：</span><code
-                    class="channel-import-code">model1,model2,model3</code>
-                </li>
-                <li data-i18n="channels.newlineSeparatedModel">支持换行分隔：每行一个模型</li>
-                <li data-i18n="channels.autoDedupModel">自动去除空格、空行和重复模型</li>
-              </ul>
+
+        <div id="modelSingleAddPanel" class="model-add-mode-panel">
+          <div class="form-group">
+            <label class="form-label" for="modelSingleInput" data-i18n="channels.upstreamModel">上游模型</label>
+            <div class="filter-combobox-wrapper model-single-add-control">
+              <input id="modelSingleInput" class="filter-select filter-combobox" type="text" autocomplete="off"
+                spellcheck="false" placeholder="grok-4.5" />
+              <div id="modelSingleDropdown" class="filter-dropdown" role="listbox" aria-label="上游模型"></div>
             </div>
+            <div class="model-single-add-hint" data-i18n="channels.singleAddModelHint">可从当前协议的常用模型中选择，也可以手动输入真实上游模型名</div>
           </div>
         </div>
-        <div id="modelImportPreview" class="channel-import-preview">
-          <div id="modelImportPreviewContent" class="channel-import-preview-content hidden">
-            <div class="channel-import-preview-row">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M3 8L6.5 11.5L13 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-                  stroke-linejoin="round" />
+
+        <div id="modelBatchAddPanel" class="model-add-mode-panel hidden">
+          <div class="form-group">
+            <label class="form-label"><span data-i18n="channels.inputModelNames">输入模型名称</span>
+              <span class="channel-import-hint"
+                data-i18n="channels.keysSeparatorHint">(支持逗号或换行分隔)</span></label>
+            <textarea id="modelImportTextarea" class="form-input channel-import-textarea" rows="10"
+              placeholder="gpt-4o,gpt-4o-mini&#10;claude-3-5-sonnet-20241022&#10;claude-3-5-haiku-latest"></textarea>
+          </div>
+          <div class="channel-import-info">
+            <div class="channel-import-info-row">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"
+                class="channel-import-info-icon">
+                <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5" />
+                <path d="M8 5V8.5M8 11H8.005" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
               </svg>
-              <span><span data-i18n="channels.parseSuccessModel">解析成功：将添加</span> <span id="modelImportCount">0</span>
-                <span data-i18n="channels.modelCountSuffix">个模型</span></span>
+              <div>
+                <strong data-i18n="channels.usageInstructions">使用说明：</strong>
+                <ul class="channel-import-info-list">
+                  <li><span data-i18n="channels.commaSeparatedModel">支持逗号分隔：</span><code
+                      class="channel-import-code">model1,model2,model3</code>
+                  </li>
+                  <li data-i18n="channels.newlineSeparatedModel">支持换行分隔：每行一个模型</li>
+                  <li data-i18n="channels.autoDedupModel">自动去除空格、空行和重复模型</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div id="modelImportPreview" class="channel-import-preview">
+            <div id="modelImportPreviewContent" class="channel-import-preview-content hidden">
+              <div class="channel-import-preview-row">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M3 8L6.5 11.5L13 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                </svg>
+                <span><span data-i18n="channels.parseSuccessModel">解析成功：将添加</span> <span id="modelImportCount">0</span>
+                  <span data-i18n="channels.modelCountSuffix">个模型</span></span>
+              </div>
             </div>
           </div>
         </div>
@@ -1257,7 +1283,7 @@
       </td>
       <td class="inline-url-col-exact inline-url-cell-center" data-mobile-label="{{mobileLabelExactURL}}">
         <label class="inline-url-exact-label" data-i18n-title="channels.fullUrlTitle" title="使用输入的完整URL，不自动追加协议路径">
-          <input type="checkbox" class="inline-url-exact-checkbox" data-index="{{index}}" {{exactURLChecked}}>
+          <input type="checkbox" class="inline-url-exact-checkbox" data-index="{{index}}">
           <span data-i18n="channels.fullUrlShort">完整</span>
         </label>
       </td>
@@ -1356,40 +1382,34 @@
 
   <!-- 重定向规则行模板 -->
   <template id="tpl-redirect-row">
-    <tr class="mobile-inline-row redirect-row">
-      <td class="redirect-col-select mobile-inline-no-label">
-        <div class="redirect-row-select">
-          <input type="checkbox" class="model-checkbox redirect-row-checkbox" data-index="{{index}}">
-          <span class="redirect-row-index">{{displayIndex}}</span>
+    <tr class="mobile-inline-row redirect-row model-alias-row">
+      <td colspan="4">
+        <div class="model-alias-card-main">
+          <div class="redirect-row-select">
+            <input type="checkbox" class="model-checkbox redirect-row-checkbox" data-index="{{index}}">
+            <span class="redirect-row-index">{{displayIndex}}</span>
+          </div>
+          <div class="model-redirect-switch-control">
+            <label class="model-redirect-switch">
+              <input type="checkbox" class="redirect-enable-toggle" data-index="{{index}}">
+              <span class="model-redirect-switch-track"></span>
+            </label>
+            <span class="model-redirect-switch-copy">{{redirectState}}</span>
+          </div>
+          <div class="redirect-model-field model-upstream-field">
+            <span class="model-upstream-label" data-i18n="channels.upstreamModel">上游模型</span>
+            <input type="text" class="redirect-from-input modal-inline-input" data-index="{{index}}" value="{{from}}" placeholder="grok-4.5">
+            <button type="button" class="lowercase-btn redirect-lowercase-btn" data-index="{{index}}" data-i18n-title="channels.toLowercase" title="转为小写">a</button>
+          </div>
+          <button type="button" class="redirect-delete-btn" data-index="{{index}}" data-i18n-title="channels.deleteThisModel" title="删除此模型">×</button>
         </div>
-      </td>
-      <td class="redirect-col-model" data-mobile-label="{{mobileLabelModel}}">
-        <div class="redirect-model-field">
-          <input type="text" class="redirect-from-input modal-inline-input" data-index="{{index}}" value="{{from}}"
-            placeholder="claude-3-opus-20240229">
-          <button type="button" class="lowercase-btn redirect-lowercase-btn" data-index="{{index}}"
-            data-i18n-title="channels.toLowercase" title="转为小写">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path
-                d="M1.5 10.5L3.5 4H5L7 10.5M2.5 8.5H6M8.5 10.5V7.5C8.5 6.5 9.5 6 10.5 6C11.5 6 12.5 6.5 12.5 7.5V10.5M8.5 8.5H12.5"
-                stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
+        <div class="model-alias-panel" hidden>
+          <div class="model-alias-panel-header">
+            <span><strong data-i18n="channels.publicModels">对外模型</strong> <span data-i18n="channels.publicModelsHint">对外名称按协议生效，上游模型名始终可直接请求</span></span>
+            <button type="button" class="model-alias-copy-all" data-index="{{index}}" data-i18n="channels.useUpstreamModelForAll">全部使用上游模型名</button>
+          </div>
+          <div class="model-protocol-alias-list"></div>
         </div>
-      </td>
-      <td class="redirect-col-target" data-mobile-label="{{mobileLabelTarget}}">
-        <input type="text" class="redirect-to-input modal-inline-input" data-index="{{index}}" value="{{to}}"
-          placeholder="{{toPlaceholder}}">
-      </td>
-      <td class="redirect-col-actions" data-mobile-label="{{mobileLabelActions}}">
-        <button type="button" class="redirect-delete-btn" data-index="{{index}}"
-          data-i18n-title="channels.deleteThisModel" title="删除此模型">
-          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path
-              d="M5.5 2.5V1.5C5.5 1.22386 5.72386 1 6 1H8C8.27614 1 8.5 1.22386 8.5 1.5V2.5M2 3.5H12M3 3.5V11.5C3 12.0523 3.44772 12.5 4 12.5H10C10.5523 12.5 11 12.0523 11 11.5V3.5M5.5 6.5V9.5M8.5 6.5V9.5"
-              stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </button>
       </td>
     </tr>
   </template>
@@ -1402,6 +1422,33 @@
       </td>
     </tr>
   </template>
+
+  <div id="globalDisabledModelsModal" class="modal">
+    <div class="modal-content modal-content--md global-disabled-models-modal-content">
+      <div class="modal-header">
+        <div>
+          <h2 class="modal-title" data-i18n="channels.disabledModelsTitle">全局禁用模型</h2>
+          <p class="global-disabled-models-subtitle" data-i18n="channels.disabledModelsHint">禁用规则对全部渠道生效，但不会删除渠道中的模型配置</p>
+        </div>
+        <button id="closeGlobalDisabledModelsBtn" type="button" class="close-btn channel-modal-close-btn">×</button>
+      </div>
+      <div class="global-disabled-models-body">
+        <div class="global-disabled-model-add-row">
+          <div class="filter-combobox-wrapper global-disabled-model-combobox">
+            <input id="globalDisabledModelInput" class="filter-select filter-combobox" type="text" autocomplete="off"
+              spellcheck="false" data-i18n-placeholder="channels.disabledModelPlaceholder" placeholder="选择或输入模型名称" />
+            <div id="globalDisabledModelDropdown" class="filter-dropdown" role="listbox" aria-label="禁用模型"></div>
+          </div>
+          <button id="addGlobalDisabledModelBtn" type="button" class="btn btn-primary" data-i18n="channels.addDisabledModel">添加禁用</button>
+        </div>
+        <div id="globalDisabledModelsEmpty" class="global-disabled-models-empty" data-i18n="channels.noDisabledModels">暂无全局禁用模型</div>
+        <div id="globalDisabledModelsList" class="global-disabled-models-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="doneGlobalDisabledModelsBtn" type="button" class="btn btn-secondary" data-i18n="common.close">关闭</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 排序卡片模板 -->
   <template id="tpl-sort-item">

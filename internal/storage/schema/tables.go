@@ -54,10 +54,34 @@ func DefineChannelModelsTable() *TableBuilder {
 		Column("channel_id INT NOT NULL").
 		Column("model VARCHAR(191) NOT NULL").
 		Column("redirect_model VARCHAR(191) NOT NULL DEFAULT ''"). // 重定向目标模型（空表示不重定向）
+		Column("redirect_enabled TINYINT NOT NULL DEFAULT 0").
 		Column("created_at BIGINT NOT NULL DEFAULT 0").
 		Column("PRIMARY KEY (channel_id, model)").
 		Column("FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE").
 		Index("idx_channel_models_model", "model")
+}
+
+// DefineChannelModelAliasesTable 定义按客户端协议暴露的模型别名。
+func DefineChannelModelAliasesTable() *TableBuilder {
+	return NewTable("channel_model_aliases").
+		Column("channel_id INT NOT NULL").
+		Column("upstream_model VARCHAR(191) NOT NULL").
+		Column("protocol VARCHAR(64) NOT NULL").
+		Column("public_model VARCHAR(191) NOT NULL").
+		Column("created_at BIGINT NOT NULL DEFAULT 0").
+		Column("PRIMARY KEY (channel_id, upstream_model, protocol, public_model)").
+		Column("FOREIGN KEY (channel_id, upstream_model) REFERENCES channel_models(channel_id, model) ON DELETE CASCADE").
+		Index("idx_channel_model_aliases_lookup", "protocol, public_model, channel_id").
+		Index("idx_channel_model_aliases_upstream", "channel_id, upstream_model")
+}
+
+// DefineGlobalDisabledModelsTable 定义跨渠道模型禁用规则。
+func DefineGlobalDisabledModelsTable() *TableBuilder {
+	return NewTable("global_disabled_models").
+		Column("model_key VARCHAR(191) PRIMARY KEY").
+		Column("model VARCHAR(191) NOT NULL").
+		Column("note VARCHAR(512) NOT NULL DEFAULT ''").
+		Column("created_at BIGINT NOT NULL")
 }
 
 // DefineChannelProtocolTransformsTable 定义渠道协议转换表结构

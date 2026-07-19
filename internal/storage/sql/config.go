@@ -106,7 +106,7 @@ func (s *SQLStore) GetEnabledChannelsByModel(ctx context.Context, modelName stri
             ORDER BY c.priority DESC, c.id ASC
         `
 	} else {
-		// 精确匹配：使用 channel_models 索引表
+		// 精确匹配：上游模型始终可用；启用重定向后额外匹配对外模型。
 		query = `
 	            SELECT c.id, c.name, c.url, c.priority, c.rpm_limit, c.max_concurrency,
 	                   c.channel_type, c.protocol_transform_mode, c.enabled, c.scheduled_check_enabled, c.scheduled_check_model,
@@ -114,14 +114,25 @@ func (s *SQLStore) GetEnabledChannelsByModel(ctx context.Context, modelName stri
 	                   SUM(CASE WHEN k.id IS NOT NULL AND k.disabled = 0 THEN 1 ELSE 0 END) as key_count,
 	                   c.created_at, c.updated_at
 	            FROM channels c
-	            INNER JOIN channel_models cm ON c.id = cm.channel_id
 	            LEFT JOIN api_keys k ON c.id = k.channel_id
 	            WHERE c.enabled = 1
-              AND cm.model = ?
-            GROUP BY c.id
+	              AND EXISTS (
+	                  SELECT 1 FROM channel_models cm
+	                  WHERE cm.channel_id = c.id
+	                    AND (
+					      (cm.model = ?)
+	                      OR (cm.redirect_enabled = 1 AND EXISTS (
+	                        SELECT 1 FROM channel_model_aliases cma
+	                        WHERE cma.channel_id = cm.channel_id
+	                          AND cma.upstream_model = cm.model
+	                          AND LOWER(cma.public_model) = LOWER(?)
+	                      ))
+	                    )
+	              )
+	            GROUP BY c.id
             ORDER BY c.priority DESC, c.id ASC
         `
-		args = []any{modelName}
+		args = []any{modelName, modelName}
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -213,10 +224,20 @@ func (s *SQLStore) GetEnabledChannelsByModelAndProtocol(ctx context.Context, mod
 		  AND EXISTS (
 		      SELECT 1
 		      FROM channel_models cm
-		      WHERE cm.channel_id = c.id AND cm.model = ?
+		      WHERE cm.channel_id = c.id
+		        AND (
+			      (cm.model = ?)
+		          OR (cm.redirect_enabled = 1 AND EXISTS (
+		            SELECT 1 FROM channel_model_aliases cma
+		            WHERE cma.channel_id = cm.channel_id
+		              AND cma.upstream_model = cm.model
+		              AND cma.protocol = ?
+		              AND LOWER(cma.public_model) = LOWER(?)
+		          ))
+		        )
 		  )
 	`
-		args = append(args, modelName)
+		args = append(args, modelName, protocol, modelName)
 	}
 
 	query += `
@@ -613,7 +634,7 @@ func (s *SQLStore) loadModelEntriesForConfigs(ctx context.Context, configs []*mo
 
 	//nolint:gosec // G201: placeholders 由内部构建的 "?" 占位符组成，安全可控
 	query := fmt.Sprintf(
-		`SELECT channel_id, model, redirect_model FROM channel_models WHERE channel_id IN (%s) ORDER BY channel_id, created_at ASC, model ASC`,
+		`SELECT channel_id, model, redirect_model, redirect_enabled FROM channel_models WHERE channel_id IN (%s) ORDER BY channel_id, created_at ASC, model ASC`,
 		strings.Join(placeholders, ","),
 	)
 
@@ -626,7 +647,7 @@ func (s *SQLStore) loadModelEntriesForConfigs(ctx context.Context, configs []*mo
 	for rows.Next() {
 		var channelID int64
 		var entry model.ModelEntry
-		if err := rows.Scan(&channelID, &entry.Model, &entry.RedirectModel); err != nil {
+		if err := rows.Scan(&channelID, &entry.Model, &entry.RedirectModel, &entry.RedirectEnabled); err != nil {
 			return fmt.Errorf("scan model entry: %w", err)
 		}
 		if cfg, ok := idToConfig[channelID]; ok {
@@ -634,7 +655,42 @@ func (s *SQLStore) loadModelEntriesForConfigs(ctx context.Context, configs []*mo
 		}
 	}
 
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	//nolint:gosec // G201: placeholders 由内部构建的 "?" 占位符组成，安全可控
+	aliasQuery := fmt.Sprintf(
+		`SELECT channel_id, upstream_model, protocol, public_model FROM channel_model_aliases WHERE channel_id IN (%s) ORDER BY channel_id, created_at ASC, protocol ASC, public_model ASC`,
+		strings.Join(placeholders, ","),
+	)
+	aliasRows, err := s.db.QueryContext(ctx, aliasQuery, channelIDs...)
+	if err != nil {
+		return fmt.Errorf("query model aliases: %w", err)
+	}
+	defer func() { _ = aliasRows.Close() }()
+	entryByKey := make(map[string]*model.ModelEntry)
+	for _, cfg := range configs {
+		for i := range cfg.ModelEntries {
+			entryByKey[fmt.Sprintf("%d\x00%s", cfg.ID, cfg.ModelEntries[i].Model)] = &cfg.ModelEntries[i]
+		}
+	}
+	for aliasRows.Next() {
+		var channelID int64
+		var upstreamModel, protocolName, publicModel string
+		if err := aliasRows.Scan(&channelID, &upstreamModel, &protocolName, &publicModel); err != nil {
+			return fmt.Errorf("scan model alias: %w", err)
+		}
+		entry := entryByKey[fmt.Sprintf("%d\x00%s", channelID, upstreamModel)]
+		if entry == nil {
+			continue
+		}
+		if entry.ProtocolAliases == nil {
+			entry.ProtocolAliases = make(map[string][]string)
+		}
+		entry.ProtocolAliases[protocolName] = append(entry.ProtocolAliases[protocolName], publicModel)
+	}
+	return aliasRows.Err()
 }
 
 func (s *SQLStore) loadProtocolTransformsForConfigs(ctx context.Context, configs []*model.Config) error {
@@ -913,6 +969,9 @@ type dbExecutor interface {
 // 注意：调用方必须保证 entries 中没有重复的模型名，否则会因 PRIMARY KEY 冲突而失败（Fail-Fast）
 func (s *SQLStore) saveModelEntriesImpl(ctx context.Context, exec dbExecutor, channelID int64, entries []model.ModelEntry) error {
 	// 先删除旧的记录
+	if _, err := exec.ExecContext(ctx, `DELETE FROM channel_model_aliases WHERE channel_id = ?`, channelID); err != nil {
+		return fmt.Errorf("delete old model aliases: %w", err)
+	}
 	if _, err := exec.ExecContext(ctx, `DELETE FROM channel_models WHERE channel_id = ?`, channelID); err != nil {
 		return fmt.Errorf("delete old model entries: %w", err)
 	}
@@ -931,17 +990,36 @@ func (s *SQLStore) saveModelEntriesImpl(ctx context.Context, exec dbExecutor, ch
 		chunk := entries[offset:end]
 
 		var b strings.Builder
-		b.WriteString(`INSERT INTO channel_models (channel_id, model, redirect_model, created_at) VALUES `)
-		args := make([]any, 0, len(chunk)*4)
+		b.WriteString(`INSERT INTO channel_models (channel_id, model, redirect_model, redirect_enabled, created_at) VALUES `)
+		args := make([]any, 0, len(chunk)*5)
 		for i, entry := range chunk {
 			if i > 0 {
 				b.WriteByte(',')
 			}
-			b.WriteString("(?, ?, ?, ?)")
-			args = append(args, channelID, entry.Model, entry.RedirectModel, baseCreatedAt+int64(offset+i))
+			b.WriteString("(?, ?, ?, ?, ?)")
+			args = append(args, channelID, entry.Model, entry.RedirectModel, boolToInt(entry.RedirectEnabled), baseCreatedAt+int64(offset+i))
 		}
 		if _, err := exec.ExecContext(ctx, b.String(), args...); err != nil {
 			return fmt.Errorf("save model entries (offset %d): %w", offset, err)
+		}
+	}
+
+	aliasCreatedAt := baseCreatedAt
+	for _, entry := range entries {
+		protocolNames := make([]string, 0, len(entry.ProtocolAliases))
+		for protocolName := range entry.ProtocolAliases {
+			protocolNames = append(protocolNames, protocolName)
+		}
+		sort.Strings(protocolNames)
+		for _, protocolName := range protocolNames {
+			for _, publicModel := range entry.ProtocolAliases[protocolName] {
+				if _, err := exec.ExecContext(ctx,
+					`INSERT INTO channel_model_aliases (channel_id, upstream_model, protocol, public_model, created_at) VALUES (?, ?, ?, ?, ?)`,
+					channelID, entry.Model, protocolName, publicModel, aliasCreatedAt); err != nil {
+					return fmt.Errorf("save model alias %s/%s: %w", protocolName, publicModel, err)
+				}
+				aliasCreatedAt++
+			}
 		}
 	}
 

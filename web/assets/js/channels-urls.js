@@ -97,7 +97,6 @@ function createURLRow(index) {
     index: index,
     displayIndex: index + 1,
     url: stripInlineExactURLMarker(rawURL),
-    exactURLChecked: isExactInlineURL(rawURL) ? 'checked' : '',
     mobileLabelUrl: window.t('channels.tableApiUrl'),
     mobileLabelExactURL: window.t('channels.fullUrl'),
     mobileLabelActions: window.t('common.actions')
@@ -109,6 +108,11 @@ function createURLRow(index) {
   const checkbox = row.querySelector('.url-checkbox');
   if (checkbox && selectedURLIndices.has(index)) {
     checkbox.checked = true;
+  }
+
+  const exactCheckbox = row.querySelector('.inline-url-exact-checkbox');
+  if (exactCheckbox) {
+    exactCheckbox.checked = isExactInlineURL(rawURL);
   }
 
   // 多URL已保存渠道：注入统计列和禁用按钮

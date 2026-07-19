@@ -399,6 +399,32 @@ func TestChannelRequestValidation_DuplicateModels(t *testing.T) {
 	}
 }
 
+func TestChannelRequestValidation_PublicModelConflictsWithAnotherUpstream(t *testing.T) {
+	req := newValidChannelRequest()
+	req.Models = []model.ModelEntry{
+		{Model: "gpt-5.5"},
+		{
+			Model:           "grok-4.5",
+			RedirectEnabled: true,
+			ProtocolAliases: map[string][]string{"codex": {"gpt-5.5"}},
+		},
+	}
+
+	err := req.Validate()
+	if err == nil || !strings.Contains(err.Error(), "conflicts with upstream model") {
+		t.Fatalf("expected public/upstream model conflict, got %v", err)
+	}
+
+	req.Models = []model.ModelEntry{{
+		Model:           "grok-4.5",
+		RedirectEnabled: true,
+		ProtocolAliases: map[string][]string{"codex": {"grok-4.5"}},
+	}}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("same entry may expose its own upstream name: %v", err)
+	}
+}
+
 func TestChannelRequestValidation_URLDeduplication(t *testing.T) {
 	req := newValidChannelRequest()
 	req.URL = " https://a.example.com/\nhttps://b.example.com\nhttps://a.example.com \nhttps://b.example.com/ "

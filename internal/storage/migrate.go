@@ -12,6 +12,7 @@ import (
 const (
 	channelModelsRedirectMigrationVersion = "v1_channel_models_redirect"
 	channelModelsOrderRepairVersion       = "v2_channel_models_created_at_order"
+	channelModelAliasesMigrationVersion   = "v3_channel_model_protocol_aliases"
 )
 
 // Dialect 数据库方言
@@ -48,6 +49,8 @@ func migrate(ctx context.Context, db *sql.DB, dialect Dialect) error {
 		schema.DefineChannelsTable,
 		schema.DefineAPIKeysTable,
 		schema.DefineChannelModelsTable,
+		schema.DefineChannelModelAliasesTable,
+		schema.DefineGlobalDisabledModelsTable,
 		schema.DefineChannelProtocolTransformsTable,
 		schema.DefineChannelProtocolPrioritiesTable,
 		schema.DefineChannelProtocolCapabilitiesTable,
@@ -191,6 +194,9 @@ func migrate(ctx context.Context, db *sql.DB, dialect Dialect) error {
 			if err := repairLegacyChannelModelOrder(ctx, db, dialect); err != nil {
 				return fmt.Errorf("repair legacy channel_models order: %w", err)
 			}
+			if err := ensureChannelModelsRedirectEnabled(ctx, db, dialect); err != nil {
+				return fmt.Errorf("migrate channel_models redirect_enabled: %w", err)
+			}
 		}
 
 		// 创建索引
@@ -203,6 +209,10 @@ func migrate(ctx context.Context, db *sql.DB, dialect Dialect) error {
 				return err
 			}
 		}
+	}
+
+	if err := migrateChannelModelAliases(ctx, db, dialect); err != nil {
+		return fmt.Errorf("migrate channel model aliases: %w", err)
 	}
 
 	// 旧管理员会话不携带身份作用域，不能迁移为新的 Web 会话。

@@ -44,7 +44,7 @@ func (s *Server) HandleExportChannelsCSV(c *gin.Context) {
 	writer := csv.NewWriter(buf)
 	defer writer.Flush()
 
-	header := []string{"id", "name", "api_key", "url", "priority", "rpm_limit", "max_concurrency", "models", "model_redirects", "channel_type", "protocol_transforms", "protocol_transform_mode", "key_strategy", "enabled", "scheduled_check_enabled", "scheduled_check_model"}
+	header := []string{"id", "name", "api_key", "url", "priority", "rpm_limit", "max_concurrency", "models", "model_redirects", "model_protocol_aliases", "channel_type", "protocol_transforms", "protocol_transform_mode", "key_strategy", "enabled", "scheduled_check_enabled", "scheduled_check_model"}
 	if err := writer.Write(header); err != nil {
 		RespondError(c, http.StatusInternalServerError, err)
 		return
@@ -71,10 +71,17 @@ func (s *Server) HandleExportChannelsCSV(c *gin.Context) {
 		// 格式设计：models用逗号分隔（人类可读+Excel友好），redirects用JSON（结构化数据）
 		models := make([]string, 0, len(cfg.ModelEntries))
 		redirects := make(map[string]string)
+		protocolAliases := make(map[string]csvModelAliasConfig)
 		for _, entry := range cfg.ModelEntries {
 			models = append(models, entry.Model)
 			if entry.RedirectModel != "" {
 				redirects[entry.Model] = entry.RedirectModel
+			}
+			if entry.RedirectEnabled || len(entry.ProtocolAliases) > 0 {
+				protocolAliases[entry.Model] = csvModelAliasConfig{
+					Enabled: entry.RedirectEnabled,
+					Aliases: entry.ProtocolAliases,
+				}
 			}
 		}
 
@@ -82,6 +89,12 @@ func (s *Server) HandleExportChannelsCSV(c *gin.Context) {
 		if len(redirects) > 0 {
 			if jsonBytes, err := sonic.Marshal(redirects); err == nil {
 				modelRedirectsJSON = string(jsonBytes)
+			}
+		}
+		modelProtocolAliasesJSON := "{}"
+		if len(protocolAliases) > 0 {
+			if jsonBytes, err := sonic.Marshal(protocolAliases); err == nil {
+				modelProtocolAliasesJSON = string(jsonBytes)
 			}
 		}
 
@@ -95,6 +108,7 @@ func (s *Server) HandleExportChannelsCSV(c *gin.Context) {
 			strconv.Itoa(cfg.MaxConcurrency),
 			strings.Join(models, ","),
 			modelRedirectsJSON,
+			modelProtocolAliasesJSON,
 			cfg.GetChannelType(), // 使用GetChannelType确保默认值
 			strings.Join(cfg.GetProtocolTransforms(), ","),
 			cfg.GetProtocolTransformMode(),
@@ -291,6 +305,7 @@ func (s *Server) parseChannelImportRow(
 	url := fetch("url")
 	modelsRaw := fetch("models")
 	modelRedirectsRaw := fetch("model_redirects")
+	modelProtocolAliasesRaw := fetch("model_protocol_aliases")
 	channelType := fetch("channel_type")
 	protocolTransformsRaw := fetch("protocol_transforms")
 	protocolTransformMode := model.NormalizeProtocolTransformMode(fetch("protocol_transform_mode"))
@@ -357,6 +372,12 @@ func (s *Server) parseChannelImportRow(
 			return nil, fmt.Sprintf("第%d行模型重定向格式错误: %v", lineNo, err), true
 		}
 	}
+	var modelProtocolAliases map[string]csvModelAliasConfig
+	if modelProtocolAliasesRaw != "" && modelProtocolAliasesRaw != "{}" {
+		if err := sonic.Unmarshal([]byte(modelProtocolAliasesRaw), &modelProtocolAliases); err != nil {
+			return nil, fmt.Sprintf("第%d行协议模型别名格式错误: %v", lineNo, err), true
+		}
+	}
 
 	priority := 0
 	if pRaw := fetch("priority"); pRaw != "" {
@@ -419,10 +440,23 @@ func (s *Server) parseChannelImportRow(
 	modelEntries := make([]model.ModelEntry, 0, len(models))
 	for _, m := range models {
 		entry := model.ModelEntry{Model: m}
+		if aliasConfig, ok := modelProtocolAliases[m]; ok {
+			entry.RedirectEnabled = aliasConfig.Enabled
+			entry.ProtocolAliases = aliasConfig.Aliases
+		}
 		if redirect, ok := modelRedirects[m]; ok {
 			entry.RedirectModel = redirect
 		}
 		modelEntries = append(modelEntries, entry)
+	}
+	protocols := append([]string{channelType}, protocolTransforms...)
+	var legacyRedirects map[string]string
+	modelEntries, legacyRedirects = normalizeModelEntries(modelEntries, protocols)
+	if _, err := validateChannelModelEntries(modelEntries); err != nil {
+		return nil, fmt.Sprintf("第%d行模型配置无效: %v", lineNo, err), true
+	}
+	if redirected, ok := legacyRedirects[scheduledCheckModel]; ok {
+		scheduledCheckModel = redirected
 	}
 	if scheduledCheckModel != "" {
 		declared := false
@@ -472,6 +506,11 @@ func (s *Server) parseChannelImportRow(
 		Config:  cfg,
 		APIKeys: apiKeys,
 	}, "", false
+}
+
+type csvModelAliasConfig struct {
+	Enabled bool                `json:"enabled"`
+	Aliases map[string][]string `json:"aliases,omitempty"`
 }
 
 func parseProtocolTransformsCSV(raw string) []string {

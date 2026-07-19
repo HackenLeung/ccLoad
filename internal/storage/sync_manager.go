@@ -48,6 +48,8 @@ func (sm *SyncManager) RestoreOnStartup(ctx context.Context, logDays int) error 
 		"system_settings",
 		"channels",
 		"channel_models",
+		"channel_model_aliases",
+		"global_disabled_models",
 		"channel_protocol_transforms",
 		"channel_protocol_priorities",
 		"channel_protocol_capabilities",

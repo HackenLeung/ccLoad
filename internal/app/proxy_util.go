@@ -133,26 +133,26 @@ type ForwardObserver struct {
 
 // proxyRequestContext 代理请求上下文（封装请求信息，遵循DIP原则）
 type proxyRequestContext struct {
-	originalModel     string
-	clientProtocol    protocol.Protocol
-	requestMethod     string
-	requestPath       string
-	rawQuery          string
-	body              []byte
-	translatedBody    []byte
-	header            http.Header
-	isStreaming       bool
-	tokenHash         string               // Token哈希值（用于统计）
-	tokenID           int64                // Token ID（用于日志记录，0表示未使用token）
-	clientIP          string               // 客户端IP地址（用于日志记录）
-	activeReqID       int64                // 活跃请求ID（用于更新渠道信息）
-	observer          *ForwardObserver     // 转发观测回调（可选）
-	startTime         time.Time            // 请求开始时间（用于统计）
-	channelStartTime  time.Time            // 当前渠道尝试开始时间（每次切换渠道时重置）
-	attemptStartTime  time.Time            // 渠道内单次 Key/URL 尝试开始时间
-	baseURL           string               // 当前尝试使用的上游URL（多URL场景）
-	debugData         *model.DebugLogEntry // Debug日志数据（debug开启时填充）
-	thinkingEffort    string
+	originalModel    string
+	clientProtocol   protocol.Protocol
+	requestMethod    string
+	requestPath      string
+	rawQuery         string
+	body             []byte
+	translatedBody   []byte
+	header           http.Header
+	isStreaming      bool
+	tokenHash        string               // Token哈希值（用于统计）
+	tokenID          int64                // Token ID（用于日志记录，0表示未使用token）
+	clientIP         string               // 客户端IP地址（用于日志记录）
+	activeReqID      int64                // 活跃请求ID（用于更新渠道信息）
+	observer         *ForwardObserver     // 转发观测回调（可选）
+	startTime        time.Time            // 请求开始时间（用于统计）
+	channelStartTime time.Time            // 当前渠道尝试开始时间（每次切换渠道时重置）
+	attemptStartTime time.Time            // 渠道内单次 Key/URL 尝试开始时间
+	baseURL          string               // 当前尝试使用的上游URL（多URL场景）
+	debugData        *model.DebugLogEntry // Debug日志数据（debug开启时填充）
+	thinkingEffort   string
 	// requireNativeGPT marks requests that must stay on native Codex channels
 	// with the client-selected gpt-* model (compact, current web_search tool_choice, computer).
 	// When true, candidate filtering and multi-channel retry both use native-only rules.
@@ -565,32 +565,7 @@ func buildCodexResponsesPath() string {
 // 2. 模糊匹配（启用 model_fuzzy_match 时）
 // 3. [FIX] 2026-01: 模糊匹配结果的重定向（链式解析）
 func (s *Server) prepareRequestBody(cfg *model.Config, reqCtx *proxyRequestContext) (actualModel string, bodyToSend []byte) {
-	actualModel = reqCtx.originalModel
-
-	// 1. 检查模型重定向（精确匹配优先）
-	if redirectModel, ok := cfg.GetRedirectModel(reqCtx.originalModel); ok && redirectModel != "" {
-		actualModel = redirectModel
-	}
-
-	// 2. 模糊匹配回退（仅当未触发重定向时）
-	if actualModel == reqCtx.originalModel && s.modelFuzzyMatch {
-		// 先检查精确匹配，避免不必要的模糊匹配
-		if !cfg.SupportsModel(reqCtx.originalModel) {
-			if matched, ok := cfg.FuzzyMatchModel(reqCtx.originalModel); ok {
-				actualModel = matched
-			}
-		}
-	}
-
-	// 3. [FIX] 2026-01: 模糊匹配结果的重定向（链式解析）
-	// 场景：请求 gemini-3-flash → 模糊匹配 gemini-3-flash-preview → 重定向 gemini-3-flash-preview-0719
-	// 仅当模型已变更且变更后的模型有重定向配置时触发
-	if actualModel != reqCtx.originalModel {
-		if redirectModel, ok := cfg.GetRedirectModel(actualModel); ok && redirectModel != "" {
-			actualModel = redirectModel
-		}
-	}
-
+	actualModel = s.resolveActualModel(cfg, reqCtx.originalModel, string(reqCtx.clientProtocol))
 	bodyToSend = reqCtx.body
 
 	// 如果模型发生变更，修改请求体
@@ -609,6 +584,35 @@ func (s *Server) prepareRequestBody(cfg *model.Config, reqCtx *proxyRequestConte
 	}
 
 	return actualModel, bodyToSend
+}
+
+func (s *Server) resolveActualModel(cfg *model.Config, originalModel, clientProtocol string) string {
+	actualModel := originalModel
+
+	// 1. 检查模型重定向（精确匹配优先）
+	if redirectModel, ok := cfg.GetRedirectModel(originalModel, clientProtocol); ok && redirectModel != "" {
+		actualModel = redirectModel
+	}
+
+	// 2. 模糊匹配回退（仅当未触发重定向时）
+	if actualModel == originalModel && s.modelFuzzyMatch {
+		// 先检查精确匹配，避免不必要的模糊匹配
+		if !cfg.SupportsModel(originalModel, clientProtocol) {
+			if matched, ok := cfg.FuzzyMatchModel(originalModel, clientProtocol); ok {
+				actualModel = matched
+			}
+		}
+	}
+
+	// 3. [FIX] 2026-01: 模糊匹配结果的重定向（链式解析）
+	// 场景：请求 gemini-3-flash → 模糊匹配 gemini-3-flash-preview → 重定向 gemini-3-flash-preview-0719
+	// 仅当模型已变更且变更后的模型有重定向配置时触发
+	if actualModel != originalModel {
+		if redirectModel, ok := cfg.GetRedirectModel(actualModel, clientProtocol); ok && redirectModel != "" {
+			actualModel = redirectModel
+		}
+	}
+	return actualModel
 }
 
 // stripAnthropicBillingHeaders 从 Anthropic /v1/messages 请求体的 system 数组中

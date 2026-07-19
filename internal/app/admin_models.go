@@ -404,13 +404,10 @@ func fetchModelsForConfig(ctx context.Context, channelType, channelURL, apiKey s
 		}
 	}
 
-	// 转换为 ModelEntry 格式，填充 RedirectModel 为 Model（方便前端编辑）
+	// 获取到的名称就是真实上游模型；是否对外重定向由编辑器显式开启。
 	models := make([]model.ModelEntry, len(modelNames))
 	for i, name := range modelNames {
-		models[i] = model.ModelEntry{
-			Model:         name,
-			RedirectModel: name, // 填充为请求模型名称
-		}
+		models[i] = model.ModelEntry{Model: name}
 	}
 
 	return &FetchModelsResponse{

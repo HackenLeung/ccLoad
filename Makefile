@@ -73,7 +73,7 @@ docker-build:
 	@echo "Docker 镜像构建完成: $(DOCKER_IMAGE):$(DOCKER_TAG)"
 
 web-test: www-setup
-	@node --test web/assets/js/*.test.js
+	@node --test web/assets/js/*.test.js web/assets/js/channels-test.js
 
 verify-web: web-test
 

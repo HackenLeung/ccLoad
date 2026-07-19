@@ -86,9 +86,11 @@ type Server struct {
 	wg                      sync.WaitGroup // 等待所有后台goroutine结束
 
 	// [OPT] P3: 渠道类型缓存（TTL 30s）
-	channelTypesCache     map[int64]string
-	channelTypesCacheTime time.Time
-	channelTypesCacheMu   sync.RWMutex
+	channelTypesCache      map[int64]string
+	channelTypesCacheTime  time.Time
+	channelTypesCacheMu    sync.RWMutex
+	globalDisabledModels   map[string]model.GlobalDisabledModel
+	globalDisabledModelsMu sync.RWMutex
 }
 
 // NewServer 创建并初始化一个新的 Server 实例
@@ -182,6 +184,16 @@ func NewServer(store storage.Store) *Server {
 		activeRequests:            newActiveRequestManager(),
 		channelRPMLimiter:         newChannelRPMLimiter(time.Now),
 		channelConcurrencyLimiter: newChannelConcurrencyLimiter(),
+	}
+	if _, ok := store.(globalDisabledModelStore); ok {
+		disabledCtx, disabledCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.reloadGlobalDisabledModels(disabledCtx); err != nil {
+			disabledCancel()
+			log.Fatalf("[FATAL] 加载全局禁用模型失败: %v", err)
+		}
+		disabledCancel()
+	} else {
+		s.globalDisabledModels = make(map[string]model.GlobalDisabledModel)
 	}
 
 	reg := protocol.NewRegistry()
@@ -819,6 +831,9 @@ func (s *Server) SetupRoutes(r *gin.Engine) {
 		admin.POST("/channels/batch-priority", s.HandleBatchUpdatePriority) // 批量更新渠道优先级
 		admin.POST("/channels/batch-enabled", s.HandleBatchSetEnabled)      // 批量启用/禁用渠道
 		admin.POST("/channels/batch-delete", s.HandleBatchDeleteChannels)   // 批量删除渠道
+		admin.GET("/channels/disabled-models", s.HandleGlobalDisabledModels)
+		admin.POST("/channels/disabled-models", s.HandleGlobalDisabledModels)
+		admin.DELETE("/channels/disabled-models", s.HandleDeleteGlobalDisabledModel)
 		admin.GET("/channels/:id", s.HandleChannelByID)
 		admin.PUT("/channels/:id", s.HandleChannelByID)
 		admin.DELETE("/channels/:id", s.HandleChannelByID)

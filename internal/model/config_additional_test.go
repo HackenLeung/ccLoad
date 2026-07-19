@@ -61,6 +61,71 @@ func TestConfig_SupportsModel(t *testing.T) {
 	}
 }
 
+func TestConfig_ProtocolModelAliases(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{ModelEntries: []ModelEntry{{
+		Model:           "grok-4.5",
+		RedirectEnabled: true,
+		ProtocolAliases: map[string][]string{
+			"codex":     {"gpt-5.5"},
+			"anthropic": {"claude-sonnet-4-5"},
+		},
+	}}}
+
+	if !cfg.SupportsModel("gpt-5.5", "codex") {
+		t.Fatal("expected Codex alias to be supported")
+	}
+	if cfg.SupportsModel("gpt-5.5", "anthropic") {
+		t.Fatal("Codex alias must not leak into Anthropic")
+	}
+	if !cfg.SupportsModel("grok-4.5", "codex") {
+		t.Fatal("upstream model should remain directly available while aliases are enabled")
+	}
+	if got, ok := cfg.GetRedirectModel("gpt-5.5", "codex"); !ok || got != "grok-4.5" {
+		t.Fatalf("GetRedirectModel() = (%q, %v), want (grok-4.5, true)", got, ok)
+	}
+	if got, ok := cfg.FuzzyMatchModel("5.5", "codex"); !ok || got != "gpt-5.5" {
+		t.Fatalf("FuzzyMatchModel() = (%q, %v), want (gpt-5.5, true)", got, ok)
+	}
+}
+
+func TestConfig_ProtocolModelAliasesAreCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{ModelEntries: []ModelEntry{{
+		Model:           "grok-4.5",
+		RedirectEnabled: true,
+		ProtocolAliases: map[string][]string{
+			"codex": {"GPT-5.5"},
+		},
+	}}}
+
+	if !cfg.SupportsModel("gpt-5.5", "CODEX") {
+		t.Fatal("protocol alias lookup should be case-insensitive")
+	}
+	if got, ok := cfg.GetRedirectModel("Gpt-5.5", "Codex"); !ok || got != "grok-4.5" {
+		t.Fatalf("GetRedirectModel() = (%q, %v), want (grok-4.5, true)", got, ok)
+	}
+}
+
+func TestConfig_ProtocolAliasesDisabledKeepDirectUpstreamModel(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{ModelEntries: []ModelEntry{{
+		Model:           "grok-4.5",
+		RedirectEnabled: false,
+		ProtocolAliases: map[string][]string{"codex": {"gpt-5.5"}},
+	}}}
+
+	if !cfg.SupportsModel("grok-4.5", "codex") {
+		t.Fatal("disabled redirect should expose the upstream model directly")
+	}
+	if cfg.SupportsModel("gpt-5.5", "codex") {
+		t.Fatal("stored aliases must stay inactive while redirect is disabled")
+	}
+}
+
 func TestConfig_IsCoolingDown(t *testing.T) {
 	t.Parallel()
 

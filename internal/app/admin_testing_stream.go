@@ -60,7 +60,13 @@ func (s *Server) HandleChannelChat(c *gin.Context) {
 		return
 	}
 
-	if !cfg.SupportsModel(testReq.Model) {
+	clientProtocol := resolveClientProtocol(cfg, &testReq)
+	actualTestModel := s.resolveActualModel(cfg, testReq.Model, clientProtocol)
+	if s.isGlobalModelDisabled(testReq.Model) || s.isGlobalModelDisabled(actualTestModel) {
+		writeChatErrorEvent(c, "模型 "+testReq.Model+" 已被全局禁用")
+		return
+	}
+	if !cfg.SupportsModel(testReq.Model, clientProtocol) {
 		writeChatErrorEvent(c, "模型 "+testReq.Model+" 不在此渠道的支持列表中")
 		return
 	}
@@ -71,11 +77,10 @@ func (s *Server) HandleChannelChat(c *gin.Context) {
 
 	// 模型重定向
 	originalModel := testReq.Model
-	if redirectModel, ok := cfg.GetRedirectModel(testReq.Model); ok && redirectModel != "" {
+	if redirectModel, ok := cfg.GetRedirectModel(testReq.Model, clientProtocol); ok && redirectModel != "" {
 		testReq.Model = redirectModel
 	}
 
-	clientProtocol := resolveClientProtocol(cfg, &testReq)
 	upstreamProto := resolveTestUpstreamProtocol(cfg, clientProtocol)
 	if !supportsRuntimeTestProtocol(clientProtocol, upstreamProto) {
 		writeChatErrorEvent(c, fmt.Sprintf("不支持协议转换 %s -> %s", clientProtocol, upstreamProto))

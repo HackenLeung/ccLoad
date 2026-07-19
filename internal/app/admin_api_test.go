@@ -34,7 +34,14 @@ func TestAdminAPI_ExportChannelsCSV(t *testing.T) {
 			URL:      "https://api1.example.com",
 			Priority: 10,
 			ModelEntries: []model.ModelEntry{
-				{Model: "model-1", RedirectModel: ""},
+				{
+					Model:           "upstream-model-1",
+					RedirectEnabled: true,
+					ProtocolAliases: map[string][]string{
+						"codex":     {"model-1"},
+						"anthropic": {"claude-model-1", "legacy-model-1"},
+					},
+				},
 			},
 			ChannelType: "anthropic",
 			Enabled:     true,
@@ -109,7 +116,7 @@ func TestAdminAPI_ExportChannelsCSV(t *testing.T) {
 		header[0] = strings.TrimPrefix(header[0], "\ufeff")
 	}
 
-	expectedHeaders := []string{"id", "name", "api_key", "url", "priority", "rpm_limit", "max_concurrency", "models", "model_redirects", "channel_type", "protocol_transforms", "protocol_transform_mode", "key_strategy", "enabled", "scheduled_check_enabled", "scheduled_check_model"}
+	expectedHeaders := []string{"id", "name", "api_key", "url", "priority", "rpm_limit", "max_concurrency", "models", "model_redirects", "model_protocol_aliases", "channel_type", "protocol_transforms", "protocol_transform_mode", "key_strategy", "enabled", "scheduled_check_enabled", "scheduled_check_model"}
 	if len(header) != len(expectedHeaders) {
 		t.Errorf("Header字段数量不匹配: 期望 %d, 实际: %d\nHeader: %v", len(expectedHeaders), len(header), header)
 	}
@@ -120,9 +127,26 @@ func TestAdminAPI_ExportChannelsCSV(t *testing.T) {
 		}
 	}
 
-	// 验证数据行（应该有16个字段）
-	if len(records[1]) < 16 {
-		t.Errorf("数据行字段不足，期望至少16个字段，实际: %d", len(records[1]))
+	// 验证数据行（应该有17个字段）
+	if len(records[1]) < 17 {
+		t.Errorf("数据行字段不足，期望至少17个字段，实际: %d", len(records[1]))
+	}
+
+	aliasColumn := slices.Index(header, "model_protocol_aliases")
+	if aliasColumn < 0 {
+		t.Fatal("缺少 model_protocol_aliases 列")
+	}
+	var aliases map[string]csvModelAliasConfig
+	if err := json.Unmarshal([]byte(records[1][aliasColumn]), &aliases); err != nil {
+		t.Fatalf("解析 model_protocol_aliases 失败: %v", err)
+	}
+	aliasConfig, ok := aliases["upstream-model-1"]
+	if !ok || !aliasConfig.Enabled {
+		t.Fatalf("协议别名导出不完整: %#v", aliases)
+	}
+	if !slices.Equal(aliasConfig.Aliases["codex"], []string{"model-1"}) ||
+		!slices.Equal(aliasConfig.Aliases["anthropic"], []string{"claude-model-1", "legacy-model-1"}) {
+		t.Fatalf("协议别名导出不匹配: %#v", aliasConfig.Aliases)
 	}
 }
 
@@ -238,6 +262,71 @@ Import-Test-2,https://import2.example.com,5,0,0,"test-model-2,test-model-3","{""
 			t.Errorf("渠道 %s protocol_transform_mode = %q", cfg.Name, cfg.GetProtocolTransformMode())
 		}
 	}
+}
+
+func TestAdminAPI_ImportChannelsCSV_NormalizesAndValidatesModelAliases(t *testing.T) {
+	importCSV := func(t *testing.T, csvContent string) (*Server, ChannelImportSummary) {
+		t.Helper()
+		server := newInMemoryServer(t)
+		body := &bytes.Buffer{}
+		writer := multipart.NewWriter(body)
+		part, err := writer.CreateFormFile("file", "models.csv")
+		if err != nil {
+			t.Fatalf("create form file: %v", err)
+		}
+		if _, err := io.WriteString(part, csvContent); err != nil {
+			t.Fatalf("write csv: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("close multipart writer: %v", err)
+		}
+		req := newRequest(http.MethodPost, "/admin/channels/import", bytes.NewReader(body.Bytes()))
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		c, w := newTestContext(t, req)
+		server.HandleImportChannelsCSV(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("import status=%d body=%s", w.Code, w.Body.String())
+		}
+		var summary ChannelImportSummary
+		mustUnmarshalAPIResponseData(t, w.Body.Bytes(), &summary)
+		return server, summary
+	}
+
+	t.Run("旧重定向立即转换为上游模型和协议别名", func(t *testing.T) {
+		server, summary := importCSV(t, `name,url,models,model_redirects,channel_type,protocol_transforms,api_key,scheduled_check_model
+Legacy-Redirect,https://legacy.example.com,gpt-5.5,"{""gpt-5.5"":""grok-4.5""}",codex,anthropic,sk-legacy,gpt-5.5
+`)
+		if summary.Created != 1 || summary.Skipped != 0 {
+			t.Fatalf("unexpected summary: %#v", summary)
+		}
+		configs, err := server.store.ListConfigs(context.Background())
+		if err != nil || len(configs) != 1 {
+			t.Fatalf("load imported config: len=%d err=%v", len(configs), err)
+		}
+		cfg := configs[0]
+		if len(cfg.ModelEntries) != 1 || cfg.ModelEntries[0].Model != "grok-4.5" || !cfg.ModelEntries[0].RedirectEnabled {
+			t.Fatalf("legacy redirect not normalized: %#v", cfg.ModelEntries)
+		}
+		aliases := cfg.ModelEntries[0].ProtocolAliases
+		if !slices.Equal(aliases["codex"], []string{"gpt-5.5"}) || !slices.Equal(aliases["anthropic"], []string{"gpt-5.5"}) {
+			t.Fatalf("legacy aliases not expanded by protocol: %#v", aliases)
+		}
+		if cfg.ScheduledCheckModel != "grok-4.5" {
+			t.Fatalf("scheduled_check_model=%q, want grok-4.5", cfg.ScheduledCheckModel)
+		}
+	})
+
+	t.Run("重复协议别名拒绝导入", func(t *testing.T) {
+		_, summary := importCSV(t, `name,url,models,model_protocol_aliases,channel_type,api_key
+Invalid-Aliases,https://invalid.example.com,"grok-4.5,other","{""grok-4.5"":{""enabled"":true,""aliases"":{""codex"":[""shared""]}},""other"":{""enabled"":true,""aliases"":{""codex"":[""shared""]}}}",codex,sk-invalid
+`)
+		if summary.Created != 0 || summary.Skipped != 1 || len(summary.Errors) != 1 {
+			t.Fatalf("invalid aliases should be skipped: %#v", summary)
+		}
+		if !strings.Contains(summary.Errors[0], "duplicate public model") {
+			t.Fatalf("unexpected import error: %v", summary.Errors)
+		}
+	})
 }
 
 func TestAdminAPI_ImportChannelsCSV_UsesExplicitIDForRename(t *testing.T) {
@@ -861,7 +950,14 @@ func TestAdminAPI_ExportImportRoundTrip(t *testing.T) {
 		ModelEntries: []model.ModelEntry{
 			{Model: "model-a", RedirectModel: ""},
 			{Model: "model-b", RedirectModel: ""},
-			{Model: "old-model", RedirectModel: "new-model"},
+			{
+				Model:           "grok-4.5",
+				RedirectEnabled: true,
+				ProtocolAliases: map[string][]string{
+					"codex":     {"gpt-5.5"},
+					"anthropic": {"claude-opus-4-8", "claude-opus-legacy"},
+				},
+			},
 		},
 		ChannelType: "anthropic",
 		Enabled:     true,
@@ -960,6 +1056,21 @@ func TestAdminAPI_ExportImportRoundTrip(t *testing.T) {
 
 	if len(restoredConfig.ModelEntries) != len(originalConfig.ModelEntries) {
 		t.Errorf("ModelEntries数量不匹配: 期望 %d, 实际 %d", len(originalConfig.ModelEntries), len(restoredConfig.ModelEntries))
+	}
+
+	var restoredRedirect *model.ModelEntry
+	for i := range restoredConfig.ModelEntries {
+		if restoredConfig.ModelEntries[i].Model == "grok-4.5" {
+			restoredRedirect = &restoredConfig.ModelEntries[i]
+			break
+		}
+	}
+	if restoredRedirect == nil || !restoredRedirect.RedirectEnabled {
+		t.Fatalf("协议级模型重定向未恢复: %#v", restoredConfig.ModelEntries)
+	}
+	if !slices.Equal(restoredRedirect.ProtocolAliases["codex"], []string{"gpt-5.5"}) ||
+		!slices.Equal(restoredRedirect.ProtocolAliases["anthropic"], []string{"claude-opus-4-8", "claude-opus-legacy"}) {
+		t.Fatalf("协议级模型别名未完整恢复: %#v", restoredRedirect.ProtocolAliases)
 	}
 
 	// 验证API Keys

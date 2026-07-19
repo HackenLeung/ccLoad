@@ -453,7 +453,17 @@ func (s *Server) handleChannelTestRequest(c *gin.Context, requireBaseURL bool) {
 		return
 	}
 
-	if !cfg.SupportsModel(testReq.Model) {
+	clientProtocol := resolveClientProtocol(cfg, &testReq)
+	actualTestModel := s.resolveActualModel(cfg, testReq.Model, clientProtocol)
+	if s.isGlobalModelDisabled(testReq.Model) || s.isGlobalModelDisabled(actualTestModel) {
+		RespondJSON(c, http.StatusOK, gin.H{
+			"success": false,
+			"error":   "模型 " + testReq.Model + " 已被全局禁用",
+			"model":   testReq.Model,
+		})
+		return
+	}
+	if !cfg.SupportsModel(testReq.Model, clientProtocol) {
 		RespondJSON(c, http.StatusOK, gin.H{
 			"success":          false,
 			"error":            "模型 " + testReq.Model + " 不在此渠道的支持列表中",
@@ -603,9 +613,10 @@ func (s *Server) testChannelAPI(reqCtx context.Context, cfg *model.Config, apiKe
 	// [INFO] 修复：应用模型重定向逻辑（与正常代理流程保持一致）
 	originalModel := testReq.Model
 	actualModel := originalModel
+	clientProtocol := resolveClientProtocol(cfg, testReq)
 
 	// 检查模型重定向
-	if redirectModel, ok := cfg.GetRedirectModel(originalModel); ok && redirectModel != "" {
+	if redirectModel, ok := cfg.GetRedirectModel(originalModel, clientProtocol); ok && redirectModel != "" {
 		actualModel = redirectModel
 		log.Printf("[RELOAD] [测试-模型重定向] 渠道ID=%d, 原始模型=%s, 重定向模型=%s", cfg.ID, originalModel, actualModel)
 	}
@@ -616,7 +627,6 @@ func (s *Server) testChannelAPI(reqCtx context.Context, cfg *model.Config, apiKe
 		log.Printf("[INFO] [测试-请求体修改] 渠道ID=%d, 修改后模型=%s", cfg.ID, actualModel)
 	}
 
-	clientProtocol := resolveClientProtocol(cfg, testReq)
 	upstreamProto := resolveTestUpstreamProtocol(cfg, clientProtocol)
 	if !supportsRuntimeTestProtocol(clientProtocol, upstreamProto) {
 		return map[string]any{
