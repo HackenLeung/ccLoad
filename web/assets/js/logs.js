@@ -507,6 +507,8 @@ function renderLogSourceBadge(logSource) {
       return `<span class="log-source-badge log-source-badge--manual">${escapeHtml(t('logs.sourceManualTestBadge'))}</span>`;
     case 'manual_chat':
       return `<span class="log-source-badge log-source-badge--manual">${escapeHtml(t('logs.sourceManualChatBadge'))}</span>`;
+    case 'vision_assist':
+      return `<span class="log-source-badge log-source-badge--vision">${escapeHtml(t('logs.sourceVisionAssistBadge'))}</span>`;
     default:
       return '';
   }
@@ -1286,10 +1288,7 @@ async function syncLogSourceVisibility(preloadedIntervalHours) {
     }
   }
 
-  group.hidden = !scheduledCheckEnabledByConfig;
-  if (!scheduledCheckEnabledByConfig) {
-    select.value = 'proxy';
-  }
+	group.hidden = false;
   return scheduledCheckEnabledByConfig;
 }
 

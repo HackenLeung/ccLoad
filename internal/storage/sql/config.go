@@ -432,6 +432,39 @@ func (s *SQLStore) UpdateConfig(ctx context.Context, id int64, upd *model.Config
 	return config, nil
 }
 
+// ReplaceVisionPool updates only channel_models vision-pool fields atomically.
+func (s *SQLStore) ReplaceVisionPool(ctx context.Context, updates []model.VisionPoolUpdate) error {
+	return s.WithTransaction(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE channel_models
+			SET vision_pool_enabled = 0, vision_priority = 0
+		`); err != nil {
+			return err
+		}
+		for _, update := range updates {
+			if update.ChannelID <= 0 || strings.TrimSpace(update.Model) == "" || update.Priority < 0 {
+				return fmt.Errorf("invalid vision pool update")
+			}
+			result, err := tx.ExecContext(ctx, `
+				UPDATE channel_models
+				SET vision_pool_enabled = 1, vision_priority = ?
+				WHERE channel_id = ? AND LOWER(model) = LOWER(?)
+			`, update.Priority, update.ChannelID, strings.TrimSpace(update.Model))
+			if err != nil {
+				return err
+			}
+			rows, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if rows != 1 {
+				return fmt.Errorf("vision pool model does not exist: channel=%d model=%q", update.ChannelID, update.Model)
+			}
+		}
+		return nil
+	})
+}
+
 // UpdateChannelEnabled updates only the enabled flag.
 // The full UpdateConfig path rewrites models/protocol transforms and reloads the
 // config before writing. A switch click must not pay that cost.
@@ -634,7 +667,7 @@ func (s *SQLStore) loadModelEntriesForConfigs(ctx context.Context, configs []*mo
 
 	//nolint:gosec // G201: placeholders 由内部构建的 "?" 占位符组成，安全可控
 	query := fmt.Sprintf(
-		`SELECT channel_id, model, redirect_model, redirect_enabled FROM channel_models WHERE channel_id IN (%s) ORDER BY channel_id, created_at ASC, model ASC`,
+		`SELECT channel_id, model, redirect_model, redirect_enabled, vision_assist_enabled, vision_pool_enabled, vision_priority FROM channel_models WHERE channel_id IN (%s) ORDER BY channel_id, created_at ASC, model ASC`,
 		strings.Join(placeholders, ","),
 	)
 
@@ -647,7 +680,7 @@ func (s *SQLStore) loadModelEntriesForConfigs(ctx context.Context, configs []*mo
 	for rows.Next() {
 		var channelID int64
 		var entry model.ModelEntry
-		if err := rows.Scan(&channelID, &entry.Model, &entry.RedirectModel, &entry.RedirectEnabled); err != nil {
+		if err := rows.Scan(&channelID, &entry.Model, &entry.RedirectModel, &entry.RedirectEnabled, &entry.VisionAssistEnabled, &entry.VisionPoolEnabled, &entry.VisionPriority); err != nil {
 			return fmt.Errorf("scan model entry: %w", err)
 		}
 		if cfg, ok := idToConfig[channelID]; ok {
@@ -990,14 +1023,14 @@ func (s *SQLStore) saveModelEntriesImpl(ctx context.Context, exec dbExecutor, ch
 		chunk := entries[offset:end]
 
 		var b strings.Builder
-		b.WriteString(`INSERT INTO channel_models (channel_id, model, redirect_model, redirect_enabled, created_at) VALUES `)
-		args := make([]any, 0, len(chunk)*5)
+		b.WriteString(`INSERT INTO channel_models (channel_id, model, redirect_model, redirect_enabled, vision_assist_enabled, vision_pool_enabled, vision_priority, created_at) VALUES `)
+		args := make([]any, 0, len(chunk)*8)
 		for i, entry := range chunk {
 			if i > 0 {
 				b.WriteByte(',')
 			}
-			b.WriteString("(?, ?, ?, ?, ?)")
-			args = append(args, channelID, entry.Model, entry.RedirectModel, boolToInt(entry.RedirectEnabled), baseCreatedAt+int64(offset+i))
+			b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?)")
+			args = append(args, channelID, entry.Model, entry.RedirectModel, boolToInt(entry.RedirectEnabled), boolToInt(entry.VisionAssistEnabled), boolToInt(entry.VisionPoolEnabled), entry.VisionPriority, baseCreatedAt+int64(offset+i))
 		}
 		if _, err := exec.ExecContext(ctx, b.String(), args...); err != nil {
 			return fmt.Errorf("save model entries (offset %d): %w", offset, err)

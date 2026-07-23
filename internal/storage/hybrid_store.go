@@ -240,6 +240,16 @@ func (h *HybridStore) UpdateConfig(ctx context.Context, id int64, upd *model.Con
 	return result, nil
 }
 
+func (h *HybridStore) ReplaceVisionPool(ctx context.Context, updates []model.VisionPoolUpdate) error {
+	if err := h.mysql.ReplaceVisionPool(ctx, updates); err != nil {
+		return err
+	}
+	h.syncToSQLite("ReplaceVisionPool", func() error {
+		return h.sqlite.ReplaceVisionPool(ctx, updates)
+	})
+	return nil
+}
+
 func (h *HybridStore) UpdateChannelEnabled(ctx context.Context, id int64, enabled bool) (*model.Config, error) {
 	result, err := h.mysql.UpdateChannelEnabled(ctx, id, enabled)
 	if err != nil {

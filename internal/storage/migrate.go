@@ -142,6 +142,12 @@ func migrate(ctx context.Context, db *sql.DB, dialect Dialect) error {
 			}
 		}
 
+		if tb.Name() == "channel_models" {
+			if err := ensureChannelModelsVisionColumns(ctx, db, dialect); err != nil {
+				return fmt.Errorf("migrate channel_models vision columns: %w", err)
+			}
+		}
+
 		// 增量迁移：修复 api_keys.api_key 历史长度漂移（旧版可能为 VARCHAR(64)）
 		if tb.Name() == "api_keys" {
 			if err := ensureAPIKeysAPIKeyLength(ctx, db, dialect); err != nil {

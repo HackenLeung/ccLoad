@@ -831,6 +831,8 @@ func (s *Server) SetupRoutes(r *gin.Engine) {
 		admin.POST("/channels/batch-priority", s.HandleBatchUpdatePriority) // 批量更新渠道优先级
 		admin.POST("/channels/batch-enabled", s.HandleBatchSetEnabled)      // 批量启用/禁用渠道
 		admin.POST("/channels/batch-delete", s.HandleBatchDeleteChannels)   // 批量删除渠道
+		admin.GET("/channels/vision-pool", s.HandleVisionPool)
+		admin.PUT("/channels/vision-pool", s.HandleVisionPool)
 		admin.GET("/channels/disabled-models", s.HandleGlobalDisabledModels)
 		admin.POST("/channels/disabled-models", s.HandleGlobalDisabledModels)
 		admin.DELETE("/channels/disabled-models", s.HandleDeleteGlobalDisabledModel)
@@ -977,7 +979,8 @@ func (s *Server) AddLogAsync(entry *model.LogEntry) {
 
 	// 更新成本缓存（用于每日成本限额功能）
 	// 语义：缓存累加倍率后成本（effective），与 daily_cost_limit 直接比较
-	if s.costCache != nil && entry.ChannelID > 0 && entry.Cost > 0 && entry.LogSource == model.LogSourceProxy {
+	if s.costCache != nil && entry.ChannelID > 0 && entry.Cost > 0 &&
+		(entry.LogSource == model.LogSourceProxy || entry.LogSource == model.LogSourceVisionAssist) {
 		multiplier := entry.CostMultiplier
 		if multiplier < 0 {
 			multiplier = 1

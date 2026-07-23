@@ -2353,7 +2353,9 @@ func (s *Server) attemptKeyAcrossURLs(
 
 		if result != nil && result.succeeded {
 			// 成功：记录TTFB到URLSelector（仅多URL场景）
-			recordSuccessTTFBToSelector(selector, cfg.ID, urlsCount, urlEntry.url, result)
+			if !reqCtx.isolatedSubrequest {
+				recordSuccessTTFBToSelector(selector, cfg.ID, urlsCount, urlEntry.url, result)
+			}
 			return result, nil, nil
 		}
 
@@ -2372,14 +2374,14 @@ func (s *Server) attemptKeyAcrossURLs(
 		// 渠道级错误 (ActionRetryChannel) 或网络错误：
 		// 在多URL场景下，默认先尝试下一个URL
 		if urlsCount > 1 {
-			if selector != nil {
+			if selector != nil && !reqCtx.isolatedSubrequest {
 				selector.CooldownURL(cfg.ID, urlEntry.url)
 			}
 
 			// 新策略：上游明确返回 5xx（598 首字节超时除外）时，直接切换下一个渠道。
 			// 该分支命中时，当前URL若使用了 deferChannelCooldown，需要补做一次渠道级冷却写入。
 			if shouldSwitchChannelImmediatelyOnHTTP5xx(result) {
-				if shouldDeferChannelCooldown && result != nil {
+				if shouldDeferChannelCooldown && result != nil && !reqCtx.isolatedSubrequest {
 					input := httpErrorInputFromParts(cfg.ID, keyIndex, result.status, result.body, result.header)
 					s.applyCooldownDecision(ctx, cfg, input)
 				}

@@ -123,7 +123,7 @@
 
 .model-alias-card-main {
   display: grid;
-  grid-template-columns: 46px 132px minmax(0, 1fr) 34px;
+  grid-template-columns: 46px 132px 184px minmax(0, 1fr) 34px;
   align-items: center;
   gap: 12px;
   min-height: 54px;
@@ -134,6 +134,88 @@
   display: flex;
   align-items: center;
   gap: 9px;
+}
+
+.model-vision-assist-control {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.vision-pool-modal {
+  max-width: 980px;
+}
+
+.vision-pool-modal .modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 18px;
+  border-top: 1px solid var(--neutral-200);
+}
+
+.vision-pool-subtitle {
+  margin: 4px 0 0;
+  color: var(--neutral-500);
+  font-size: 13px;
+}
+
+.vision-pool-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--neutral-200);
+}
+
+.vision-pool-toolbar .form-input {
+  max-width: 420px;
+}
+
+.vision-pool-count {
+  color: var(--neutral-500);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.vision-pool-table-wrap {
+  min-height: 260px;
+  max-height: min(58vh, 620px);
+  overflow: auto;
+}
+
+.vision-pool-table th,
+.vision-pool-table td {
+  vertical-align: middle;
+}
+
+.vision-pool-enabled-cell {
+  width: 72px;
+  text-align: center;
+}
+
+.vision-pool-priority-input {
+  width: 92px;
+}
+
+.vision-pool-muted {
+  color: var(--neutral-500);
+  font-size: 12px;
+}
+
+.vision-assist-target-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--primary-200);
+  border-radius: 4px;
+  background: var(--primary-50);
+  color: var(--primary-700);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .model-redirect-switch {
@@ -407,6 +489,10 @@
 
   .model-redirect-switch-control {
     grid-column: 2;
+  }
+
+  .model-vision-assist-control {
+    grid-column: 2 / 4;
   }
 
   .model-upstream-field {

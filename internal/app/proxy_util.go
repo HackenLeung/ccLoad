@@ -153,10 +153,15 @@ type proxyRequestContext struct {
 	baseURL          string               // 当前尝试使用的上游URL（多URL场景）
 	debugData        *model.DebugLogEntry // Debug日志数据（debug开启时填充）
 	thinkingEffort   string
+	logSource        string
 	// requireNativeGPT marks requests that must stay on native Codex channels
 	// with the client-selected gpt-* model (compact, current web_search tool_choice, computer).
 	// When true, candidate filtering and multi-channel retry both use native-only rules.
-	requireNativeGPT bool
+	requireNativeGPT   bool
+	visionPrepared     bool
+	visionPoolLoaded   bool
+	visionPool         []visionAssistCandidate
+	isolatedSubrequest bool
 }
 
 // proxyResult 代理请求结果
@@ -830,6 +835,7 @@ type logEntryParams struct {
 	DebugData      *model.DebugLogEntry // Debug日志数据
 	CostMultiplier float64              // 渠道成本倍率快照（0=免费，<0 视为 1）
 	ThinkingEffort string
+	LogSource      string
 }
 
 // buildLogEntry 构建日志条目（消除重复代码，遵循DRY原则）
@@ -838,10 +844,11 @@ func buildLogEntry(p logEntryParams) *model.LogEntry {
 	if logTime.IsZero() {
 		logTime = time.Now() // 兜底：未传入开始时间时使用当前时间
 	}
+	logSource := model.NormalizeStoredLogSource(p.LogSource)
 	entry := &model.LogEntry{
 		Time:        model.JSONTime{Time: logTime},
 		Model:       p.RequestModel,
-		LogSource:   model.LogSourceProxy,
+		LogSource:   logSource,
 		ChannelID:   p.ChannelID,
 		StatusCode:  p.StatusCode,
 		Duration:    p.Duration,

@@ -471,6 +471,12 @@
       background: #d1fae5;
     }
 
+    .log-source-badge--vision {
+      background: var(--success-100);
+      color: var(--success-700);
+      border-color: var(--success-200);
+    }
+
     .logs-filter-summary-row {
       display: flex;
       align-items: center;

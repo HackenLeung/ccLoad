@@ -565,7 +565,12 @@ func (s *Server) runProxyAttemptLoop(
 	reqCtx *proxyRequestContext,
 	w gin.ResponseWriter,
 ) (lastResult *proxyResult, succeeded bool) {
+	var lastVisionAssistErr error
 	for _, cfg := range cands {
+		if err := s.prepareVisionAssistForChannel(ctx, cfg, reqCtx); err != nil {
+			lastVisionAssistErr = err
+			continue
+		}
 		result, err := s.tryChannelWithKeys(ctx, cfg, reqCtx, w)
 
 		// 所有Key冷却：触发渠道级冷却(503)，防止后续请求重复尝试
@@ -608,6 +613,9 @@ func (s *Server) runProxyAttemptLoop(
 				break
 			}
 		}
+	}
+	if lastResult == nil && lastVisionAssistErr != nil {
+		return visionAssistFailureResult(lastVisionAssistErr), false
 	}
 
 	return lastResult, false

@@ -39,6 +39,7 @@
   <script defer src="/web/assets/js/channels-custom-rules.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/channels-test.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/channels-disabled-models.js?v=__VERSION__"></script>
+  <script defer src="/web/assets/js/channels-vision-pool.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/channels-sort.js?v=__VERSION__"></script>
   <script defer src="/web/assets/js/channels-init.js?v=__VERSION__"></script>
 </head>
@@ -66,6 +67,10 @@
                 <button id="addChannelBtn" type="button" data-action="show-add-modal" class="btn btn-primary channel-page-action-btn"
                   data-i18n-title="channels.addChannelTitle" title="添加新渠道">
                   <span data-i18n="channels.addChannel">+ 添加渠道</span>
+                </button>
+                <button id="visionPoolBtn" type="button" class="btn btn-secondary channel-page-action-btn"
+                  data-i18n-title="channels.visionPoolTitle" title="管理视觉模型池">
+                  <span data-i18n="channels.visionPool">视觉模型池</span>
                 </button>
                 <input type="file" id="importCsvInput" accept=".csv" style="display: none;" />
               </div>
@@ -1396,6 +1401,13 @@
             </label>
             <span class="model-redirect-switch-copy">{{redirectState}}</span>
           </div>
+          <div class="model-vision-assist-control">
+            <label class="model-redirect-switch">
+              <input type="checkbox" class="vision-assist-toggle" data-index="{{index}}">
+              <span class="model-redirect-switch-track"></span>
+            </label>
+            <span class="model-redirect-switch-copy" data-i18n="channels.visionAssist">图片转文字辅助</span>
+          </div>
           <div class="redirect-model-field model-upstream-field">
             <span class="model-upstream-label" data-i18n="channels.upstreamModel">上游模型</span>
             <input type="text" class="redirect-from-input modal-inline-input" data-index="{{index}}" value="{{from}}" placeholder="grok-4.5">
@@ -1422,6 +1434,41 @@
       </td>
     </tr>
   </template>
+
+  <div id="visionPoolModal" class="modal">
+    <div class="modal-content modal-content--xl modal-content--tall vision-pool-modal">
+      <div class="modal-header">
+        <div>
+          <h2 class="modal-title" data-i18n="channels.visionPoolTitle">视觉模型池</h2>
+          <p class="vision-pool-subtitle" data-i18n="channels.visionPoolHint">主模型会优先使用同渠道中已启用的视觉模型，优先级越大越先尝试。</p>
+        </div>
+        <button type="button" class="close-btn channel-modal-close-btn" data-action="close-vision-pool-modal">×</button>
+      </div>
+      <div class="vision-pool-toolbar">
+        <input id="visionPoolFilter" class="form-input" type="search" autocomplete="off"
+          data-i18n-placeholder="channels.visionPoolFilterPlaceholder" placeholder="筛选渠道或模型">
+        <span id="visionPoolCount" class="vision-pool-count"></span>
+      </div>
+      <div class="vision-pool-table-wrap">
+        <table class="inline-table vision-pool-table">
+          <thead>
+            <tr>
+              <th data-i18n="common.enabled">启用</th>
+              <th data-i18n="channels.modal.channelName">渠道</th>
+              <th data-i18n="common.model">模型</th>
+              <th data-i18n="channels.visionPriority">优先级</th>
+              <th data-i18n="channels.visionAssistTargets">辅助目标</th>
+            </tr>
+          </thead>
+          <tbody id="visionPoolTableBody"></tbody>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-action="close-vision-pool-modal" data-i18n="common.cancel">取消</button>
+        <button id="saveVisionPoolBtn" type="button" class="btn btn-primary" data-i18n="common.save">保存</button>
+      </div>
+    </div>
+  </div>
 
   <div id="globalDisabledModelsModal" class="modal">
     <div class="modal-content modal-content--md global-disabled-models-modal-content">

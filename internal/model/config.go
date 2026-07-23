@@ -57,10 +57,20 @@ func NormalizeProtocolTransformMode(value string) string {
 
 // ModelEntry 模型配置条目
 type ModelEntry struct {
-	Model           string              `json:"model"`                      // 真实上游模型名称
-	RedirectModel   string              `json:"redirect_model,omitempty"`   // 旧版兼容字段：对外模型 -> 上游模型
-	RedirectEnabled bool                `json:"redirect_enabled,omitempty"` // 是否启用协议级对外模型
-	ProtocolAliases map[string][]string `json:"protocol_aliases,omitempty"` // 客户端协议 -> 对外模型列表
+	Model               string              `json:"model"`                           // 真实上游模型名称
+	RedirectModel       string              `json:"redirect_model,omitempty"`        // 旧版兼容字段：对外模型 -> 上游模型
+	RedirectEnabled     bool                `json:"redirect_enabled,omitempty"`      // 是否启用协议级对外模型
+	ProtocolAliases     map[string][]string `json:"protocol_aliases,omitempty"`      // 客户端协议 -> 对外模型列表
+	VisionAssistEnabled bool                `json:"vision_assist_enabled,omitempty"` // 收到图片时先调用视觉池转为文本
+	VisionPoolEnabled   bool                `json:"vision_pool_enabled,omitempty"`   // 可作为视觉辅助模型
+	VisionPriority      int                 `json:"vision_priority,omitempty"`       // 视觉池内优先级，越大越优先
+}
+
+// VisionPoolUpdate describes one model's membership in the global vision pool.
+type VisionPoolUpdate struct {
+	ChannelID int64
+	Model     string
+	Priority  int
 }
 
 // Validate 验证并规范化模型条目
@@ -106,6 +116,25 @@ func (e *ModelEntry) Validate() error {
 			}
 		}
 		e.ProtocolAliases = normalized
+	}
+	if e.VisionPriority < 0 {
+		return errors.New("vision_priority must be >= 0")
+	}
+	return nil
+}
+
+// FindModelEntry resolves a public model name to its upstream model entry.
+func (c *Config) FindModelEntry(modelName, clientProtocol string) *ModelEntry {
+	if c == nil {
+		return nil
+	}
+	if redirected, ok := c.GetRedirectModel(modelName, clientProtocol); ok {
+		modelName = redirected
+	}
+	for i := range c.ModelEntries {
+		if strings.EqualFold(c.ModelEntries[i].Model, modelName) {
+			return &c.ModelEntries[i]
+		}
 	}
 	return nil
 }

@@ -379,13 +379,19 @@ func normalizeModelEntries(entries []model.ModelEntry, protocols []string) ([]mo
 			idx = len(groups)
 			groupIndex[key] = idx
 			groups = append(groups, normalizedModelGroup{entry: model.ModelEntry{
-				Model:           upstreamModel,
-				RedirectEnabled: submitted.RedirectEnabled,
-				ProtocolAliases: make(map[string][]string),
+				Model:               upstreamModel,
+				RedirectEnabled:     submitted.RedirectEnabled,
+				ProtocolAliases:     make(map[string][]string),
+				VisionAssistEnabled: submitted.VisionAssistEnabled,
+				VisionPoolEnabled:   submitted.VisionPoolEnabled,
+				VisionPriority:      submitted.VisionPriority,
 			}})
 		}
 		group := &groups[idx]
 		group.entry.RedirectEnabled = group.entry.RedirectEnabled || submitted.RedirectEnabled
+		group.entry.VisionAssistEnabled = group.entry.VisionAssistEnabled || submitted.VisionAssistEnabled
+		group.entry.VisionPoolEnabled = group.entry.VisionPoolEnabled || submitted.VisionPoolEnabled
+		group.entry.VisionPriority = max(group.entry.VisionPriority, submitted.VisionPriority)
 		for protocolName, aliases := range submitted.ProtocolAliases {
 			group.entry.ProtocolAliases[protocolName] = appendUniqueModelAliases(group.entry.ProtocolAliases[protocolName], aliases...)
 		}

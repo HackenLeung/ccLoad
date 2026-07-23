@@ -87,6 +87,21 @@ func ensureColumn(ctx context.Context, db *sql.DB, dialect Dialect, table, col, 
 	return ensureSQLiteColumns(ctx, db, table, []sqliteColumnDef{{name: col, definition: sqliteDef}})
 }
 
+func ensureChannelModelsVisionColumns(ctx context.Context, db *sql.DB, dialect Dialect) error {
+	if dialect == DialectMySQL {
+		return ensureMySQLColumns(ctx, db, "channel_models", []mysqlColumnDef{
+			{name: "vision_assist_enabled", definition: "TINYINT NOT NULL DEFAULT 0"},
+			{name: "vision_pool_enabled", definition: "TINYINT NOT NULL DEFAULT 0"},
+			{name: "vision_priority", definition: "INT NOT NULL DEFAULT 0"},
+		})
+	}
+	return ensureSQLiteColumns(ctx, db, "channel_models", []sqliteColumnDef{
+		{name: "vision_assist_enabled", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "vision_pool_enabled", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "vision_priority", definition: "INTEGER NOT NULL DEFAULT 0"},
+	})
+}
+
 func sqliteExistingColumns(ctx context.Context, db *sql.DB, table string) (map[string]bool, error) {
 	if !sqliteMigratableTables[table] {
 		return nil, fmt.Errorf("invalid table name: %s", table)

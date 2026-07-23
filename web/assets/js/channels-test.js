@@ -778,13 +778,13 @@ if (typeof module !== 'undefined' && module.exports) {
 	  try {
 		assert.deepEqual(
 		  runtime.mod.parseModelAddEntries('single', ' grok-4.5 ', ''),
-		  [{ model: 'grok-4.5', redirect_enabled: false, protocol_aliases: {} }]
+		  [{ model: 'grok-4.5', redirect_enabled: false, protocol_aliases: {}, vision_assist_enabled: false, vision_pool_enabled: false, vision_priority: 0 }]
 		);
 		assert.deepEqual(
 		  runtime.mod.parseModelAddEntries('batch', '', 'gpt-5.5, claude-opus-4-8'),
 		  [
-			{ model: 'gpt-5.5', redirect_enabled: false, protocol_aliases: {} },
-			{ model: 'claude-opus-4-8', redirect_enabled: false, protocol_aliases: {} }
+			{ model: 'gpt-5.5', redirect_enabled: false, protocol_aliases: {}, vision_assist_enabled: false, vision_pool_enabled: false, vision_priority: 0 },
+			{ model: 'claude-opus-4-8', redirect_enabled: false, protocol_aliases: {}, vision_assist_enabled: false, vision_pool_enabled: false, vision_priority: 0 }
 		  ]
 		);
 	  } finally {

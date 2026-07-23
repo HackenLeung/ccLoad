@@ -783,7 +783,10 @@ async function saveChannel(event) {
     .map(r => ({
       model: r.model.trim(),
       redirect_enabled: !!r.redirect_enabled,
-      protocol_aliases: cloneProtocolAliases(r.protocol_aliases)
+      protocol_aliases: cloneProtocolAliases(r.protocol_aliases),
+      vision_assist_enabled: !!r.vision_assist_enabled,
+      vision_pool_enabled: !!r.vision_pool_enabled,
+      vision_priority: Math.max(0, Number.parseInt(r.vision_priority, 10) || 0)
     }));
   const seenModels = new Set();
   const duplicateModels = [];
@@ -1862,7 +1865,10 @@ function normalizeEditorModelRow(rawRow) {
 	const normalized = {
 	  model: hasLegacyRedirect ? legacyTarget : submittedModel,
     redirect_enabled: !!row.redirect_enabled,
-    protocol_aliases: cloneProtocolAliases(row.protocol_aliases)
+    protocol_aliases: cloneProtocolAliases(row.protocol_aliases),
+    vision_assist_enabled: !!row.vision_assist_enabled,
+    vision_pool_enabled: !!row.vision_pool_enabled,
+    vision_priority: Math.max(0, Number.parseInt(row.vision_priority, 10) || 0)
   };
 	if (hasLegacyRedirect) {
 	  normalized.redirect_enabled = true;
@@ -2056,6 +2062,14 @@ function createRedirectRow(redirect, index) {
     toggle.addEventListener('change', () => {
       setModelRedirectEnabled(redirect, toggle.checked);
       renderRedirectTable();
+      markChannelFormDirty();
+    });
+  }
+  const visionAssistToggle = row.querySelector('.vision-assist-toggle');
+  if (visionAssistToggle) {
+    visionAssistToggle.checked = !!redirect.vision_assist_enabled;
+    visionAssistToggle.addEventListener('change', () => {
+      redirect.vision_assist_enabled = visionAssistToggle.checked;
       markChannelFormDirty();
     });
   }
@@ -2450,6 +2464,9 @@ function areModelRowsEqual(left, right) {
     const other = right[index] || {};
     return (row.model || '') === (other.model || '') &&
       !!row.redirect_enabled === !!other.redirect_enabled &&
+      !!row.vision_assist_enabled === !!other.vision_assist_enabled &&
+      !!row.vision_pool_enabled === !!other.vision_pool_enabled &&
+      (Number(row.vision_priority) || 0) === (Number(other.vision_priority) || 0) &&
       JSON.stringify(cloneProtocolAliases(row.protocol_aliases)) === JSON.stringify(cloneProtocolAliases(other.protocol_aliases));
   });
 }
