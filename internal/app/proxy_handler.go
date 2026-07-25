@@ -354,14 +354,9 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 	if !s.enforceTokenLimits(c, tokenHashStr, originalModel) {
 		return
 	}
-	if s.isGlobalModelDisabled(originalModel) {
-		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
-			"message": "model " + originalModel + " is globally disabled",
-			"type":    "model_disabled",
-			"code":    "model_disabled",
-		}})
-		return
-	}
+	// 注意：模型禁用按“真实上游模型”生效，不拦截客户端请求名。
+	// 若某渠道会把 originalModel 重定向/模糊匹配成未禁用的上游模型，请求应正常放行；
+	// 具体过滤在 filterGlobalDisabledModelCandidates 中按 resolveActualModel 解析后进行。
 
 	// 注册活跃请求（内存状态，用于前端实时显示）
 	activeID := s.activeRequests.Register(startTime, originalModel, c.ClientIP(), isStreaming)
