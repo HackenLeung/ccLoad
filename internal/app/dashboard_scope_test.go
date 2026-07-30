@@ -395,9 +395,9 @@ func TestDashboardModelsMetricsAndStatsExposeOnlyScopedChannels(t *testing.T) {
 	now := model.JSONTime{Time: time.Now()}
 	const sensitiveLastRequestMessage = "SENSITIVE_STATS_SENTINEL https://upstream.example/v1?key=sk-stats-secret"
 	for _, entry := range []*model.LogEntry{
-		{Time: now, Model: "owner-model", LogSource: model.LogSourceProxy, ChannelID: ownerChannel.ID, StatusCode: 200, Message: sensitiveLastRequestMessage, AuthTokenID: 42},
-		{Time: now, Model: "owner-model", LogSource: model.LogSourceProxy, ChannelID: ownerChannel2.ID, StatusCode: 200, AuthTokenID: 42},
-		{Time: now, Model: "foreign-model", LogSource: model.LogSourceProxy, ChannelID: foreignChannel.ID, StatusCode: 200, AuthTokenID: 99},
+		{Time: now, Model: "owner-model", LogSource: model.LogSourceProxy, ChannelID: ownerChannel.ID, StatusCode: 200, Message: sensitiveLastRequestMessage, AuthTokenID: 42, Duration: 0.1, InputTokens: 10, OutputTokens: 20, CacheReadInputTokens: 3},
+		{Time: now, Model: "owner-model", LogSource: model.LogSourceProxy, ChannelID: ownerChannel2.ID, StatusCode: 200, AuthTokenID: 42, Duration: 0.3, InputTokens: 30, OutputTokens: 40, CacheReadInputTokens: 4, CacheCreationInputTokens: 5},
+		{Time: now, Model: "foreign-model", LogSource: model.LogSourceProxy, ChannelID: foreignChannel.ID, StatusCode: 200, AuthTokenID: 99, Duration: 0.9, InputTokens: 1000, OutputTokens: 1000, CacheReadInputTokens: 1000, CacheCreationInputTokens: 1000},
 	} {
 		if err := store.AddLog(ctx, entry); err != nil {
 			t.Fatalf("add log: %v", err)
@@ -502,10 +502,24 @@ func TestDashboardModelsMetricsAndStatsExposeOnlyScopedChannels(t *testing.T) {
 	summaryCtx.Set(webIdentityContextKey, WebIdentity{Role: model.WebRoleAPIToken, AuthTokenID: 42})
 	server.HandlePublicSummary(summaryCtx)
 	summary := mustParseAPIResponse[struct {
-		TotalRequests int `json:"total_requests"`
+		TotalRequests      int                    `json:"total_requests"`
+		TodayTokens        int64                  `json:"today_tokens"`
+		CumulativeTokens   int64                  `json:"cumulative_tokens"`
+		RecentTPM          int64                  `json:"recent_tpm"`
+		AvgResponseSeconds float64                `json:"avg_response_seconds"`
+		ByType             map[string]TypeSummary `json:"by_type"`
 	}](t, summaryW.Body.Bytes()).Data
 	if summary.TotalRequests != 2 {
 		t.Fatalf("summary total=%d, want owner total 2", summary.TotalRequests)
+	}
+	if summary.TodayTokens != 112 || summary.CumulativeTokens != 112 || summary.RecentTPM != 112 {
+		t.Fatalf("scoped summary tokens=%+v, want 112 without foreign usage", summary)
+	}
+	if summary.AvgResponseSeconds < 0.199 || summary.AvgResponseSeconds > 0.201 {
+		t.Fatalf("scoped avg response=%v, want 0.2", summary.AvgResponseSeconds)
+	}
+	if summary.ByType["openai"].TodayTokens != 33 || summary.ByType["anthropic"].TodayTokens != 79 {
+		t.Fatalf("scoped type tokens=%+v", summary.ByType)
 	}
 
 	bootstrapCtx, bootstrapW := newTestContext(t, newRequest(http.MethodGet, "/dashboard/logs/bootstrap?range=today", nil))

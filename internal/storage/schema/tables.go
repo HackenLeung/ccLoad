@@ -205,6 +205,7 @@ func DefineLogsTable() *TableBuilder {
 		Column("minute_bucket BIGINT NOT NULL DEFAULT 0"). // time/60000，用于RPM类聚合避免运行时FLOOR
 		Column("model VARCHAR(191) NOT NULL DEFAULT ''").
 		Column("actual_model VARCHAR(191) NOT NULL DEFAULT ''"). // 实际转发的模型（空表示未重定向）
+		Column("upstream_protocol VARCHAR(32) NOT NULL DEFAULT ''").
 		Column("log_source VARCHAR(32) NOT NULL DEFAULT 'proxy'").
 		Column("channel_id INT NOT NULL DEFAULT 0").
 		Column("status_code INT NOT NULL").

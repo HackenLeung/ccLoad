@@ -31,6 +31,7 @@ const LOG_COLUMNS = [
   { key: 'tokenDesc',   cls: 'logs-col-token-desc',  i18n: 'logs.colTokenDesc' },
   { key: 'apiKey',      cls: 'logs-col-api-key',     i18n: 'logs.colApiKey' },
   { key: 'channel',     cls: 'logs-col-channel',     i18n: 'logs.colChannel' },
+  { key: 'upstreamProtocol', cls: 'logs-col-upstream-protocol', i18n: 'logs.colUpstreamProtocol' },
   { key: 'model',       cls: 'logs-col-model',       i18n: 'common.model' },
   { key: 'status',      cls: 'logs-col-status',      i18n: 'logs.statusCode' },
   { key: 'timing',      cls: 'logs-col-timing',      i18n: 'logs.colTiming' },
@@ -453,6 +454,19 @@ function buildLogModelDisplay(model, actualModel, thinkingEffort, reasoningToken
     </span>`;
 }
 
+function buildUpstreamProtocolDisplay(upstreamProtocol) {
+  const normalized = String(upstreamProtocol || '').trim().toLowerCase();
+  if (!normalized) return '';
+
+  const labels = {
+    anthropic: 'Anthropic',
+    codex: 'Codex',
+    gemini: 'Gemini',
+    openai: 'OpenAI'
+  };
+  return `<span class="logs-protocol-tag">${escapeHtml(labels[normalized] || normalized)}</span>`;
+}
+
 function getLogMobileLabels() {
   return {
     time: escapeHtml(t('logs.colTime')),
@@ -460,6 +474,7 @@ function getLogMobileLabels() {
     tokenDesc: escapeHtml(t('logs.colTokenDesc')),
     apiKey: escapeHtml(t('logs.colApiKey')),
     channel: escapeHtml(t('logs.colChannel')),
+    upstreamProtocol: escapeHtml(t('logs.colUpstreamProtocol')),
     model: escapeHtml(t('common.model')),
     status: escapeHtml(t('logs.statusCode')),
     timing: escapeHtml(t('logs.colTiming')),
@@ -821,6 +836,7 @@ function renderActiveRequests(activeRequests) {
     const durationDisplay = startMs ? buildActiveRequestTimingHtml(req, elapsedRaw, elapsed) : '-';
 
     const channelDisplay = buildActiveRequestChannelDisplay(req);
+    const upstreamProtocolDisplay = buildUpstreamProtocolDisplay(req.upstream_protocol);
     const modelDisplay = buildLogModelDisplay(req.model, '', req.thinking_effort, req.reasoning_tokens);
     const tokenDescDisplay = buildActiveRequestTokenDescDisplay(req);
     const tokenDescCellClass = `logs-col-token-desc${tokenDescDisplay ? '' : ' mobile-empty-cell'}`;
@@ -841,6 +857,11 @@ function renderActiveRequests(activeRequests) {
       if (timingCell) timingCell.innerHTML = `${durationDisplay} ${streamFlag}`;
       const channelCell = existingRow.querySelector('.logs-col-channel');
       if (channelCell) channelCell.innerHTML = channelDisplay;
+      const upstreamProtocolCell = existingRow.querySelector('.logs-col-upstream-protocol');
+      if (upstreamProtocolCell) {
+        upstreamProtocolCell.innerHTML = upstreamProtocolDisplay;
+        upstreamProtocolCell.classList.toggle('mobile-empty-cell', !upstreamProtocolDisplay);
+      }
       const msgCell = existingRow.querySelector('.logs-col-message');
       if (msgCell) msgCell.innerHTML = infoContent;
     } else {
@@ -866,6 +887,7 @@ function renderActiveRequests(activeRequests) {
             <td class="${tokenDescCellClass}" data-mobile-label="${logMobileLabels.tokenDesc}" style="white-space: nowrap;">${tokenDescDisplay}</td>
             <td class="logs-col-api-key" data-mobile-label="${logMobileLabels.apiKey}" style="text-align: center; white-space: nowrap;">${keyDisplay}</td>
             <td class="logs-col-channel" data-mobile-label="${logMobileLabels.channel}" style="text-align: left;">${channelDisplay}</td>
+            <td class="logs-col-upstream-protocol${upstreamProtocolDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.upstreamProtocol}">${upstreamProtocolDisplay}</td>
             <td class="logs-col-model" data-mobile-label="${logMobileLabels.model}">${modelDisplay}</td>
             <td class="logs-col-status" data-mobile-label="${logMobileLabels.status}"><span class="status-pending">进行中</span></td>
             <td class="logs-col-timing" data-mobile-label="${logMobileLabels.timing}" style="text-align: right; white-space: nowrap;">${durationDisplay} ${streamFlag}</td>
@@ -896,7 +918,7 @@ function getTableColspan() {
   const table = document.getElementById('tbody')?.closest('table')
     || document.querySelector('.logs-table');
   const headerCells = table ? table.querySelectorAll('thead th') : [];
-  return headerCells.length || 16; // fallback到16列（日志页默认列数）
+  return headerCells.length || 17; // fallback到17列（日志页默认列数）
 }
 
 function formatCacheUtilRate(inputTokens, cacheReadTokens, cacheCreationTokens) {
@@ -954,6 +976,7 @@ function renderLogs(data) {
 
     // 1. 渠道信息显示（鼠标移上去时显示URL）
     const configDisplay = buildLogChannelDisplay(entry);
+    const upstreamProtocolDisplay = buildUpstreamProtocolDisplay(entry.upstream_protocol);
 
     // 2. 状态码样式
     const statusClass = (entry.status_code >= 200 && entry.status_code < 300) ?
@@ -1061,6 +1084,7 @@ function renderLogs(data) {
           <td class="logs-col-token-desc" data-mobile-label="${logMobileLabels.tokenDesc}" style="white-space: nowrap;">${tokenDescDisplay}</td>
           <td class="logs-col-api-key" data-mobile-label="${logMobileLabels.apiKey}" style="text-align: center; white-space: nowrap;">${apiKeyDisplay}</td>
           <td class="logs-col-channel" data-mobile-label="${logMobileLabels.channel}" style="text-align: left;">${configDisplay}</td>
+          <td class="logs-col-upstream-protocol${upstreamProtocolDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.upstreamProtocol}">${upstreamProtocolDisplay}</td>
           <td class="logs-col-model" data-mobile-label="${logMobileLabels.model}">${modelDisplay}</td>
           <td class="logs-col-status" data-mobile-label="${logMobileLabels.status}"><span class="${statusClass}">${statusCode}</span></td>
           <td class="logs-col-timing" data-mobile-label="${logMobileLabels.timing}" style="text-align: right; white-space: nowrap;">${responseTimingDisplay}</td>

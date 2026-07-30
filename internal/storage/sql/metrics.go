@@ -35,6 +35,7 @@ func (s *SQLStore) executeStatsQuery(ctx context.Context, startTime, endTime tim
 				AVG(CASE WHEN duration > 0 THEN duration ELSE NULL END),
 				3
 			) as avg_duration,
+			SUM(CASE WHEN duration > 0 THEN 1 ELSE 0 END) as duration_sample_count,
 			` + lastSuccessCol + `SUM(COALESCE(input_tokens, 0)) as total_input_tokens,
 			SUM(COALESCE(output_tokens, 0)) as total_output_tokens,
 			SUM(COALESCE(cache_read_input_tokens, 0)) as total_cache_read_input_tokens,
@@ -83,7 +84,7 @@ func (s *SQLStore) executeStatsQuery(ctx context.Context, startTime, endTime tim
 		scanArgs := []any{
 			&entry.ChannelID, &entry.Model,
 			&entry.Success, &entry.Error, &entry.Total,
-			&avgFirstByteTime, &avgDuration,
+			&avgFirstByteTime, &avgDuration, &entry.DurationSampleCount,
 		}
 		if withLastSuccess {
 			scanArgs = append(scanArgs, &lastSuccessAt)

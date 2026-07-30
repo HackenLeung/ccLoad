@@ -70,8 +70,21 @@ func TestAdminStats_PublicAndCooldownEndpoints(t *testing.T) {
 			IsStreaming:          false,
 			InputTokens:          7,
 			OutputTokens:         8,
-			CacheReadInputTokens: 99, // openai 类型不应计入缓存统计
+			CacheReadInputTokens: 99,
 			Cost:                 0.02,
+		},
+		{
+			Time:                     model.JSONTime{Time: now.Add(-48 * time.Hour)},
+			Model:                    "m1",
+			ChannelID:                oai.ID,
+			LogSource:                model.LogSourceProxy,
+			StatusCode:               200,
+			Message:                  "historical ok",
+			Duration:                 1,
+			InputTokens:              1,
+			OutputTokens:             2,
+			CacheReadInputTokens:     4,
+			CacheCreationInputTokens: 5,
 		},
 		{
 			Time:         model.JSONTime{Time: now},
@@ -139,10 +152,14 @@ func TestAdminStats_PublicAndCooldownEndpoints(t *testing.T) {
 		var resp struct {
 			Success bool `json:"success"`
 			Data    struct {
-				TotalRequests   int                    `json:"total_requests"`
-				SuccessRequests int                    `json:"success_requests"`
-				ErrorRequests   int                    `json:"error_requests"`
-				ByType          map[string]TypeSummary `json:"by_type"`
+				TotalRequests      int                    `json:"total_requests"`
+				SuccessRequests    int                    `json:"success_requests"`
+				ErrorRequests      int                    `json:"error_requests"`
+				TodayTokens        int64                  `json:"today_tokens"`
+				CumulativeTokens   int64                  `json:"cumulative_tokens"`
+				RecentTPM          int64                  `json:"recent_tpm"`
+				AvgResponseSeconds float64                `json:"avg_response_seconds"`
+				ByType             map[string]TypeSummary `json:"by_type"`
 			} `json:"data"`
 		}
 		mustUnmarshalJSON(t, w.Body.Bytes(), &resp)
@@ -151,6 +168,12 @@ func TestAdminStats_PublicAndCooldownEndpoints(t *testing.T) {
 		}
 		if resp.Data.TotalRequests != 2 || resp.Data.SuccessRequests != 1 || resp.Data.ErrorRequests != 1 {
 			t.Fatalf("unexpected totals: %+v", resp.Data)
+		}
+		if resp.Data.TodayTokens != 150 || resp.Data.CumulativeTokens != 162 || resp.Data.RecentTPM != 150 {
+			t.Fatalf("unexpected token overview: %+v", resp.Data)
+		}
+		if resp.Data.AvgResponseSeconds < 0.149 || resp.Data.AvgResponseSeconds > 0.151 {
+			t.Fatalf("avg response=%v, want 0.15", resp.Data.AvgResponseSeconds)
 		}
 
 		typKey := "anthropic"
@@ -170,6 +193,9 @@ func TestAdminStats_PublicAndCooldownEndpoints(t *testing.T) {
 		if anthTS.TotalCacheReadTokens != 3 || anthTS.TotalCacheCreationTokens == 0 {
 			t.Fatalf("unexpected anthropic cache: %+v", anthTS)
 		}
+		if anthTS.TodayTokens != 36 || anthTS.CumulativeTokens != 36 {
+			t.Fatalf("unexpected anthropic overview tokens: %+v", anthTS)
+		}
 
 		oaiTS, ok := resp.Data.ByType["openai"]
 		if !ok {
@@ -181,8 +207,11 @@ func TestAdminStats_PublicAndCooldownEndpoints(t *testing.T) {
 		if oaiTS.TotalInputTokens != 7 || oaiTS.TotalOutputTokens != 8 {
 			t.Fatalf("unexpected openai tokens: %+v", oaiTS)
 		}
-		if oaiTS.TotalCacheReadTokens != 0 {
-			t.Fatalf("expected openai cache tokens excluded, got %+v", oaiTS)
+		if oaiTS.TotalCacheReadTokens != 99 {
+			t.Fatalf("unexpected openai cache tokens: %+v", oaiTS)
+		}
+		if oaiTS.TodayTokens != 114 || oaiTS.CumulativeTokens != 126 {
+			t.Fatalf("unexpected openai overview tokens: %+v", oaiTS)
 		}
 	})
 

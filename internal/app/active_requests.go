@@ -20,7 +20,8 @@ type ActiveRequest struct {
 	Streaming           bool    `json:"is_streaming"`
 	ChannelID           int64   `json:"channel_id,omitempty"`
 	ChannelName         string  `json:"channel_name,omitempty"`
-	ChannelType         string  `json:"channel_type,omitempty"`           // 渠道类型（用于前端筛选）
+	ChannelType         string  `json:"channel_type,omitempty"` // 渠道类型（用于前端筛选）
+	UpstreamProtocol    string  `json:"upstream_protocol,omitempty"`
 	APIKeyUsed          string  `json:"api_key_used,omitempty"`           // 脱敏后的key
 	TokenID             int64   `json:"token_id,omitempty"`               // 令牌ID（用于前端筛选，0表示无令牌）
 	BaseURL             string  `json:"base_url,omitempty"`               // 当前使用的上游URL
@@ -32,17 +33,18 @@ type ActiveRequest struct {
 }
 
 type activeRequest struct {
-	ID          int64
-	Model       string
-	ClientIP    string
-	StartTime   int64 // Unix毫秒
-	Streaming   bool
-	ChannelID   int64
-	ChannelName string
-	ChannelType string
-	APIKeyUsed  string
-	TokenID     int64
-	BaseURL     string
+	ID               int64
+	Model            string
+	ClientIP         string
+	StartTime        int64 // Unix毫秒
+	Streaming        bool
+	ChannelID        int64
+	ChannelName      string
+	ChannelType      string
+	UpstreamProtocol string
+	APIKeyUsed       string
+	TokenID          int64
+	BaseURL          string
 
 	CostMultiplier float64 // 渠道成本倍率
 	ThinkingEffort string
@@ -91,12 +93,13 @@ func (m *activeRequestManager) Register(startTime time.Time, model, clientIP str
 
 // Update 更新活跃请求的渠道信息（在选择渠道/key后调用）
 // 每次切换渠道/Key 时重置首字节计时和已接收字节，避免前次失败尝试的残留数据误导前端显示
-func (m *activeRequestManager) Update(id int64, channelID int64, channelName, channelType, apiKey string, tokenID int64, costMultiplier float64) {
+func (m *activeRequestManager) Update(id int64, channelID int64, channelName, channelType, upstreamProtocol, apiKey string, tokenID int64, costMultiplier float64) {
 	m.mu.Lock()
 	if req, ok := m.requests[id]; ok {
 		req.ChannelID = channelID
 		req.ChannelName = channelName
 		req.ChannelType = channelType
+		req.UpstreamProtocol = upstreamProtocol
 		req.APIKeyUsed = util.MaskAPIKey(apiKey)
 		req.TokenID = tokenID
 		req.CostMultiplier = costMultiplier
@@ -200,6 +203,7 @@ func (m *activeRequestManager) List() []*ActiveRequest {
 			ChannelID:         req.ChannelID,
 			ChannelName:       req.ChannelName,
 			ChannelType:       req.ChannelType,
+			UpstreamProtocol:  req.UpstreamProtocol,
 			APIKeyUsed:        req.APIKeyUsed,
 			TokenID:           req.TokenID,
 			BaseURL:           req.BaseURL,

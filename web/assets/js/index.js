@@ -7,6 +7,10 @@
       active_models: 0,
       duration_seconds: 1,
       rpm_stats: null,
+      today_tokens: 0,
+      cumulative_tokens: 0,
+      recent_tpm: 0,
+      avg_response_seconds: 0,
       is_today: true
     };
 
@@ -14,22 +18,25 @@
     let currentTimeRange = 'today';
     let currentCustomTimeRange = null;
 
-    function buildSummaryURL() {
+    function buildSummaryURL(forceRefresh) {
       const query = typeof window.buildDateRangeQuery === 'function'
         ? window.buildDateRangeQuery(currentTimeRange, currentCustomTimeRange)
         : `range=${encodeURIComponent(currentTimeRange)}`;
-      return `/dashboard/summary?${query}`;
+      // 累计 Token 走后端 1 小时缓存；用户主动加载/切换范围时强制取最新值。
+      const suffix = forceRefresh ? '&refresh_cumulative=1' : '';
+      return `/dashboard/summary?${query}${suffix}`;
     }
 
-    // 加载统计数据
-    async function loadStats() {
+    // 加载统计数据。forceRefresh=true 表示用户主动触发（首屏/切换范围），强制刷新累计值；
+    // 自动刷新不传，读后端 1 小时缓存，避免频繁全表聚合。
+    async function loadStats(forceRefresh = false) {
       try {
         // 添加加载状态
         document.querySelectorAll('.metric-number').forEach(el => {
           el.classList.add('animate-pulse');
         });
 
-        const data = await fetchDataWithAuth(buildSummaryURL());
+        const data = await fetchDataWithAuth(buildSummaryURL(forceRefresh));
         statsData = data || statsData;
         updateStatsDisplay();
 
@@ -55,10 +62,13 @@
       document.getElementById('error-requests').textContent = formatNumber(statsData.error_requests || 0);
       document.getElementById('success-rate').textContent = successRate + '%';
 
-      // 更新 RPM（使用峰值/平均/最近格式）
+      document.getElementById('overview-today-tokens').textContent = formatNumber(statsData.today_tokens || 0);
+      document.getElementById('overview-cumulative-tokens').textContent = formatNumber(statsData.cumulative_tokens || 0);
+      document.getElementById('overview-tpm').textContent = formatNumber(statsData.recent_tpm || 0);
+      document.getElementById('overview-avg-response').textContent = formatResponseTime(statsData.avg_response_seconds);
+
       const rpmStats = statsData.rpm_stats || null;
-      const isToday = statsData.is_today !== false;
-      updateGlobalRpmDisplay('total-rpm', rpmStats, isToday);
+      document.getElementById('overview-rpm').textContent = formatNumber(rpmStats ? (rpmStats.recent_rpm || 0) : 0);
 
       // 更新按渠道类型统计
       if (statsData.by_type) {
@@ -69,30 +79,11 @@
       }
     }
 
-    // 更新全局 RPM 显示（格式：数值 数值 数值）
-    function updateGlobalRpmDisplay(elementId, stats, showRecent) {
-      const el = document.getElementById(elementId);
-      if (!el) return;
-
-      if (!stats || (stats.peak_rpm < 0.01 && stats.avg_rpm < 0.01)) {
-        el.innerHTML = '--';
-        return;
-      }
-
-      const fmt = v => v >= 1000 ? (v / 1000).toFixed(1) + 'K' : v.toFixed(1);
-      const parts = [];
-
-      if (stats.peak_rpm >= 0.01) {
-        parts.push(`<span style="color:${getRpmColor(stats.peak_rpm)}">${fmt(stats.peak_rpm)}</span>`);
-      }
-      if (stats.avg_rpm >= 0.01) {
-        parts.push(`<span style="color:${getRpmColor(stats.avg_rpm)}">${fmt(stats.avg_rpm)}</span>`);
-      }
-      if (showRecent && stats.recent_rpm >= 0.01) {
-        parts.push(`<span style="color:${getRpmColor(stats.recent_rpm)}">${fmt(stats.recent_rpm)}</span>`);
-      }
-
-      el.innerHTML = parts.length > 0 ? parts.join(' ') : '--';
+    function formatResponseTime(seconds) {
+      const value = Number(seconds);
+      if (!Number.isFinite(value) || value <= 0) return '--';
+      if (value < 1) return `${Math.round(value * 1000)}ms`;
+      return `${value < 10 ? value.toFixed(2) : value.toFixed(1)}s`;
     }
 
     // 更新单个渠道类型的统计
@@ -115,6 +106,8 @@
       document.getElementById(`type-${type}-success`).textContent = formatNumber(successRequests);
       document.getElementById(`type-${type}-error`).textContent = formatNumber(errorRequests);
       document.getElementById(`type-${type}-rate`).textContent = successRate + '%';
+      document.getElementById(`type-${type}-today-tokens`).textContent = formatNumber(data ? (data.today_tokens || 0) : 0);
+      document.getElementById(`type-${type}-cumulative-tokens`).textContent = formatNumber(data ? (data.cumulative_tokens || 0) : 0);
 
       // 所有渠道类型的Token和成本统计
       const inputTokens = data ? (data.total_input_tokens || 0) : 0;
@@ -161,12 +154,12 @@
         onChange: (range, customRange) => {
           currentTimeRange = range;
           if (range === 'custom') currentCustomTimeRange = customRange;
-          loadStats();
+          loadStats(true);
         }
       });
 
-      // 加载统计数据
-      loadStats();
+      // 加载统计数据（首屏为用户主动动作，强制刷新累计值）
+      loadStats(true);
 
       // 自动刷新（system_settings.auto_refresh_interval_seconds，0=禁用）
       if (typeof window.createAutoRefresh === 'function') {

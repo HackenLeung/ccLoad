@@ -926,6 +926,34 @@ body {
   text-align: right;
 }
 
+.channel-header-stats {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  min-width: 0;
+  margin-left: var(--space-3);
+}
+
+.channel-header-stat {
+  min-width: 0;
+  text-align: right;
+}
+
+.channel-header-stat + .channel-header-stat {
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--surface-border);
+}
+
+.channel-token-value {
+  display: block;
+  font-size: var(--text-base);
+  font-weight: var(--font-bold);
+  color: var(--neutral-700);
+  font-family: var(--font-family-mono);
+  white-space: nowrap;
+}
+
 .cost-label {
   display: block;
   font-size: var(--text-xs);
@@ -999,6 +1027,12 @@ body {
 }
 
 /* ===== 总览卡片 ===== */
+.index-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
 .summary-card {
   background: var(--surface-gradient);
   border: 1px solid var(--surface-border);
@@ -1050,6 +1084,23 @@ body {
   font-weight: var(--font-bold);
   line-height: 1.2;
   margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+
+.summary-value-performance {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  justify-content: start;
+  gap: 0 var(--space-2);
+  font-size: var(--text-xl);
+  font-family: var(--font-family-mono);
+}
+
+.summary-value-performance small {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--neutral-500);
 }
 
 .summary-label {
@@ -1082,6 +1133,43 @@ body {
 .summary-value-note {
   font-size: 0.7em;
   color: var(--neutral-500);
+}
+
+@media (max-width: 1280px) {
+  .index-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .channel-card-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .channel-header-stats {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .channel-header-stat {
+    flex: 1 1 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .index-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-index .channel-cost .cost-stack--inline {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+
+  .page-index .channel-header-stat .cost-value {
+    font-size: var(--text-base);
+  }
 }
 
 .index-api-list {

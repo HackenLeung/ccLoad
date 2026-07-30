@@ -250,6 +250,15 @@ func TestBuildLogEntry_CopiesReasoningTokens(t *testing.T) {
 	}
 }
 
+func TestBuildLogEntry_NormalizesUpstreamProtocol(t *testing.T) {
+	t.Parallel()
+
+	entry := buildLogEntry(logEntryParams{UpstreamProtocol: " Codex "})
+	if entry.UpstreamProtocol != "codex" {
+		t.Fatalf("upstream_protocol=%q, want codex", entry.UpstreamProtocol)
+	}
+}
+
 func TestComputeRequestCost_ServiceTierAppliesOnlyAsOpenAIPriceMultiplier(t *testing.T) {
 	t.Parallel()
 

@@ -164,6 +164,36 @@ func (sc *StatsCache) GetStatsLite(ctx context.Context, startTime, endTime time.
 	return result, nil
 }
 
+// GetStatsLiteWithTTL 与 GetStatsLite 类似，但使用自定义 TTL，并支持强制刷新。
+// 缓存键按 ttl 分桶（而非默认 30 秒），保证在同一 TTL 周期内稳定命中。
+// forceRefresh=true 时跳过缓存读取（仍写回），用于用户主动刷新页面等需要最新数据的场景。
+// 典型用途：首页“累计 Token”这类全表聚合，代价高但对新鲜度要求低。
+func (sc *StatsCache) GetStatsLiteWithTTL(ctx context.Context, startTime, endTime time.Time, filter *model.LogFilter, ttl time.Duration, forceRefresh bool) ([]model.StatsEntry, error) {
+	key := buildCacheKeyWithBucket("stats_lite_ttl", startTime, endTime, filter, ttl)
+
+	if !forceRefresh {
+		if cached, ok := sc.cache.Load(key); ok {
+			cs := cached.(*cachedStats)
+			if time.Now().Before(cs.expiry) {
+				return cs.data.([]model.StatsEntry), nil
+			}
+		}
+	}
+
+	// 缓存未命中或强制刷新，查询数据库
+	result, err := sc.store.GetStatsLite(ctx, startTime, endTime, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	sc.storeCache(key, &cachedStats{
+		data:   result,
+		expiry: time.Now().Add(ttl),
+	})
+
+	return result, nil
+}
+
 // GetRPMStats 获取 RPM 统计（带缓存）
 func (sc *StatsCache) GetRPMStats(ctx context.Context, startTime, endTime time.Time, filter *model.LogFilter, isToday bool) (*model.RPMStats, error) {
 	key := buildCacheKey("rpm", startTime, endTime, filter)
@@ -211,6 +241,20 @@ func cacheKeyEndUnix(endTime time.Time) int64 {
 		return endTime.Unix()
 	}
 	return (endTime.Unix() / bucketSeconds) * bucketSeconds
+}
+
+// buildCacheKeyWithBucket 按显式 ttl 对 endTime 分桶生成缓存键。
+// 与 buildCacheKey 不同，这里不走 calculateTTL 的 30 秒上限，而是直接用调用方指定的 ttl 分桶，
+// 使高 TTL（如 1 小时）的实时范围查询能在整个周期内稳定命中同一个 key。
+func buildCacheKeyWithBucket(typ string, startTime, endTime time.Time, filter *model.LogFilter, ttl time.Duration) string {
+	filterHash := hashFilter(filter)
+	endUnix := endTime.Unix()
+	if ttl > 0 {
+		if bucketSeconds := int64(ttl / time.Second); bucketSeconds > 0 {
+			endUnix = (endUnix / bucketSeconds) * bucketSeconds
+		}
+	}
+	return fmt.Sprintf("%s:%d:%d:%s", typ, startTime.Unix(), endUnix, filterHash)
 }
 
 // hashFilter 对 filter 进行哈希

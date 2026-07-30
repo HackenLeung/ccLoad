@@ -70,6 +70,7 @@ type LogEntry struct {
 	Time                 JSONTime `json:"time"`
 	Model                string   `json:"model"`
 	ActualModel          string   `json:"actual_model,omitempty"` // 实际转发的模型（空表示未重定向）
+	UpstreamProtocol     string   `json:"upstream_protocol,omitempty"`
 	LogSource            string   `json:"log_source,omitempty"`
 	ChannelID            int64    `json:"channel_id"`
 	ChannelName          string   `json:"channel_name,omitempty"`

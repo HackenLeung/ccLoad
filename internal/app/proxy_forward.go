@@ -1558,6 +1558,7 @@ func (s *Server) forwardAttempt(
 	// 转发请求（传递实际的API Key字符串和观测回调）
 	// [FIX] 2026-01: 使用传入的 requestPath（可能已替换模型名）而非 reqCtx.requestPath
 	upstreamProtocol := protocol.Protocol(cfg.ResolveUpstreamProtocol(string(reqCtx.clientProtocol)))
+	reqCtx.upstreamProtocol = upstreamProtocol
 	bodyToSend = applyCodexToOpenAICapabilities(cfg, reqCtx.clientProtocol, upstreamProtocol, requestPath, bodyToSend)
 	bodyToSend = prepareCodexResponsesBodyForUpstream(cfg, upstreamProtocol, requestPath, bodyToSend)
 	plan, err := protocol.BuildTransformPlan(
@@ -2463,7 +2464,7 @@ func (s *Server) tryChannelWithKeys(ctx context.Context, cfg *model.Config, reqC
 
 		// 更新活跃请求的渠道信息（用于前端显示）
 		if reqCtx.activeReqID > 0 {
-			s.activeRequests.Update(reqCtx.activeReqID, cfg.ID, cfg.Name, cfg.GetChannelType(), selectedKey, reqCtx.tokenID, cfg.CostMultiplier)
+			s.activeRequests.Update(reqCtx.activeReqID, cfg.ID, cfg.Name, cfg.GetChannelType(), cfg.ResolveUpstreamProtocol(string(reqCtx.clientProtocol)), selectedKey, reqCtx.tokenID, cfg.CostMultiplier)
 		}
 
 		// URL循环（单URL时退化为单次迭代）

@@ -135,6 +135,7 @@ type ForwardObserver struct {
 type proxyRequestContext struct {
 	originalModel    string
 	clientProtocol   protocol.Protocol
+	upstreamProtocol protocol.Protocol
 	requestMethod    string
 	requestPath      string
 	rawQuery         string
@@ -819,23 +820,24 @@ func stringMapValue(values map[string]any, key string) string {
 
 // logEntryParams 日志条目构建参数（避免多个 string 参数顺序混淆）
 type logEntryParams struct {
-	RequestModel   string // 客户端请求的原始模型名称
-	ActualModel    string // 实际转发到上游的模型名称（可能经过重定向）
-	ChannelID      int64
-	StatusCode     int
-	Duration       float64
-	IsStreaming    bool
-	APIKeyUsed     string
-	AuthTokenID    int64
-	ClientIP       string
-	BaseURL        string // 请求使用的上游URL
-	Result         *fwResult
-	ErrMsg         string
-	StartTime      time.Time            // 渠道尝试开始时间（用于日志记录）
-	DebugData      *model.DebugLogEntry // Debug日志数据
-	CostMultiplier float64              // 渠道成本倍率快照（0=免费，<0 视为 1）
-	ThinkingEffort string
-	LogSource      string
+	RequestModel     string // 客户端请求的原始模型名称
+	ActualModel      string // 实际转发到上游的模型名称（可能经过重定向）
+	UpstreamProtocol string // 本次请求实际使用的上游协议
+	ChannelID        int64
+	StatusCode       int
+	Duration         float64
+	IsStreaming      bool
+	APIKeyUsed       string
+	AuthTokenID      int64
+	ClientIP         string
+	BaseURL          string // 请求使用的上游URL
+	Result           *fwResult
+	ErrMsg           string
+	StartTime        time.Time            // 渠道尝试开始时间（用于日志记录）
+	DebugData        *model.DebugLogEntry // Debug日志数据
+	CostMultiplier   float64              // 渠道成本倍率快照（0=免费，<0 视为 1）
+	ThinkingEffort   string
+	LogSource        string
 }
 
 // buildLogEntry 构建日志条目（消除重复代码，遵循DRY原则）
@@ -846,17 +848,18 @@ func buildLogEntry(p logEntryParams) *model.LogEntry {
 	}
 	logSource := model.NormalizeStoredLogSource(p.LogSource)
 	entry := &model.LogEntry{
-		Time:        model.JSONTime{Time: logTime},
-		Model:       p.RequestModel,
-		LogSource:   logSource,
-		ChannelID:   p.ChannelID,
-		StatusCode:  p.StatusCode,
-		Duration:    p.Duration,
-		IsStreaming: p.IsStreaming,
-		APIKeyUsed:  p.APIKeyUsed,
-		AuthTokenID: p.AuthTokenID,
-		ClientIP:    p.ClientIP,
-		BaseURL:     p.BaseURL,
+		Time:             model.JSONTime{Time: logTime},
+		Model:            p.RequestModel,
+		UpstreamProtocol: strings.ToLower(strings.TrimSpace(p.UpstreamProtocol)),
+		LogSource:        logSource,
+		ChannelID:        p.ChannelID,
+		StatusCode:       p.StatusCode,
+		Duration:         p.Duration,
+		IsStreaming:      p.IsStreaming,
+		APIKeyUsed:       p.APIKeyUsed,
+		AuthTokenID:      p.AuthTokenID,
+		ClientIP:         p.ClientIP,
+		BaseURL:          p.BaseURL,
 	}
 	entry.ThinkingEffort = normalizeThinkingEffort(p.ThinkingEffort)
 

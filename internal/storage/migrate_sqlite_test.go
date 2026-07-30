@@ -978,7 +978,7 @@ func TestEnsureLogsNewColumns_SQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqliteExistingColumns: %v", err)
 	}
-	for _, col := range []string{"minute_bucket", "auth_token_id", "client_ip", "actual_model", "log_source"} {
+	for _, col := range []string{"minute_bucket", "auth_token_id", "client_ip", "actual_model", "log_source", "upstream_protocol"} {
 		if !cols[col] {
 			t.Errorf("column %s not found in logs", col)
 		}

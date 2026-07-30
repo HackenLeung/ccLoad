@@ -723,52 +723,56 @@
         order: 3;
       }
 
-      .logs-table .logs-col-model {
+      .logs-table .logs-col-upstream-protocol {
         order: 4;
       }
 
-      .logs-table .logs-col-api-key {
+      .logs-table .logs-col-model {
         order: 5;
       }
 
-      .logs-table .logs-col-token-desc {
+      .logs-table .logs-col-api-key {
         order: 6;
       }
 
-      .logs-table .logs-col-ip {
+      .logs-table .logs-col-token-desc {
         order: 7;
       }
 
-      .logs-table .logs-col-timing {
+      .logs-table .logs-col-ip {
         order: 8;
       }
 
-      .logs-table .logs-col-speed {
+      .logs-table .logs-col-timing {
         order: 9;
       }
 
-      .logs-table .logs-col-input {
+      .logs-table .logs-col-speed {
         order: 10;
       }
 
-      .logs-table .logs-col-output {
+      .logs-table .logs-col-input {
         order: 11;
       }
 
-      .logs-table .logs-col-cache-read {
+      .logs-table .logs-col-output {
         order: 12;
       }
 
-      .logs-table .logs-col-cache-write {
+      .logs-table .logs-col-cache-read {
         order: 13;
       }
 
-      .logs-table .logs-col-cache-util {
+      .logs-table .logs-col-cache-write {
         order: 14;
       }
 
-      .logs-table .logs-col-cost {
+      .logs-table .logs-col-cache-util {
         order: 15;
+      }
+
+      .logs-table .logs-col-cost {
+        order: 16;
       }
 
       .logs-table .logs-col-message {
@@ -780,6 +784,7 @@
       .logs-table .logs-col-time,
       .logs-table .logs-col-status,
       .logs-table .logs-col-channel,
+      .logs-table .logs-col-upstream-protocol,
       .logs-table .logs-col-model,
       .logs-table .logs-col-api-key,
       .logs-table .logs-col-token-desc,
@@ -803,6 +808,7 @@
       .logs-table .logs-col-time::before,
       .logs-table .logs-col-status::before,
       .logs-table .logs-col-channel::before,
+      .logs-table .logs-col-upstream-protocol::before,
       .logs-table .logs-col-model::before,
       .logs-table .logs-col-api-key::before,
       .logs-table .logs-col-token-desc::before,
@@ -962,8 +968,7 @@
       text-align: center;
     }
 
-    .logs-table th:nth-child(7),
-    .logs-table td:nth-child(7) {
+    .logs-table .logs-col-status {
       width: 60px;
       /* 状态码: 200/403/500 */
       min-width: 60px;
@@ -971,8 +976,7 @@
       text-align: center;
     }
 
-    .logs-table th:nth-child(14),
-    .logs-table td:nth-child(14) {
+    .logs-table .logs-col-cache-util {
       width: 70px;
       /* 缓存命中 */
       min-width: 70px;
@@ -980,9 +984,20 @@
       padding-right: var(--space-2);
     }
 
-    .logs-table th:nth-child(16),
-    .logs-table td:nth-child(16) {
+    .logs-table .logs-col-message {
       min-width: 120px;
+    }
+
+    .logs-table .logs-col-upstream-protocol {
+      min-width: 88px;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .logs-protocol-tag {
+      color: var(--neutral-700);
+      font-size: 0.85em;
+      font-weight: 600;
     }
 
     .logs-table .logs-col-model {

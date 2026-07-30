@@ -161,7 +161,10 @@ func ensureLogsNewColumns(ctx context.Context, db *sql.DB, dialect Dialect) erro
 		if err := ensureLogsThinkingEffortMySQL(ctx, db); err != nil {
 			return err
 		}
-		return ensureLogsLogSourceMySQL(ctx, db)
+		if err := ensureLogsLogSourceMySQL(ctx, db); err != nil {
+			return err
+		}
+		return ensureLogsUpstreamProtocolMySQL(ctx, db)
 	}
 	// SQLite: 使用PRAGMA table_info检查列
 	return ensureLogsColumnsSQLite(ctx, db)
@@ -177,6 +180,7 @@ func ensureLogsColumnsSQLite(ctx context.Context, db *sql.DB) error {
 		{name: "cache_5m_input_tokens", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "cache_1h_input_tokens", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "actual_model", definition: "TEXT NOT NULL DEFAULT ''"}, // 实际转发的模型
+		{name: "upstream_protocol", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "log_source", definition: "TEXT NOT NULL DEFAULT 'proxy'"},
 		{name: "api_key_hash", definition: "TEXT NOT NULL DEFAULT ''"}, // API Key SHA256（用于精确定位 key_index）
 		{name: "base_url", definition: "TEXT NOT NULL DEFAULT ''"},     // 请求使用的上游URL（多URL场景）
@@ -258,6 +262,10 @@ func ensureLogsServiceTierMySQL(ctx context.Context, db *sql.DB) error {
 
 func ensureLogsLogSourceMySQL(ctx context.Context, db *sql.DB) error {
 	return ensureMySQLColumns(ctx, db, "logs", []mysqlColumnDef{{name: "log_source", definition: "VARCHAR(32) NOT NULL DEFAULT 'proxy'"}})
+}
+
+func ensureLogsUpstreamProtocolMySQL(ctx context.Context, db *sql.DB) error {
+	return ensureMySQLColumns(ctx, db, "logs", []mysqlColumnDef{{name: "upstream_protocol", definition: "VARCHAR(32) NOT NULL DEFAULT ''"}})
 }
 
 // ensureLogsCacheFieldsMySQL 确保logs表有缓存细分字段(MySQL增量迁移,2025-12新增)

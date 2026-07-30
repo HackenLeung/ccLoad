@@ -167,10 +167,18 @@ func projectTokenStats(stats []model.StatsEntry) []model.StatsEntry {
 // 认证仪表盘使用 /dashboard/summary，并由 Web 身份强制作用域。
 func (s *Server) HandlePublicSummary(c *gin.Context) {
 	params := ParsePaginationParams(c)
-	startTime, endTime := params.GetTimeRange()
+	now := time.Now()
+	startTime, endTime := params.GetTimeRangeAt(now)
 
 	// 判断是否为本日（本日才计算最近一分钟）
 	isToday := params.Range == "today" || params.Range == ""
+	todayStart := beginningOfDay(now)
+	allTimeStart := time.Unix(0, 0)
+	recentStart := now.Add(-time.Minute)
+	// 累计 Token 是全表聚合，代价高但对新鲜度要求低：默认走 1 小时缓存，
+	// 仅在用户主动刷新（切换时间范围/手动刷新页面）时强制查一次最新值。
+	const cumulativeTokensTTL = time.Hour
+	refreshCumulative := util.ParseBoolDefault(c.Query("refresh_cumulative"), false)
 	ctx := c.Request.Context()
 	var logFilter *model.LogFilter
 	if _, ok := WebIdentityFromContext(c); ok {
@@ -179,18 +187,24 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 		logFilter = &filter
 	}
 
-	// [OPT] P1: 并行执行三个独立查询
+	// 并行查询所选区间、今日、累计和最近一分钟，首页只需一次请求。
 	var (
 		stats        []model.StatsEntry
+		todayStats   []model.StatsEntry
+		allTimeStats []model.StatsEntry
+		recentStats  []model.StatsEntry
 		rpmStats     *model.RPMStats
 		channelTypes map[int64]string
 		statsErr     error
+		todayErr     error
+		allTimeErr   error
+		recentErr    error
 		rpmErr       error
 		typesErr     error
 		wg           sync.WaitGroup
 	)
 
-	wg.Add(3)
+	wg.Add(5)
 
 	// 查询1: 基础统计（使用 Lite 版本跳过 fillStatsRPM）
 	go func() {
@@ -198,23 +212,58 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 		stats, statsErr = s.statsCache.GetStatsLite(ctx, startTime, endTime, logFilter)
 	}()
 
-	// 查询2: RPM统计
+	// 今日范围与所选范围相同时直接复用，避免重复聚合。
+	if !isToday {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			todayStats, todayErr = s.statsCache.GetStatsLite(ctx, todayStart, now, logFilter)
+		}()
+	}
+
+	go func() {
+		defer wg.Done()
+		allTimeStats, allTimeErr = s.statsCache.GetStatsLiteWithTTL(ctx, allTimeStart, now, logFilter, cumulativeTokensTTL, refreshCumulative)
+	}()
+
+	go func() {
+		defer wg.Done()
+		recentStats, recentErr = s.statsCache.GetStatsLite(ctx, recentStart, now, logFilter)
+	}()
+
+	// RPM统计
 	go func() {
 		defer wg.Done()
 		rpmStats, rpmErr = s.statsCache.GetRPMStats(ctx, startTime, endTime, logFilter, isToday)
 	}()
 
-	// 查询3: 渠道类型映射（带缓存）
+	// 渠道类型映射（带缓存）
 	go func() {
 		defer wg.Done()
 		channelTypes, typesErr = s.getChannelTypesMapCached(ctx)
 	}()
 
 	wg.Wait()
+	if isToday {
+		todayStats = stats
+		todayErr = statsErr
+	}
 
 	// 错误处理
 	if statsErr != nil {
 		RespondError(c, http.StatusInternalServerError, statsErr)
+		return
+	}
+	if todayErr != nil {
+		RespondError(c, http.StatusInternalServerError, todayErr)
+		return
+	}
+	if allTimeErr != nil {
+		RespondError(c, http.StatusInternalServerError, allTimeErr)
+		return
+	}
+	if recentErr != nil {
+		RespondError(c, http.StatusInternalServerError, recentErr)
 		return
 	}
 	if rpmErr != nil {
@@ -290,26 +339,39 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 			*ts.EffectiveCost += *stat.TotalCost
 		}
 
-		// Claude和Codex类型额外统计缓存（其他类型不支持prompt caching）
-		if channelType == "anthropic" || channelType == "codex" {
-			if stat.TotalCacheReadInputTokens != nil {
-				ts.TotalCacheReadTokens += *stat.TotalCacheReadInputTokens
-			}
-			if stat.TotalCacheCreationInputTokens != nil {
-				ts.TotalCacheCreationTokens += *stat.TotalCacheCreationInputTokens
-			}
+		if stat.TotalCacheReadInputTokens != nil {
+			ts.TotalCacheReadTokens += *stat.TotalCacheReadInputTokens
+		}
+		if stat.TotalCacheCreationInputTokens != nil {
+			ts.TotalCacheCreationTokens += *stat.TotalCacheCreationInputTokens
 		}
 	}
 
+	todayTokens, todayTokensByType := summarizeTokens(todayStats, channelTypes)
+	cumulativeTokens, cumulativeTokensByType := summarizeTokens(allTimeStats, channelTypes)
+	recentTPM, _ := summarizeTokens(recentStats, channelTypes)
+	for channelType, tokens := range todayTokensByType {
+		ts := ensureTypeSummary(typeStats, channelType)
+		ts.TodayTokens = tokens
+	}
+	for channelType, tokens := range cumulativeTokensByType {
+		ts := ensureTypeSummary(typeStats, channelType)
+		ts.CumulativeTokens = tokens
+	}
+
 	response := gin.H{
-		"total_requests":   totalSuccess + totalError,
-		"success_requests": totalSuccess,
-		"error_requests":   totalError,
-		"range":            params.Range,
-		"duration_seconds": durationSeconds,
-		"rpm_stats":        rpmStats,
-		"is_today":         isToday,
-		"by_type":          typeStats, // 按渠道类型分组的统计
+		"total_requests":       totalSuccess + totalError,
+		"success_requests":     totalSuccess,
+		"error_requests":       totalError,
+		"range":                params.Range,
+		"duration_seconds":     durationSeconds,
+		"rpm_stats":            rpmStats,
+		"today_tokens":         todayTokens,
+		"cumulative_tokens":    cumulativeTokens,
+		"recent_tpm":           recentTPM,
+		"avg_response_seconds": averageResponseSeconds(stats),
+		"is_today":             isToday,
+		"by_type":              typeStats, // 按渠道类型分组的统计
 	}
 
 	RespondJSON(c, http.StatusOK, response)
@@ -327,6 +389,62 @@ type TypeSummary struct {
 	TotalCacheCreationTokens int64    `json:"total_cache_creation_tokens,omitempty"` // Claude/Codex专用（prompt caching）
 	TotalCost                float64  `json:"total_cost,omitempty"`                  // 标准成本
 	EffectiveCost            *float64 `json:"effective_cost,omitempty"`              // 倍率后成本
+	TodayTokens              int64    `json:"today_tokens"`
+	CumulativeTokens         int64    `json:"cumulative_tokens"`
+}
+
+func ensureTypeSummary(typeStats map[string]*TypeSummary, channelType string) *TypeSummary {
+	if typeStats[channelType] == nil {
+		typeStats[channelType] = &TypeSummary{ChannelType: channelType}
+	}
+	return typeStats[channelType]
+}
+
+func summarizeTokens(stats []model.StatsEntry, channelTypes map[int64]string) (int64, map[string]int64) {
+	byType := make(map[string]int64)
+	var total int64
+	for _, stat := range stats {
+		tokens := statsEntryTotalTokens(stat)
+		total += tokens
+		if stat.ChannelID == nil {
+			continue
+		}
+		if channelType := channelTypes[int64(*stat.ChannelID)]; channelType != "" {
+			byType[channelType] += tokens
+		}
+	}
+	return total, byType
+}
+
+func statsEntryTotalTokens(stat model.StatsEntry) int64 {
+	var total int64
+	for _, value := range []*int64{
+		stat.TotalInputTokens,
+		stat.TotalOutputTokens,
+		stat.TotalCacheReadInputTokens,
+		stat.TotalCacheCreationInputTokens,
+	} {
+		if value != nil {
+			total += *value
+		}
+	}
+	return total
+}
+
+func averageResponseSeconds(stats []model.StatsEntry) float64 {
+	var weightedTotal float64
+	var sampleCount int64
+	for _, stat := range stats {
+		if stat.AvgDurationSeconds == nil || stat.DurationSampleCount <= 0 {
+			continue
+		}
+		weightedTotal += *stat.AvgDurationSeconds * float64(stat.DurationSampleCount)
+		sampleCount += stat.DurationSampleCount
+	}
+	if sampleCount == 0 {
+		return 0
+	}
+	return weightedTotal / float64(sampleCount)
 }
 
 // fetchChannelTypesMap 查询所有渠道的类型映射
