@@ -274,12 +274,62 @@ function buildActiveRequestInfoContent(req) {
   const infoColor = hasBytes ? 'var(--success-600)' : 'var(--neutral-500)';
   const infoHtml = `<span style="color: ${infoColor};">${escapeHtml(infoDisplay)}</span>`;
   const activeRequestId = Number(req?.id);
+  const attemptId = Number(req?.attempt_id);
 
-  if (!req?.debug_log_available || !Number.isFinite(activeRequestId) || activeRequestId <= 0) {
-    return infoHtml;
+  let content = infoHtml;
+  if (req?.debug_log_available && Number.isFinite(activeRequestId) && activeRequestId > 0) {
+    content = `<span class="debug-log-link has-upstream-detail" data-active-request-id="${activeRequestId}" title="${escapeHtml(t('logs.debugLogTitle'))}">${infoHtml}</span>`;
   }
 
-  return `<span class="debug-log-link has-upstream-detail" data-active-request-id="${activeRequestId}" title="${escapeHtml(t('logs.debugLogTitle'))}">${infoHtml}</span>`;
+  const canSkip = !!req?.can_skip || !!req?.skip_requested;
+  if (!canSkip || !Number.isFinite(activeRequestId) || activeRequestId <= 0 || !Number.isFinite(attemptId) || attemptId <= 0) {
+    return content;
+  }
+
+  const skipRequested = !!req?.skip_requested;
+  const skipLabel = skipRequested ? t('logs.skipChannelSwitching') : t('logs.skipChannel');
+  const disabled = skipRequested ? ' disabled aria-disabled="true"' : '';
+  const skipButton = `<button type="button" class="skip-active-channel-btn${skipRequested ? ' is-pending' : ''}" data-active-request-id="${activeRequestId}" data-attempt-id="${attemptId}" title="${escapeHtml(t('logs.skipChannelTitle'))}"${disabled}>${escapeHtml(skipLabel)}</button>`;
+  return `<span class="active-request-info">${content}${skipButton}</span>`;
+}
+
+async function skipActiveRequestChannel(button) {
+  const activeRequestId = Number(button?.dataset?.activeRequestId);
+  const attemptId = Number(button?.dataset?.attemptId);
+  if (!Number.isFinite(activeRequestId) || activeRequestId <= 0 || !Number.isFinite(attemptId) || attemptId <= 0 || button.disabled) {
+    return;
+  }
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.classList.add('is-pending');
+  button.setAttribute('aria-disabled', 'true');
+  button.textContent = t('logs.skipChannelSwitching');
+
+  try {
+    const response = await fetchAPIWithAuth(`/admin/active-requests/${activeRequestId}/skip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ attempt_id: attemptId })
+    });
+    if (!response.success) {
+      throw new Error(response.error || t('logs.skipChannelFailed'));
+    }
+  } catch (error) {
+    console.error('跳过当前渠道失败:', error);
+    if (button.isConnected) {
+      button.disabled = false;
+      button.classList.remove('is-pending');
+      button.removeAttribute('aria-disabled');
+      button.textContent = originalLabel;
+    }
+    const message = error?.message || t('logs.skipChannelFailed');
+    if (window.showError) {
+      window.showError(message);
+    } else if (window.showAlertDialog) {
+      await window.showAlertDialog({ message });
+    }
+  }
 }
 
 // IP 地址掩码处理（隐藏最后两段）
@@ -1826,6 +1876,12 @@ window.initPageBootstrap({
   const tbody = document.getElementById('tbody');
   if (tbody) {
     tbody.addEventListener('click', (e) => {
+      const skipChannelBtn = e.target.closest('.skip-active-channel-btn[data-active-request-id]');
+      if (skipChannelBtn) {
+        void skipActiveRequestChannel(skipChannelBtn);
+        return;
+      }
+
       // 运行中请求 Debug log 查看
       const activeDebugLink = e.target.closest('.debug-log-link[data-active-request-id]');
       if (activeDebugLink) {

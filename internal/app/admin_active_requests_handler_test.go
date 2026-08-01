@@ -1,9 +1,14 @@
 package app
 
 import (
+	"bytes"
+	"context"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestHandleActiveRequests(t *testing.T) {
@@ -107,4 +112,80 @@ func TestHandleActiveRequests_PreservesZeroCostMultiplier(t *testing.T) {
 	if got, ok := value.(float64); !ok || got != 0 {
 		t.Fatalf("cost_multiplier=%v, want 0", value)
 	}
+}
+
+func TestHandleSkipActiveRequest(t *testing.T) {
+	newAttempt := func(t *testing.T, manager *activeRequestManager) (int64, int64, context.Context) {
+		t.Helper()
+		requestID := manager.Register(time.Now(), "m", "1.2.3.4", true)
+		attemptCtx, cancelAttempt := context.WithCancelCause(context.Background())
+		t.Cleanup(func() { cancelAttempt(nil) })
+		attemptID, ok := manager.BeginAttempt(requestID, cancelAttempt)
+		if !ok {
+			t.Fatal("BeginAttempt() failed")
+		}
+		return requestID, attemptID, attemptCtx
+	}
+
+	call := func(t *testing.T, srv *Server, requestID string, body string) int {
+		t.Helper()
+		req := newRequest(http.MethodPost, "/admin/active-requests/"+requestID+"/skip", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		c, w := newTestContext(t, req)
+		c.Params = gin.Params{{Key: "request_id", Value: requestID}}
+		srv.HandleSkipActiveRequest(c)
+		return w.Code
+	}
+
+	t.Run("accepted", func(t *testing.T) {
+		manager := newActiveRequestManager()
+		srv := &Server{activeRequests: manager}
+		requestID, attemptID, attemptCtx := newAttempt(t, manager)
+
+		if status := call(t, srv, strconv.FormatInt(requestID, 10), `{"attempt_id":`+strconv.FormatInt(attemptID, 10)+`}`); status != http.StatusAccepted {
+			t.Fatalf("status=%d, want %d", status, http.StatusAccepted)
+		}
+		select {
+		case <-attemptCtx.Done():
+			if context.Cause(attemptCtx) != errManualChannelSkip {
+				t.Fatalf("attempt cause = %v, want manual skip", context.Cause(attemptCtx))
+			}
+		case <-time.After(time.Second):
+			t.Fatal("skip handler did not cancel attempt")
+		}
+	})
+
+	t.Run("bad request", func(t *testing.T) {
+		srv := &Server{activeRequests: newActiveRequestManager()}
+		if status := call(t, srv, "not-a-number", `{"attempt_id":1}`); status != http.StatusBadRequest {
+			t.Fatalf("invalid request ID status=%d, want %d", status, http.StatusBadRequest)
+		}
+		if status := call(t, srv, "1", `{}`); status != http.StatusBadRequest {
+			t.Fatalf("missing attempt ID status=%d, want %d", status, http.StatusBadRequest)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		srv := &Server{activeRequests: newActiveRequestManager()}
+		if status := call(t, srv, "99", `{"attempt_id":1}`); status != http.StatusNotFound {
+			t.Fatalf("status=%d, want %d", status, http.StatusNotFound)
+		}
+	})
+
+	t.Run("conflict", func(t *testing.T) {
+		manager := newActiveRequestManager()
+		srv := &Server{activeRequests: manager}
+		requestID, attemptID, _ := newAttempt(t, manager)
+		requestIDText := strconv.FormatInt(requestID, 10)
+
+		if status := call(t, srv, requestIDText, `{"attempt_id":`+strconv.FormatInt(attemptID+1, 10)+`}`); status != http.StatusConflict {
+			t.Fatalf("stale attempt status=%d, want %d", status, http.StatusConflict)
+		}
+		if err := manager.PrepareResponseCommit(requestID, attemptID); err != nil {
+			t.Fatalf("PrepareResponseCommit() error = %v", err)
+		}
+		if status := call(t, srv, requestIDText, `{"attempt_id":`+strconv.FormatInt(attemptID, 10)+`}`); status != http.StatusConflict {
+			t.Fatalf("already committed status=%d, want %d", status, http.StatusConflict)
+		}
+	})
 }

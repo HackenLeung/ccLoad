@@ -92,7 +92,7 @@ func streamCopyWithBufferSize(ctx context.Context, src io.Reader, dst http.Respo
 			// 这样当上游完整返回但客户端取消时，可以正确识别为"流完整"而非 499
 			if onData != nil {
 				if hookErr := onData(buf[:n]); hookErr != nil {
-					if errors.Is(hookErr, errAbortStreamBeforeWrite) {
+					if shouldAbortStreamBeforeWrite(hookErr) {
 						return hookErr
 					}
 					if errors.Is(hookErr, errStopStreamAfterWrite) {
@@ -145,17 +145,19 @@ func closeReaderOnContextCancel(ctx context.Context, src io.Reader) func() {
 
 // deferredResponseWriter 延迟提交响应头，允许在首个可见输出前中止本次流并切换到其他上游。
 type deferredResponseWriter struct {
-	target    http.ResponseWriter
-	header    http.Header
-	status    int
-	committed bool
-	buffer    bytes.Buffer
+	target       http.ResponseWriter
+	header       http.Header
+	status       int
+	committed    bool
+	buffer       bytes.Buffer
+	beforeCommit func() error
 }
 
-func newDeferredResponseWriter(target http.ResponseWriter) *deferredResponseWriter {
+func newDeferredResponseWriter(target http.ResponseWriter, beforeCommit func() error) *deferredResponseWriter {
 	return &deferredResponseWriter{
-		target: target,
-		header: make(http.Header),
+		target:       target,
+		header:       make(http.Header),
+		beforeCommit: beforeCommit,
 	}
 }
 
@@ -190,6 +192,11 @@ func (w *deferredResponseWriter) Commit() error {
 	if w.committed {
 		return nil
 	}
+	if w.beforeCommit != nil {
+		if err := w.beforeCommit(); err != nil {
+			return err
+		}
+	}
 	for key, values := range w.header {
 		dstValues := append([]string(nil), values...)
 		w.target.Header()[key] = dstValues
@@ -209,8 +216,21 @@ func (w *deferredResponseWriter) Commit() error {
 	return nil
 }
 
+func shouldAbortStreamBeforeWrite(err error) bool {
+	return errors.Is(err, errAbortStreamBeforeWrite) || errors.Is(err, errManualChannelSkip)
+}
+
 func (w *deferredResponseWriter) Committed() bool {
 	return w.committed
+}
+
+func (w *deferredResponseWriter) AbortBeforeCommit() {
+	if w.committed {
+		return
+	}
+	w.header = make(http.Header)
+	w.status = 0
+	w.buffer.Reset()
 }
 
 // streamCopy 流式复制（支持flusher与ctx取消）
@@ -268,7 +288,7 @@ func streamTransformSSEEventsUntil(
 				if len(rawEvent) > 0 {
 					if onRawEvent != nil {
 						if hookErr := onRawEvent(rawEvent); hookErr != nil {
-							if errors.Is(hookErr, errAbortStreamBeforeWrite) {
+							if shouldAbortStreamBeforeWrite(hookErr) {
 								return hookErr
 							}
 							_ = hookErr

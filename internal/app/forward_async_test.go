@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -474,6 +475,43 @@ func TestForwardOnceAsync_Integration(t *testing.T) {
 			t.Error("response should contain 'unauthorized'")
 		}
 	})
+}
+
+func TestForwardOnceAsync_RecordsRequestWriteTime(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"test","model":"claude-3"}`))
+	}))
+	defer upstream.Close()
+
+	srv := newInMemoryServer(t)
+	transport := buildHTTPTransport(false)
+	srv.client = &http.Client{Transport: transport}
+	t.Cleanup(transport.CloseIdleConnections)
+
+	cfg := &model.Config{ID: 1, Name: "request-write-time", URL: upstream.URL}
+	before := time.Now()
+	result, _, err := srv.forwardOnceAsync(
+		context.Background(),
+		cfg,
+		"sk-test",
+		http.MethodPost,
+		mustBuildTestTransformPlan(t, cfg, "/v1/messages", []byte(`{"model":"claude-3"}`)),
+		http.Header{},
+		"",
+		cfg.URL,
+		newRecorder(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("forwardOnceAsync error = %v", err)
+	}
+	if result == nil || result.RequestSentAt.IsZero() {
+		t.Fatal("RequestSentAt was not recorded")
+	}
+	if result.RequestSentAt.Before(before) || result.RequestSentAt.After(time.Now()) {
+		t.Fatalf("RequestSentAt=%v is outside the request interval", result.RequestSentAt)
+	}
 }
 
 func TestForwardOnceAsync_UsesTransformPlanUpstreamPathAndBody(t *testing.T) {

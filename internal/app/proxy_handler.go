@@ -598,6 +598,10 @@ func (s *Server) runProxyAttemptLoop(
 			}
 
 			lastResult = result
+			if result.manualChannelSkip {
+				log.Printf("[INFO] 手动跳过渠道 %s (ID=%d)，继续下一个候选渠道", cfg.Name, cfg.ID)
+				continue
+			}
 
 			// 客户端已取消：别再浪费资源“重试”了。
 			if result.isClientCanceled {
@@ -630,7 +634,9 @@ func (s *Server) writeFinalProxyResponse(
 	finalStatus := determineFinalClientStatus(lastResult)
 
 	msg := "exhausted backends"
-	if lastResult != nil && lastResult.isClientCanceled {
+	if lastResult != nil && lastResult.manualChannelSkip {
+		msg = "manual channel skip exhausted available channels"
+	} else if lastResult != nil && lastResult.isClientCanceled {
 		msg = "client closed request (context canceled)"
 	} else if lastResult != nil && lastResult.status == 499 && finalStatus != 499 {
 		// 上游返回 499 没有任何“客户端取消”的语义价值：对外统一视为网关错误。

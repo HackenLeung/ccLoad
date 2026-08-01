@@ -197,6 +197,20 @@ func TestBuildLogEntry_StreamDiagMsg(t *testing.T) {
 	})
 }
 
+func TestLogStartTimeForResult(t *testing.T) {
+	t.Parallel()
+
+	attemptStart := time.Date(2026, time.August, 1, 15, 9, 43, 0, time.UTC)
+	requestSentAt := attemptStart.Add(17 * time.Second)
+
+	if got := logStartTimeForResult(attemptStart, &fwResult{RequestSentAt: requestSentAt}); !got.Equal(requestSentAt) {
+		t.Fatalf("log time=%v, want request write time %v", got, requestSentAt)
+	}
+	if got := logStartTimeForResult(attemptStart, nil); !got.Equal(attemptStart) {
+		t.Fatalf("log time=%v, want fallback attempt start %v", got, attemptStart)
+	}
+}
+
 func TestAppendRetryStrategyToMessageUsesCompactDisplay(t *testing.T) {
 	t.Parallel()
 

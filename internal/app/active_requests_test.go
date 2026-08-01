@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -72,5 +74,75 @@ func TestActiveRequestManager_BytesAndFirstByteTime(t *testing.T) {
 	}
 	if math.Abs(got[0].ClientFirstByteTime-0.75) > 1e-6 {
 		t.Fatalf("expected client_first_byte_time≈0.75, got %f", got[0].ClientFirstByteTime)
+	}
+}
+
+func TestActiveRequestManager_ChannelSkipLifecycle(t *testing.T) {
+	m := newActiveRequestManager()
+	id := m.Register(time.Now(), "m", "1.1.1.1", true)
+
+	attemptCtx, cancelAttempt := context.WithCancelCause(context.Background())
+	attemptID, ok := m.BeginAttempt(id, cancelAttempt)
+	if !ok || attemptID <= 0 {
+		t.Fatalf("BeginAttempt() = (%d, %v), want a positive attempt ID", attemptID, ok)
+	}
+
+	view := m.List()[0]
+	if view.AttemptID != attemptID || !view.CanSkip || view.SkipRequested {
+		t.Fatalf("unexpected active request view before skip: %+v", view)
+	}
+	if err := m.RequestChannelSkip(id, attemptID+1); !errors.Is(err, errActiveRequestAttemptMismatch) {
+		t.Fatalf("RequestChannelSkip(stale attempt) error = %v, want attempt mismatch", err)
+	}
+
+	if err := m.RequestChannelSkip(id, attemptID); err != nil {
+		t.Fatalf("RequestChannelSkip() error = %v", err)
+	}
+	select {
+	case <-attemptCtx.Done():
+		if !errors.Is(context.Cause(attemptCtx), errManualChannelSkip) {
+			t.Fatalf("attempt cause = %v, want manual skip", context.Cause(attemptCtx))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manual skip did not cancel the attempt")
+	}
+
+	view = m.List()[0]
+	if view.CanSkip || !view.SkipRequested {
+		t.Fatalf("unexpected active request view after skip: %+v", view)
+	}
+	if err := m.RequestChannelSkip(id, attemptID); !errors.Is(err, errActiveRequestSkipNotAvailable) {
+		t.Fatalf("second RequestChannelSkip() error = %v, want skip unavailable", err)
+	}
+
+	m.EndAttempt(id, attemptID)
+	view = m.List()[0]
+	if view.AttemptID != 0 || view.CanSkip || view.SkipRequested {
+		t.Fatalf("unexpected active request view after EndAttempt: %+v", view)
+	}
+	if err := m.RequestChannelSkip(id, attemptID); !errors.Is(err, errActiveRequestAttemptMismatch) {
+		t.Fatalf("RequestChannelSkip(ended attempt) error = %v, want attempt mismatch", err)
+	}
+}
+
+func TestActiveRequestManager_ChannelSkipRejectedAfterResponseCommit(t *testing.T) {
+	m := newActiveRequestManager()
+	id := m.Register(time.Now(), "m", "1.1.1.1", false)
+	_, cancelAttempt := context.WithCancelCause(context.Background())
+	attemptID, ok := m.BeginAttempt(id, cancelAttempt)
+	if !ok {
+		t.Fatal("BeginAttempt() failed")
+	}
+
+	if err := m.PrepareResponseCommit(id, attemptID); err != nil {
+		t.Fatalf("PrepareResponseCommit() error = %v", err)
+	}
+	if err := m.RequestChannelSkip(id, attemptID); !errors.Is(err, errActiveRequestSkipNotAvailable) {
+		t.Fatalf("RequestChannelSkip(after commit) error = %v, want skip unavailable", err)
+	}
+
+	m.Remove(id)
+	if err := m.RequestChannelSkip(id, attemptID); !errors.Is(err, errActiveRequestNotFound) {
+		t.Fatalf("RequestChannelSkip(removed request) error = %v, want not found", err)
 	}
 }

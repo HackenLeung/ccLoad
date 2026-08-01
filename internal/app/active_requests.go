@@ -2,6 +2,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -9,6 +11,13 @@ import (
 
 	"ccLoad/internal/model"
 	"ccLoad/internal/util"
+)
+
+var (
+	errManualChannelSkip             = errors.New("manual channel skip")
+	errActiveRequestNotFound         = errors.New("active request not found")
+	errActiveRequestAttemptMismatch  = errors.New("active request attempt changed")
+	errActiveRequestSkipNotAvailable = errors.New("active request cannot be skipped")
 )
 
 // ActiveRequest 表示一个进行中的请求
@@ -30,6 +39,9 @@ type ActiveRequest struct {
 	CostMultiplier      float64 `json:"cost_multiplier"`                  // 渠道成本倍率
 	DebugLogAvailable   bool    `json:"debug_log_available,omitempty"`    // 运行中请求是否已有可读取的调试快照
 	ThinkingEffort      string  `json:"thinking_effort,omitempty"`
+	AttemptID           int64   `json:"attempt_id,omitempty"`     // 当前上游尝试编号，用于防止过期操作取消新尝试
+	CanSkip             bool    `json:"can_skip,omitempty"`       // 尚未向客户端提交响应时允许跳过当前渠道
+	SkipRequested       bool    `json:"skip_requested,omitempty"` // 已收到跳过请求，等待代理循环切换渠道
 }
 
 type activeRequest struct {
@@ -50,6 +62,11 @@ type activeRequest struct {
 	ThinkingEffort string
 	debugCapture   *debugCapture
 
+	attemptID     int64
+	attemptCancel context.CancelCauseFunc
+	canSkip       bool
+	skipRequested bool
+
 	bytesCounter            atomic.Int64 // 上游已返回的字节数（原子累加）
 	clientFirstByteTimeUsec atomic.Int64 // 客户端侧首字节响应时间（微秒），CAS保证只写一次，0表示未设置
 }
@@ -64,9 +81,10 @@ func (m *activeRequestManager) SetThinkingEffort(id int64, thinkingEffort string
 
 // activeRequestManager 管理进行中的请求（内存状态，不持久化）
 type activeRequestManager struct {
-	mu       sync.RWMutex
-	requests map[int64]*activeRequest
-	nextID   atomic.Int64
+	mu            sync.RWMutex
+	requests      map[int64]*activeRequest
+	nextID        atomic.Int64
+	nextAttemptID atomic.Int64
 }
 
 func newActiveRequestManager() *activeRequestManager {
@@ -117,6 +135,88 @@ func (m *activeRequestManager) SetBaseURL(id int64, baseURL string) {
 		req.BaseURL = baseURL
 	}
 	m.mu.Unlock()
+}
+
+// BeginAttempt 注册当前正在执行的上游尝试。attemptID 仅在该尝试存活期间暴露给前端，
+// 管理端必须带回它，避免旧轮询页面误取消已经切换后的渠道。
+func (m *activeRequestManager) BeginAttempt(id int64, cancel context.CancelCauseFunc) (int64, bool) {
+	if cancel == nil {
+		return 0, false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	req, ok := m.requests[id]
+	if !ok {
+		return 0, false
+	}
+
+	attemptID := m.nextAttemptID.Add(1)
+	req.attemptID = attemptID
+	req.attemptCancel = cancel
+	req.canSkip = true
+	req.skipRequested = false
+	return attemptID, true
+}
+
+// EndAttempt 清除已经结束的尝试控制信息。只清理匹配的编号，避免慢路径覆盖新尝试。
+func (m *activeRequestManager) EndAttempt(id, attemptID int64) {
+	if attemptID <= 0 {
+		return
+	}
+
+	m.mu.Lock()
+	if req, ok := m.requests[id]; ok && req.attemptID == attemptID {
+		req.attemptID = 0
+		req.attemptCancel = nil
+		req.canSkip = false
+		req.skipRequested = false
+	}
+	m.mu.Unlock()
+}
+
+// PrepareResponseCommit 原子地关闭当前尝试的跳过权限。
+// 调用方必须在实际写入客户端响应头之前调用；若管理员已请求跳过，则返回专用原因并保持未提交状态。
+func (m *activeRequestManager) PrepareResponseCommit(id, attemptID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	req, ok := m.requests[id]
+	if !ok || req.attemptID != attemptID {
+		return errActiveRequestAttemptMismatch
+	}
+	if req.skipRequested {
+		return errManualChannelSkip
+	}
+	req.canSkip = false
+	return nil
+}
+
+// RequestChannelSkip 取消当前上游尝试。取消函数必须在解锁后调用，避免取消回调与状态锁互相等待。
+func (m *activeRequestManager) RequestChannelSkip(id, attemptID int64) error {
+	m.mu.Lock()
+	req, ok := m.requests[id]
+	if !ok {
+		m.mu.Unlock()
+		return errActiveRequestNotFound
+	}
+	if req.attemptID != attemptID {
+		m.mu.Unlock()
+		return errActiveRequestAttemptMismatch
+	}
+	if !req.canSkip || req.attemptCancel == nil || req.skipRequested {
+		m.mu.Unlock()
+		return errActiveRequestSkipNotAvailable
+	}
+
+	cancel := req.attemptCancel
+	req.skipRequested = true
+	req.canSkip = false
+	m.mu.Unlock()
+
+	cancel(errManualChannelSkip)
+	return nil
 }
 
 // SetDebugCapture 绑定运行中请求的调试捕获器。
@@ -211,6 +311,9 @@ func (m *activeRequestManager) List() []*ActiveRequest {
 			CostMultiplier:    req.CostMultiplier,
 			DebugLogAvailable: req.debugCapture != nil,
 			ThinkingEffort:    req.ThinkingEffort,
+			AttemptID:         req.attemptID,
+			CanSkip:           req.canSkip,
+			SkipRequested:     req.skipRequested,
 		}
 		if usec := req.clientFirstByteTimeUsec.Load(); usec > 0 {
 			view.ClientFirstByteTime = float64(usec) / 1e6

@@ -9,8 +9,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ccLoad/internal/config"
@@ -47,6 +49,30 @@ func (rc *onceCloseReadCloser) Close() error {
 		closeErr = rc.ReadCloser.Close()
 	})
 	return closeErr
+}
+
+// upstreamRequestTrace captures the point at which the standard transport has
+// successfully written the request to its upstream connection. This is later
+// than selecting a channel, but earlier than receiving a response.
+type upstreamRequestTrace struct {
+	writtenAtUnixNano atomic.Int64
+}
+
+func (t *upstreamRequestTrace) withContext(ctx context.Context) context.Context {
+	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				t.writtenAtUnixNano.CompareAndSwap(0, time.Now().UnixNano())
+			}
+		},
+	})
+}
+
+func (t *upstreamRequestTrace) writtenAt() time.Time {
+	if unixNano := t.writtenAtUnixNano.Load(); unixNano > 0 {
+		return time.Unix(0, unixNano)
+	}
+	return time.Time{}
 }
 
 // disableResponseWriteTimeout 清除响应写超时（http.Server.WriteTimeout），
@@ -765,7 +791,7 @@ func (s *Server) handleSuccessResponse(
 			}, reqCtx.Duration().Seconds(), err
 		}
 		if transform {
-			return s.handleTranslatedNonStreamSuccessResponse(reqCtx, resp, hdrClone, w, string(detectedProtocol), readStats)
+			return s.handleTranslatedNonStreamSuccessResponse(reqCtx, resp, hdrClone, w, string(detectedProtocol), readStats, observer)
 		}
 	}
 
@@ -780,7 +806,7 @@ func (s *Server) handleSuccessResponse(
 	if !reqCtx.isStreaming &&
 		s.protocolRegistry != nil &&
 		reqCtx.transformPlan.NeedsTransform {
-		return s.handleTranslatedNonStreamSuccessResponse(reqCtx, resp, hdrClone, w, channelType, readStats)
+		return s.handleTranslatedNonStreamSuccessResponse(reqCtx, resp, hdrClone, w, channelType, readStats, observer)
 	}
 
 	// [FIX] 流式请求：禁用 WriteTimeout，避免长时间流被服务器自己切断
@@ -794,10 +820,15 @@ func (s *Server) handleSuccessResponse(
 	streamWriter := w
 	var deferredWriter *deferredResponseWriter
 	if reqCtx.isStreaming {
-		deferredWriter = newDeferredResponseWriter(w)
+		deferredWriter = newDeferredResponseWriter(w, responseCommitHook(observer))
 		streamWriter = deferredWriter
 	}
 
+	if deferredWriter == nil && observer != nil && observer.BeforeResponseCommit != nil {
+		if err := observer.BeforeResponseCommit(); err != nil {
+			return &fwResult{Status: resp.StatusCode, Header: hdrClone}, reqCtx.Duration().Seconds(), err
+		}
+	}
 	// 写入响应头
 	filterAndWriteResponseHeaders(streamWriter, resp.Header)
 	streamWriter.WriteHeader(resp.StatusCode)
@@ -822,9 +853,14 @@ func (s *Server) handleSuccessResponse(
 			return nil
 		},
 	)
-	abortedBeforeCommit := errors.Is(streamErr, errAbortStreamBeforeWrite)
-	if abortedBeforeCommit {
-		streamErr = nil
+	// 手动跳过会先取消 attemptCtx；底层读取通常只返回 context.Canceled，
+	// 因此还要查看取消原因，确保丢弃 deferred writer 中尚未提交的缓冲内容。
+	abortedBeforeCommit := shouldAbortStreamBeforeWrite(streamErr) || isManualChannelSkip(reqCtx.ctx)
+	if abortedBeforeCommit && deferredWriter != nil {
+		if errors.Is(streamErr, errAbortStreamBeforeWrite) {
+			streamErr = nil
+		}
+		deferredWriter.AbortBeforeCommit()
 	} else if deferredWriter != nil && !deferredWriter.Committed() && isEmptyStreamOutput(parser, readStats) {
 		if streamErr == nil {
 			return emptyOKResponseResult(reqCtx, resp, hdrClone, readStats, emptyStreamDetail(readStats))
@@ -892,6 +928,7 @@ func (s *Server) handleTranslatedNonStreamSuccessResponse(
 	w http.ResponseWriter,
 	channelType string,
 	readStats *streamReadStats,
+	observer *ForwardObserver,
 ) (*fwResult, float64, error) {
 	rawBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -942,6 +979,11 @@ func (s *Server) handleTranslatedNonStreamSuccessResponse(
 
 	disableResponseWriteTimeout(w, "非流式")
 
+	if beforeCommit := responseCommitHook(observer); beforeCommit != nil {
+		if err := beforeCommit(); err != nil {
+			return &fwResult{Status: resp.StatusCode, Header: hdrClone}, reqCtx.Duration().Seconds(), err
+		}
+	}
 	filterAndWriteResponseHeaders(w, translatedHeader)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(translatedBody)
@@ -975,7 +1017,7 @@ func (s *Server) handleTranslatedStreamSuccessResponse(
 ) (*fwResult, float64, error) {
 	disableResponseWriteTimeout(w, "流式")
 
-	deferredWriter := newDeferredResponseWriter(w)
+	deferredWriter := newDeferredResponseWriter(w, responseCommitHook(observer))
 	filterAndWriteResponseHeaders(deferredWriter, resp.Header)
 	deferredWriter.WriteHeader(resp.StatusCode)
 
@@ -1036,9 +1078,14 @@ func (s *Server) handleTranslatedStreamSuccessResponse(
 		},
 	)
 
-	abortedBeforeCommit := errors.Is(streamErr, errAbortStreamBeforeWrite)
-	if abortedBeforeCommit {
-		streamErr = nil
+	// 同普通流式透传：手动跳过的底层读取可能只暴露 context.Canceled，
+	// 必须按取消原因清理尚未提交的转换结果。
+	abortedBeforeCommit := shouldAbortStreamBeforeWrite(streamErr) || isManualChannelSkip(reqCtx.ctx)
+	if abortedBeforeCommit && deferredWriter != nil {
+		if errors.Is(streamErr, errAbortStreamBeforeWrite) {
+			streamErr = nil
+		}
+		deferredWriter.AbortBeforeCommit()
 	} else if !deferredWriter.Committed() && ((gateOnTranslatedCodexOutput && !translatedHasOutput) || (!gateOnTranslatedCodexOutput && isEmptyStreamOutput(parser, readStats))) {
 		if streamErr == nil {
 			return emptyOKResponseResult(reqCtx, resp, hdrClone, readStats, emptyStreamDetail(readStats))
@@ -1396,8 +1443,12 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 		observer.OnDebugCapture(dc)
 	}
 
-	// 3. 发送请求
+	// 3. 发送请求。日志时间使用请求实际写入上游连接的时刻，避免把本地
+	// 连接池等待或协议转换时间误显示成渠道已经收到请求的时间。
+	requestTrace := &upstreamRequestTrace{}
+	req = req.WithContext(requestTrace.withContext(req.Context()))
 	resp, err := s.doUpstreamRequest(cfg, req)
+	requestSentAt := requestTrace.writtenAt()
 	if err != nil && (errors.Is(err, ErrChannelRPMExceeded) || errors.Is(err, ErrChannelConcurrencyExceeded)) {
 		return nil, reqCtx.Duration().Seconds(), err
 	}
@@ -1429,6 +1480,7 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 	if err != nil {
 		errRes, errDur, errErr := s.handleRequestError(reqCtx, cfg, err)
 		if errRes != nil {
+			errRes.RequestSentAt = requestSentAt
 			errRes.DebugData = dc.buildEntry(resp)
 		}
 		return errRes, errDur, errErr
@@ -1438,6 +1490,9 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 	var res *fwResult
 	var duration float64
 	res, duration, err = s.handleResponse(reqCtx, resp, w, string(reqCtx.upstreamProtocol), cfg, apiKey, observer)
+	if isManualChannelSkip(ctx) {
+		err = errManualChannelSkip
+	}
 
 	// [FIX] 2025-12: 流式传输过程中首字节超时的错误修正
 	// 场景：响应头已收到(200 OK)，但在读取响应体时超时定时器触发
@@ -1459,6 +1514,7 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 
 	// 5. Debug捕获：构建完整的 debug 日志条目（响应体已通过 TeeReader 收集完毕）
 	if res != nil {
+		res.RequestSentAt = requestSentAt
 		res.DebugData = dc.buildEntry(resp)
 	}
 
@@ -1550,7 +1606,7 @@ func (s *Server) forwardAttempt(
 	baseURL string, // 显式传入的URL（多URL场景）
 	w http.ResponseWriter,
 	deferChannelCooldown bool, // 多URL场景下，非最后一个URL不应触发渠道级冷却
-) (*proxyResult, cooldown.Action, error) {
+) (result *proxyResult, action cooldown.Action, attemptErr error) {
 	// 记录渠道尝试开始时间（用于日志记录，每次渠道/Key切换时更新）
 	reqCtx.attemptStartTime = time.Now()
 	reqCtx.baseURL = baseURL
@@ -1583,8 +1639,43 @@ func (s *Server) forwardAttempt(
 		}, cooldown.ActionRetryChannel, nil
 	}
 
-	res, duration, err := s.forwardOnceAsync(ctx, cfg, selectedKey, reqCtx.requestMethod,
-		plan, reqCtx.header, reqCtx.rawQuery, baseURL, w, reqCtx.observer)
+	attemptCtx, cancelAttempt := context.WithCancelCause(ctx)
+	attemptID := int64(0)
+	if reqCtx.activeReqID > 0 && s.activeRequests != nil {
+		attemptID, _ = s.activeRequests.BeginAttempt(reqCtx.activeReqID, cancelAttempt)
+	}
+	defer func() {
+		// RequestChannelSkip 与本函数收尾之间可能并发发生。只要管理端已经
+		// 成功接受了跳过请求，就必须覆盖尚未返回给外层的失败结果，避免当前
+		// 渠道继续尝试下一个 URL/Key。
+		if isManualChannelSkip(attemptCtx) {
+			result = manualChannelSkipResult(cfg)
+			action = cooldown.ActionRetryChannel
+			attemptErr = nil
+		}
+		if attemptID > 0 {
+			s.activeRequests.EndAttempt(reqCtx.activeReqID, attemptID)
+		}
+		cancelAttempt(nil)
+	}()
+
+	attemptObserver := reqCtx.observer
+	if attemptID > 0 {
+		observerCopy := ForwardObserver{}
+		if reqCtx.observer != nil {
+			observerCopy = *reqCtx.observer
+		}
+		observerCopy.BeforeResponseCommit = func() error {
+			return s.activeRequests.PrepareResponseCommit(reqCtx.activeReqID, attemptID)
+		}
+		attemptObserver = &observerCopy
+	}
+
+	res, duration, err := s.forwardOnceAsync(attemptCtx, cfg, selectedKey, reqCtx.requestMethod,
+		plan, reqCtx.header, reqCtx.rawQuery, baseURL, w, attemptObserver)
+	if isManualChannelSkip(attemptCtx) {
+		return manualChannelSkipResult(cfg), cooldown.ActionRetryChannel, nil
+	}
 
 	// 传递 debug 数据到 proxyRequestContext（用于日志记录）
 	if res != nil && res.DebugData != nil {
@@ -1594,6 +1685,9 @@ func (s *Server) forwardAttempt(
 	forceReturnClient := false
 	retryStrategies := make([]string, 0, 2)
 	for {
+		if isManualChannelSkip(attemptCtx) {
+			return manualChannelSkipResult(cfg), cooldown.ActionRetryChannel, nil
+		}
 		retryBody, retryStrategy, ok := codexRetryBodyFor400(upstreamProtocol, cfg, plan, res)
 		if !ok || hasRetryStrategy(retryStrategies, retryStrategy) {
 			break
@@ -1601,8 +1695,11 @@ func (s *Server) forwardAttempt(
 		retryStrategies = append(retryStrategies, retryStrategy)
 		retryPlan := plan
 		retryPlan.TranslatedBody = retryBody
-		res, duration, err = s.forwardOnceAsync(ctx, cfg, selectedKey, reqCtx.requestMethod,
-			retryPlan, reqCtx.header, reqCtx.rawQuery, baseURL, w, reqCtx.observer)
+		res, duration, err = s.forwardOnceAsync(attemptCtx, cfg, selectedKey, reqCtx.requestMethod,
+			retryPlan, reqCtx.header, reqCtx.rawQuery, baseURL, w, attemptObserver)
+		if isManualChannelSkip(attemptCtx) {
+			return manualChannelSkipResult(cfg), cooldown.ActionRetryChannel, nil
+		}
 		if res != nil && res.DebugData != nil {
 			reqCtx.debugData = res.DebugData
 		}
@@ -1616,11 +1713,17 @@ func (s *Server) forwardAttempt(
 			break
 		}
 	}
+	if isManualChannelSkip(attemptCtx) {
+		return manualChannelSkipResult(cfg), cooldown.ActionRetryChannel, nil
+	}
 
 	// 处理网络错误或异常响应（如空响应）
 	// [INFO] 修复：handleResponse可能返回err即使StatusCode=200（例如Content-Length=0）
 	// [FIX] 2025-12: 传递 res 和 reqCtx，用于保留 499 场景下已消耗的 token 统计
 	if err != nil {
+		if isManualChannelSkip(attemptCtx) || errors.Is(err, errManualChannelSkip) {
+			return manualChannelSkipResult(cfg), cooldown.ActionRetryChannel, nil
+		}
 		if errors.Is(err, ErrChannelRPMExceeded) || errors.Is(err, ErrChannelConcurrencyExceeded) {
 			return nil, cooldown.ActionRetryChannel, err
 		}
@@ -1644,7 +1747,7 @@ func (s *Server) forwardAttempt(
 	}
 
 	// 处理错误响应
-	result, action := s.handleProxyErrorResponse(
+	result, action = s.handleProxyErrorResponse(
 		ctx, cfg, keyIndex, actualModel, selectedKey, res, duration, reqCtx, deferChannelCooldown, forceReturnClient,
 	)
 	return result, action, nil
@@ -2341,7 +2444,7 @@ func (s *Server) attemptKeyAcrossURLs(
 		}
 
 		// 更新活跃请求的当前URL（用于前端显示）
-		if reqCtx.activeReqID > 0 {
+		if reqCtx.activeReqID > 0 && s.activeRequests != nil {
 			s.activeRequests.SetBaseURL(reqCtx.activeReqID, urlEntry.url)
 		}
 
@@ -2350,6 +2453,9 @@ func (s *Server) attemptKeyAcrossURLs(
 			ctx, cfg, keyIndex, selectedKey, reqCtx, actualModel, bodyToSend, requestPath, urlEntry.url, w, shouldDeferChannelCooldown)
 		if attemptErr != nil {
 			return nil, nil, attemptErr
+		}
+		if result != nil && result.manualChannelSkip {
+			return result, nil, nil
 		}
 
 		if result != nil && result.succeeded {
@@ -2463,7 +2569,7 @@ func (s *Server) tryChannelWithKeys(ctx context.Context, cfg *model.Config, reqC
 		triedKeys[keyIndex] = true
 
 		// 更新活跃请求的渠道信息（用于前端显示）
-		if reqCtx.activeReqID > 0 {
+		if reqCtx.activeReqID > 0 && s.activeRequests != nil {
 			s.activeRequests.Update(reqCtx.activeReqID, cfg.ID, cfg.Name, cfg.GetChannelType(), cfg.ResolveUpstreamProtocol(string(reqCtx.clientProtocol)), selectedKey, reqCtx.tokenID, cfg.CostMultiplier)
 		}
 

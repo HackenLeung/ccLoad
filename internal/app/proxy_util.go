@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -81,8 +82,9 @@ func looksLikeJSON(body []byte) bool {
 type fwResult struct {
 	Status        int
 	Header        http.Header
-	Body          []byte  // filled for non-2xx or when needed
-	FirstByteTime float64 // 首字节响应时间（秒）
+	Body          []byte    // filled for non-2xx or when needed
+	FirstByteTime float64   // 首字节响应时间（秒）
+	RequestSentAt time.Time // 请求实际写入上游连接的时间，仅用于日志时间
 
 	// Token统计（2025-11新增，从SSE响应中提取）
 	InputTokens              int
@@ -124,11 +126,26 @@ type fwResult struct {
 	DebugData *model.DebugLogEntry
 }
 
+func logStartTimeForResult(attemptStartTime time.Time, res *fwResult) time.Time {
+	if res != nil && !res.RequestSentAt.IsZero() {
+		return res.RequestSentAt
+	}
+	return attemptStartTime
+}
+
 // ForwardObserver 封装转发过程中的观测回调（遵循SRP，避免函数签名膨胀）
 type ForwardObserver struct {
-	OnBytesRead     func(int64) // 字节读取回调（可选）
-	OnFirstByteRead func()      // 首字节读取回调（可选）
-	OnDebugCapture  func(*debugCapture)
+	OnBytesRead          func(int64) // 字节读取回调（可选）
+	OnFirstByteRead      func()      // 首字节读取回调（可选）
+	OnDebugCapture       func(*debugCapture)
+	BeforeResponseCommit func() error // 实际写回客户端前调用；可阻止未提交的响应
+}
+
+func responseCommitHook(observer *ForwardObserver) func() error {
+	if observer == nil {
+		return nil
+	}
+	return observer.BeforeResponseCommit
 }
 
 // proxyRequestContext 代理请求上下文（封装请求信息，遵循DIP原则）
@@ -167,15 +184,32 @@ type proxyRequestContext struct {
 
 // proxyResult 代理请求结果
 type proxyResult struct {
-	status           int
-	header           http.Header
-	body             []byte
-	channelID        *int64
-	duration         float64
-	firstByteTime    float64
-	succeeded        bool
-	isClientCanceled bool            // 客户端主动取消请求（context.Canceled）
-	nextAction       cooldown.Action // 统一重试决策：RetryKey/RetryChannel/ReturnClient
+	status            int
+	header            http.Header
+	body              []byte
+	channelID         *int64
+	duration          float64
+	firstByteTime     float64
+	succeeded         bool
+	isClientCanceled  bool            // 客户端主动取消请求（context.Canceled）
+	manualChannelSkip bool            // 管理端主动跳过当前渠道，不计入失败或冷却
+	nextAction        cooldown.Action // 统一重试决策：RetryKey/RetryChannel/ReturnClient
+}
+
+func isManualChannelSkip(ctx context.Context) bool {
+	return ctx != nil && errors.Is(context.Cause(ctx), errManualChannelSkip)
+}
+
+func manualChannelSkipResult(cfg *model.Config) *proxyResult {
+	channelID := cfg.ID
+	return &proxyResult{
+		status:            http.StatusServiceUnavailable,
+		body:              []byte(`{"error":"manual channel skip exhausted available channels"}`),
+		channelID:         &channelID,
+		succeeded:         false,
+		manualChannelSkip: true,
+		nextAction:        cooldown.ActionRetryChannel,
+	}
 }
 
 // ErrorAction 已迁移到 cooldown.Action (internal/cooldown/manager.go)
@@ -833,7 +867,7 @@ type logEntryParams struct {
 	BaseURL          string // 请求使用的上游URL
 	Result           *fwResult
 	ErrMsg           string
-	StartTime        time.Time            // 渠道尝试开始时间（用于日志记录）
+	StartTime        time.Time            // 请求写入上游连接时间，未写入时回退渠道尝试开始时间
 	DebugData        *model.DebugLogEntry // Debug日志数据
 	CostMultiplier   float64              // 渠道成本倍率快照（0=免费，<0 视为 1）
 	ThinkingEffort   string

@@ -18,6 +18,33 @@ func (r *errorReader) Read(_ []byte) (int, error) {
 	return 0, r.err
 }
 
+func TestDeferredResponseWriter_CommitHookCanAbortBeforeOutput(t *testing.T) {
+	recorder := newRecorder()
+	writer := newDeferredResponseWriter(recorder, func() error {
+		return errManualChannelSkip
+	})
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.WriteHeader(200)
+	if _, err := writer.Write([]byte("data: partial\n\n")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	if err := writer.Commit(); !errors.Is(err, errManualChannelSkip) {
+		t.Fatalf("Commit() error = %v, want manual skip", err)
+	}
+	if writer.Committed() {
+		t.Fatal("writer committed despite the pre-commit hook error")
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("client received buffered bytes: %q", recorder.Body.String())
+	}
+
+	writer.AbortBeforeCommit()
+	if writer.buffer.Len() != 0 || writer.status != 0 || len(writer.header) != 0 {
+		t.Fatalf("AbortBeforeCommit() did not clear buffered state: buffer=%d status=%d header=%v", writer.buffer.Len(), writer.status, writer.header)
+	}
+}
+
 type blockingReadCloser struct {
 	closeOnce sync.Once
 	readOnce  sync.Once
