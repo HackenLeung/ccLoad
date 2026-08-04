@@ -111,10 +111,10 @@
       logSource: buildFilterGroup(
         `${buildFilterLabel('f_log_source', 'logs.logSource', '日志来源')}
         ${buildSelect('f_log_source', `
+                <option value="all" data-i18n="logs.sourceAll">全部日志</option>
                 <option value="proxy" data-i18n="logs.sourceProxy">请求日志</option>
                 <option value="vision_assist" data-i18n="logs.sourceVisionAssist">视觉辅助</option>
                 <option value="detection" data-i18n="logs.sourceDetection">检测日志</option>
-                <option value="all" data-i18n="logs.sourceAll">全部日志</option>
               `, 'filter-control--compact')}`,
         groupClass
       ),

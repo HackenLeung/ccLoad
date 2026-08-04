@@ -1,6 +1,8 @@
 package builtin
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -76,6 +78,53 @@ func BuildVisionAssistRequest(clientProtocol protocol.Protocol, rawJSON []byte, 
 	}}
 	body, err := encodeOpenAIRequest(modelName, visionConv, false)
 	return body, true, err
+}
+
+// VisionAssistCacheKey returns an opaque hash for the ordered image set in a
+// client request. User text is excluded so later Agent turns that retain the
+// same image but append tool results reuse the original description.
+func VisionAssistCacheKey(clientProtocol protocol.Protocol, rawJSON []byte) (string, bool, error) {
+	conv, err := normalizeVisionConversation(clientProtocol, rawJSON)
+	if err != nil {
+		return "", false, err
+	}
+
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("vision-assist-images-v1\x00"))
+	hasImages := false
+	for _, turn := range conv.Turns {
+		for _, part := range turn.Parts {
+			if part.Kind != partKindImage || part.Media == nil {
+				continue
+			}
+			source := visionAssistCacheSource(part.Media)
+			if source == "" {
+				return "", false, fmt.Errorf("vision assist image has no cacheable source")
+			}
+			_, _ = fmt.Fprintf(hash, "%d:%s\x00", len(source), source)
+			hasImages = true
+		}
+	}
+	if !hasImages {
+		return "", false, nil
+	}
+	return hex.EncodeToString(hash.Sum(nil)), true, nil
+}
+
+func visionAssistCacheSource(media *conversationMedia) string {
+	if media == nil {
+		return ""
+	}
+	if media.Data != "" {
+		return "data:" + media.MIMEType + ":" + media.Data
+	}
+	if media.URL != "" {
+		return "url:" + media.URL
+	}
+	if media.FileID != "" {
+		return "file:" + media.FileID
+	}
+	return ""
 }
 
 func normalizeVisionConversation(clientProtocol protocol.Protocol, rawJSON []byte) (conversation, error) {

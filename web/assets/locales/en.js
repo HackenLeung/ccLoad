@@ -157,7 +157,7 @@ window.I18N_LOCALES['en'] = {
   'channels.addChannelTitle': 'Add new channel',
   'channels.visionPool': 'Vision Model Pool',
   'channels.visionPoolTitle': 'Vision Model Pool',
-  'channels.visionPoolHint': 'Text models prefer enabled vision models on the same channel. Higher priority is tried first.',
+  'channels.visionPoolHint': 'Text models try enabled vision models in global priority order. Higher priority is tried first.',
   'channels.visionPoolFilterPlaceholder': 'Filter channels or models',
   'channels.visionPoolCount': '{enabled} of {total} enabled',
   'channels.visionPoolEmpty': 'No matching channel models',

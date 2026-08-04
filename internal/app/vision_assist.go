@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -17,7 +18,9 @@ import (
 )
 
 func (s *Server) prepareVisionAssistForChannel(ctx context.Context, cfg *model.Config, reqCtx *proxyRequestContext) error {
-	if reqCtx == nil || cfg == nil || len(reqCtx.body) == 0 || reqCtx.visionPrepared {
+	// 每个主请求只执行一次完整的视觉池尝试，避免主请求切换渠道后从头重复。
+	// visionPrepared 表示图片已改写/移除；visionAttempted 表示视觉池已完整执行完毕。
+	if reqCtx == nil || cfg == nil || len(reqCtx.body) == 0 || reqCtx.visionPrepared || reqCtx.visionAttempted {
 		return nil
 	}
 	target := cfg.FindModelEntry(reqCtx.originalModel, string(reqCtx.clientProtocol))
@@ -32,7 +35,21 @@ func (s *Server) prepareVisionAssistForChannel(ctx context.Context, cfg *model.C
 	if !hasImages {
 		return nil
 	}
-
+	cacheKey, cacheable, err := protocolbuiltin.VisionAssistCacheKey(reqCtx.clientProtocol, reqCtx.body)
+	if err != nil {
+		return fmt.Errorf("build vision assist cache key: %w", err)
+	}
+	cacheKey = visionAssistCacheTokenKey(reqCtx.tokenHash, cacheKey)
+	if cacheable && s.visionAssistCache != nil {
+		if description, ok := s.visionAssistCache.Get(cacheKey); ok {
+			rewritten, rewriteErr := protocolbuiltin.RewriteImagesAsText(reqCtx.clientProtocol, reqCtx.body, description)
+			if rewriteErr != nil {
+				return fmt.Errorf("rewrite request from cached vision assist: %w", rewriteErr)
+			}
+			replaceVisionRequestBody(reqCtx, rewritten)
+			return nil
+		}
+	}
 	pool, err := s.visionPoolForChannel(ctx, cfg, reqCtx)
 	if err != nil {
 		return err
@@ -45,6 +62,9 @@ func (s *Server) prepareVisionAssistForChannel(ctx context.Context, cfg *model.C
 		replaceVisionRequestBody(reqCtx, rewritten)
 		return nil
 	}
+	// 从这里开始，这一次主请求会遍历完整视觉池；即使所有候选失败，后续主渠道
+	// 切换时也不应再从头调用视觉模型，而是复用下面的纯文本降级结果。
+	reqCtx.visionAttempted = true
 
 	var lastErr error
 	for _, candidate := range pool {
@@ -62,13 +82,24 @@ func (s *Server) prepareVisionAssistForChannel(ctx context.Context, cfg *model.C
 		if err != nil {
 			return fmt.Errorf("rewrite request after vision assist: %w", err)
 		}
+		if cacheable && s.visionAssistCache != nil {
+			s.visionAssistCache.Put(cacheKey, description)
+		}
 		replaceVisionRequestBody(reqCtx, rewritten)
 		return nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no vision model was attempted")
 	}
-	return fmt.Errorf("vision assist failed on channel %s: %w", cfg.Name, lastErr)
+	// 所有视觉候选均失败：降级为移除图片继续主请求，不再重复请求视觉模型。
+	// （与「未配置视觉池」时的降级策略一致，保证主请求仍有机会成功。）
+	rewritten, rewriteErr := protocolbuiltin.RemoveImages(reqCtx.clientProtocol, reqCtx.body)
+	if rewriteErr != nil {
+		return fmt.Errorf("remove images after vision assist failure: %w", rewriteErr)
+	}
+	replaceVisionRequestBody(reqCtx, rewritten)
+	log.Printf("[WARN] vision assist failed on channel %s, degraded to text-only: %v", cfg.Name, lastErr)
+	return nil
 }
 
 type visionAssistCandidate struct {
@@ -97,11 +128,6 @@ func (s *Server) visionPoolForChannel(ctx context.Context, preferred *model.Conf
 
 	pool := append([]visionAssistCandidate(nil), reqCtx.visionPool...)
 	sort.SliceStable(pool, func(i, j int) bool {
-		iPreferred := pool[i].channel.ID == preferred.ID
-		jPreferred := pool[j].channel.ID == preferred.ID
-		if iPreferred != jPreferred {
-			return iPreferred
-		}
 		if pool[i].entry.VisionPriority != pool[j].entry.VisionPriority {
 			return pool[i].entry.VisionPriority > pool[j].entry.VisionPriority
 		}

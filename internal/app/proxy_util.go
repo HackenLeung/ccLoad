@@ -177,6 +177,7 @@ type proxyRequestContext struct {
 	// When true, candidate filtering and multi-channel retry both use native-only rules.
 	requireNativeGPT   bool
 	visionPrepared     bool
+	visionAttempted    bool
 	visionPoolLoaded   bool
 	visionPool         []visionAssistCandidate
 	isolatedSubrequest bool

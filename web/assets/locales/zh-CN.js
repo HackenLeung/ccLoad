@@ -157,7 +157,7 @@ window.I18N_LOCALES['zh-CN'] = {
   'channels.addChannelTitle': '添加新渠道',
   'channels.visionPool': '视觉模型池',
   'channels.visionPoolTitle': '视觉模型池',
-  'channels.visionPoolHint': '主模型会优先使用同渠道中已启用的视觉模型，优先级越大越先尝试。',
+  'channels.visionPoolHint': '主模型会按全局优先级依次尝试已启用的视觉模型，优先级越大越先尝试。',
   'channels.visionPoolFilterPlaceholder': '筛选渠道或模型',
   'channels.visionPoolCount': '已启用 {enabled} / {total}',
   'channels.visionPoolEmpty': '没有匹配的渠道模型',

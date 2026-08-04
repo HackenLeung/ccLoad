@@ -1721,7 +1721,15 @@ const LOGS_FILTER_FIELDS = [
     requestKey: getLogsModelFilterKey,
     defaultValue: ''
   },
-  { key: 'logSource', queryKeys: ['log_source'], requestKey: 'log_source', defaultValue: 'proxy' },
+  {
+    key: 'logSource',
+    queryKeys: ['log_source'],
+    requestKey: 'log_source',
+    defaultValue: 'all',
+    includeInQuery(value) {
+      return Boolean(value) && value !== 'all';
+    }
+  },
   { key: 'status', queryKeys: ['status_code'], defaultValue: '' },
   { key: 'authToken', queryKeys: ['auth_token_id'], defaultValue: '' },
   {
@@ -1741,7 +1749,7 @@ function getLogsFilters() {
   const { group: logSourceGroup, select: logSourceSelect } = getLogSourceFilterElements();
   const logSource = !logSourceSelect || (logSourceGroup && logSourceGroup.hidden)
     ? 'proxy'
-    : (logSourceSelect.value || 'proxy').trim();
+    : (logSourceSelect.value || 'all').trim();
   const model = logsModelCombobox ? logsModelCombobox.getValue() : (document.getElementById('f_model')?.value || '').trim();
   const channelName = logsChannelNameCombobox ? logsChannelNameCombobox.getValue() : (document.getElementById('f_name')?.value || '').trim();
   const baseValues = window.readFilterControlValues({
@@ -1792,6 +1800,8 @@ window.initPageBootstrap({
     savedFilters,
     fields: LOGS_FILTER_FIELDS
   });
+  // 来源筛选默认全部日志:每次进入页面重置为 all,不随 URL/localStorage 恢复旧默认值
+  restoredFilters.logSource = 'all';
   currentLogsCustomTimeRange = restoredFilters.range === 'custom'
     ? normalizeLogsCustomTimeRange(restoredFilters)
     : null;
