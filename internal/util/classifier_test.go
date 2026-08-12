@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -731,6 +732,88 @@ func TestClassifyHTTPResponseWithMeta_429NoRetryAfterInBody(t *testing.T) {
 	}
 	if result.Level != ErrorLevelKey {
 		t.Errorf("错误级别: 期望 Key, 实际 %v", result.Level)
+	}
+}
+
+func TestClassifyHTTPResponseWithMeta_AnthropicUnifiedReset(t *testing.T) {
+	now := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
+	until := now.Add(7 * time.Minute)
+	body := []byte(`{"error":{"type":"rate_limit_error","message":"rate limit exceeded"}}`)
+
+	headers := map[string][]string{
+		"anthropic-ratelimit-unified-reset": {strconv.FormatInt(until.Unix(), 10)},
+	}
+
+	result := classifyHTTPResponseWithMetaAt(429, headers, body, now)
+
+	if result.Level != ErrorLevelChannel {
+		t.Errorf("错误级别: 期望 Channel(统一配额换Key无效), 实际 %v", result.Level)
+	}
+	if !result.HasChannelCooldownUntil {
+		t.Fatal("应按上游给出的重置时刻设置渠道冷却")
+	}
+	if !result.ChannelCooldownUntil.Equal(until) {
+		t.Errorf("冷却截止: 期望 %v, 实际 %v", until, result.ChannelCooldownUntil)
+	}
+	if result.ChannelCooldownReason != AnthropicUnifiedResetReason {
+		t.Errorf("冷却原因: 期望 %s, 实际 %s", AnthropicUnifiedResetReason, result.ChannelCooldownReason)
+	}
+	if result.HasKeyCooldownUntil {
+		t.Error("统一配额限流不应设置 Key 级冷却")
+	}
+}
+
+func TestClassifyHTTPResponseWithMeta_AnthropicUnifiedResetIgnoresStaleOrInvalid(t *testing.T) {
+	now := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
+	body := []byte(`{"error":{"type":"rate_limit_error","message":"rate limit exceeded"}}`)
+
+	tests := []struct {
+		name   string
+		value  string
+		reason string
+	}{
+		{
+			name:   "已过期的重置时刻",
+			value:  strconv.FormatInt(now.Add(-time.Minute).Unix(), 10),
+			reason: "过期时间不能用作冷却截止，否则冷却立即失效",
+		},
+		{
+			name:   "非数字",
+			value:  "not-a-timestamp",
+			reason: "无法解析的头应忽略",
+		},
+		{
+			name:   "空值",
+			value:  "",
+			reason: "空值应忽略",
+		},
+		{
+			name:   "远超合理窗口",
+			value:  strconv.FormatInt(now.Add(MaxUpstreamResetCooldown+time.Hour).Unix(), 10),
+			reason: "畸形的远期时刻会让渠道近乎永久失效，不应采信",
+		},
+		{
+			name:   "秒级时间戳被误当毫秒",
+			value:  strconv.FormatInt(now.Add(time.Minute).UnixMilli(), 10),
+			reason: "毫秒值按秒解释会得到远期时刻，应被上限拦截",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := map[string][]string{
+				AnthropicRateLimitUnifiedResetHeader: {tt.value},
+			}
+
+			result := classifyHTTPResponseWithMetaAt(429, headers, body, now)
+
+			if result.HasChannelCooldownUntil {
+				t.Errorf("%s: 不应设置固定渠道冷却", tt.reason)
+			}
+			if result.Level != ErrorLevelKey {
+				t.Errorf("%s: 应回落到常规 429 分类(Key级), 实际 %v", tt.reason, result.Level)
+			}
+		})
 	}
 }
 

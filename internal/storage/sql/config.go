@@ -507,7 +507,6 @@ func (s *SQLStore) DeleteConfig(ctx context.Context, id int64) error {
 	s.markChannelDeleted(id)
 
 	// 显式删除关联数据，不依赖驱动或 DSN 是否正确启用外键级联。
-	var deletedRowsForVacuum int64
 	err := s.WithTransaction(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM api_keys WHERE channel_id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel api keys: %w", err)
@@ -527,15 +526,11 @@ func (s *SQLStore) DeleteConfig(ctx context.Context, id int64) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM channel_url_states WHERE channel_id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel url states: %w", err)
 		}
-		if result, err := tx.ExecContext(ctx, `DELETE FROM debug_logs WHERE log_id IN (SELECT id FROM logs WHERE channel_id = ?)`, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM debug_logs WHERE log_id IN (SELECT id FROM logs WHERE channel_id = ?)`, id); err != nil {
 			return fmt.Errorf("delete channel debug logs: %w", err)
-		} else if affected, rowsErr := result.RowsAffected(); rowsErr == nil {
-			deletedRowsForVacuum += affected
 		}
-		if result, err := tx.ExecContext(ctx, `DELETE FROM logs WHERE channel_id = ?`, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM logs WHERE channel_id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel logs: %w", err)
-		} else if affected, rowsErr := result.RowsAffected(); rowsErr == nil {
-			deletedRowsForVacuum += affected
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM channels WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel: %w", err)
@@ -547,7 +542,7 @@ func (s *SQLStore) DeleteConfig(ctx context.Context, id int64) error {
 		return err
 	}
 
-	s.runSQLiteIncrementalVacuum(ctx, deletedRowsForVacuum)
+	// 删除后不回收空闲页：空闲页会被后续写入直接复用，见 CleanupLogsBefore。
 	return nil
 }
 

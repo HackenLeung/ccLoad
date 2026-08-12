@@ -14,7 +14,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestCleanupLogsBeforeRunsIncrementalVacuumForSQLite(t *testing.T) {
+// 删除路径不再执行 incremental_vacuum：空闲页保留在 freelist 中待后续写入复用，
+// 避免在删除路径上持写锁重排页面。
+func TestCleanupLogsBeforeLeavesFreelistForReuse(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "cleanup_vacuum.db")
 	store, err := storage.CreateSQLiteStore(dbPath)
@@ -61,7 +63,7 @@ func TestCleanupLogsBeforeRunsIncrementalVacuumForSQLite(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freePages); err != nil {
 		t.Fatalf("query freelist_count: %v", err)
 	}
-	if freePages != 0 {
-		t.Fatalf("expected incremental_vacuum to release free pages, got freelist_count=%d", freePages)
+	if freePages <= 0 {
+		t.Fatalf("expected freed pages to stay on the freelist for reuse, got freelist_count=%d", freePages)
 	}
 }

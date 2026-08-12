@@ -496,7 +496,10 @@ func (p *sseUsageParser) parseEvent(eventType, data string) error {
 		return fmt.Errorf("json unmarshal failed: %w", err)
 	}
 	payloadType, _ := event["type"].(string)
-	if eventType == "message_stop" || (eventType == "response.completed" && payloadType == "response.completed") {
+	// Anthropic 终止事件：部分上游只在 data JSON 的 type 字段给 message_stop，
+	// 不发同名 event 行，仅比对 eventType 会漏判流结束。
+	isAnthropicTerminal := payloadType == "message_stop" || (payloadType == "" && eventType == "message_stop")
+	if isAnthropicTerminal || (eventType == "response.completed" && payloadType == "response.completed") {
 		p.streamComplete = true
 	}
 

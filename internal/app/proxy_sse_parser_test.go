@@ -587,6 +587,15 @@ func TestSSEUsageParser_StreamComplete(t *testing.T) {
 			name:    "OpenAI Responses API response.completed",
 			sseData: "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n",
 		},
+		{
+			// 部分上游只在 data 载荷里给 message_stop，不发同名 event 行。
+			name:    "Anthropic message_stop 仅在 data 载荷中",
+			sseData: "data: {\"type\":\"message_stop\"}\n\n",
+		},
+		{
+			name:    "Anthropic message_stop event 与载荷同时存在",
+			sseData: "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+		},
 	}
 
 	for _, tt := range tests {

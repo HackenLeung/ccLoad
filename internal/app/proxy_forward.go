@@ -298,7 +298,9 @@ func streamAndParseResponse(
 	}
 	copySSE := func(stream io.Reader, parser *sseUsageParser) error {
 		feed := makeFeed(parser)
-		if channelType != util.ChannelTypeCodex {
+		// Codex 与 Anthropic 都有明确的流终止事件，逐行喂给解析器以便在终止事件后立即停止读取，
+		// 避免上游在 message_stop / response.completed 之后继续挂住连接。
+		if channelType != util.ChannelTypeCodex && channelType != util.ChannelTypeAnthropic {
 			return streamCopySSE(ctx, stream, w, feed)
 		}
 		return streamCopySSE(ctx, stream, w, func(data []byte) error {
@@ -1074,7 +1076,10 @@ func (s *Server) handleTranslatedStreamSuccessResponse(
 			return chunks, nil
 		},
 		func() bool {
-			return reqCtx.transformPlan.UpstreamProtocol == protocol.Codex && parser.IsStreamComplete() && translatedComplete
+			// Codex 与 Anthropic 的上游流都有确定的终止事件，可在其到达后停止读取。
+			terminalProtocol := reqCtx.transformPlan.UpstreamProtocol == protocol.Codex ||
+				reqCtx.transformPlan.UpstreamProtocol == protocol.Anthropic
+			return terminalProtocol && parser.IsStreamComplete() && translatedComplete
 		},
 	)
 

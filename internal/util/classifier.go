@@ -69,6 +69,15 @@ const (
 	RateLimitScopeGlobal  = "global"
 	RateLimitScopeIP      = "ip"
 	RateLimitScopeAccount = "account"
+	// AnthropicRateLimitUnifiedResetHeader 是 Anthropic 给出的被拒配额窗口重置时间（Unix 秒）。
+	// 该限额按组织统一计算，同渠道换 Key 无法绕过，只能等到该时刻。
+	AnthropicRateLimitUnifiedResetHeader = "Anthropic-Ratelimit-Unified-Reset"
+	// AnthropicUnifiedResetReason 标记冷却来源，便于日志与统计区分。
+	AnthropicUnifiedResetReason = "anthropic_unified_reset"
+	// MaxUpstreamResetCooldown 是信任上游绝对重置时刻的上限。
+	// 该值来自上游响应头，畸形或异常值（如 2099 年）会让渠道近乎永久失效，
+	// 因此超出该窗口的重置时刻一律不采信，回落到常规分类与指数退避。
+	MaxUpstreamResetCooldown = 24 * time.Hour
 )
 
 // ErrorLevel 表示错误的严重级别。
@@ -303,6 +312,16 @@ func classifyHTTPResponseWithMetaAt(statusCode int, headers map[string][]string,
 	// 429错误：需要结合 headers 判断限流范围
 	if statusCode == 429 {
 		if headers != nil {
+			// Anthropic 统一配额窗口按组织计算：换 Key 同样被拒，
+			// 直接按上游给出的重置时刻冷却整个渠道，避免把 429 打满所有 Key。
+			if until, ok := parseAnthropicRateLimitReset(headers, now); ok {
+				return HTTPResponseClassification{
+					Level:                   ErrorLevelChannel,
+					ChannelCooldownUntil:    until,
+					HasChannelCooldownUntil: true,
+					ChannelCooldownReason:   AnthropicUnifiedResetReason,
+				}
+			}
 			return HTTPResponseClassification{Level: classifyRateLimitError(headers, responseBody)}
 		}
 		return HTTPResponseClassification{Level: ErrorLevelKey}
@@ -420,6 +439,29 @@ func classifyRateLimitError(headers map[string][]string, responseBody []byte) Er
 	// 4. 默认: Key级别限流(保守策略)
 	// 让系统先尝试其他Key,如果所有Key都限流了,会自动升级为渠道级
 	return ErrorLevelKey
+}
+
+// parseAnthropicRateLimitReset 解析 Anthropic 统一配额窗口的重置时刻（Unix 秒）。
+// 仅采信落在 (now, now+MaxUpstreamResetCooldown] 区间内的时刻：
+// 过期、无法解析或远超合理窗口的值一律忽略，回落到常规 429 分类。
+func parseAnthropicRateLimitReset(headers map[string][]string, now time.Time) (time.Time, bool) {
+	for name, values := range headers {
+		if !strings.EqualFold(name, AnthropicRateLimitUnifiedResetHeader) {
+			continue
+		}
+		for _, value := range values {
+			resetUnix, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			if err != nil {
+				continue
+			}
+			until := time.Unix(resetUnix, 0)
+			if until.After(now) && !until.After(now.Add(MaxUpstreamResetCooldown)) {
+				return until, true
+			}
+		}
+		return time.Time{}, false
+	}
+	return time.Time{}, false
 }
 
 // classifySSEError 分析SSE error事件的具体类型

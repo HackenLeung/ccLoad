@@ -39,23 +39,14 @@ func (s *SQLStore) GetDebugLogByLogID(ctx context.Context, logID int64) (*model.
 }
 
 // CleanupDebugLogsBefore 清理过期的调试日志
+// 删除后不回收空闲页：空闲页会被后续写入直接复用，见 CleanupLogsBefore。
 func (s *SQLStore) CleanupDebugLogsBefore(ctx context.Context, cutoff time.Time) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM debug_logs WHERE created_at < ?`, cutoff.Unix())
-	if err != nil {
-		return err
-	}
-	affected, _ := result.RowsAffected()
-	s.runSQLiteIncrementalVacuum(ctx, affected)
-	return nil
+	_, err := s.db.ExecContext(ctx, `DELETE FROM debug_logs WHERE created_at < ?`, cutoff.Unix())
+	return err
 }
 
 // TruncateDebugLogs 清空所有调试日志
 func (s *SQLStore) TruncateDebugLogs(ctx context.Context) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM debug_logs`)
-	if err != nil {
-		return err
-	}
-	affected, _ := result.RowsAffected()
-	s.runSQLiteIncrementalVacuum(ctx, affected)
-	return nil
+	_, err := s.db.ExecContext(ctx, `DELETE FROM debug_logs`)
+	return err
 }
