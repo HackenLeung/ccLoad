@@ -371,6 +371,12 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 		defer cancel()
 	}
 
+	// 管理端「取消请求」入口：掐断请求级 context，代理循环不再尝试其他渠道。
+	// 与 skip（只取消当前尝试）互补——流式响应已提交后 skip 不可用，取消仍然有效。
+	ctx, cancelRequest := context.WithCancelCause(ctx)
+	defer cancelRequest(nil)
+	s.activeRequests.BindRequestCancel(activeID, cancelRequest)
+
 	cands, err := s.selectRouteCandidates(ctx, c, originalModel, string(clientProtocol))
 	if err != nil {
 		if errors.Is(err, errUnknownChannelType) {

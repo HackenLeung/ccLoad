@@ -18,6 +18,9 @@ const (
 	LogRetentionDaysMin      = 1
 	LogRetentionDaysMax      = 365
 	LogRetentionDaysDisabled = -1 // 永久保留
+
+	// DefaultActiveRequestCancelThresholdSeconds 进行中请求显示取消按钮的默认耗时阈值（秒）
+	DefaultActiveRequestCancelThresholdSeconds = 1000
 )
 
 // AdminListSettings 获取所有配置项
@@ -210,6 +213,10 @@ func validateSettingValue(key, valueType, value string) error {
 		case "auto_update_interval_hours":
 			if intVal != 0 && intVal < 1 {
 				return fmt.Errorf("auto_update_interval_hours must be 0 or >= 1")
+			}
+		case "active_request_cancel_threshold_seconds":
+			if intVal < 0 {
+				return fmt.Errorf("active_request_cancel_threshold_seconds must be >= 0 (0 = always show)")
 			}
 		default:
 			if intVal < -1 {

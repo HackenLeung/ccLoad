@@ -378,6 +378,8 @@ func initDefaultSettings(ctx context.Context, db *sql.DB, dialect Dialect) error
 		{"debug_log_retention_minutes", "2", "int", "Debug日志保留时长(分钟,1-1440)", "2"},
 		// 前端自动刷新
 		{"auto_refresh_interval_seconds", "0", "int", "页面自动刷新间隔(秒,0=禁用,建议≥30;有对话框打开时跳过本次刷新)", "0"},
+		// 进行中请求手动取消
+		{"active_request_cancel_threshold_seconds", "1000", "int", "进行中请求当前渠道耗时超过此值时显示取消按钮(秒,0=始终显示)", "1000"},
 	}
 
 	var query string

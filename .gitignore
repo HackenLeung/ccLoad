@@ -56,6 +56,7 @@ com.ccload.service.plist
 .gomodcache
 .codegraph/
 AGENTS.md
+CLAUDE.md
 dist
 *.bak
 docs

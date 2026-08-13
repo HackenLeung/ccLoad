@@ -867,6 +867,7 @@ func (s *Server) SetupRoutes(r *gin.Engine) {
 		admin.GET("/active-requests", s.HandleActiveRequests) // 进行中请求（内存状态）
 		admin.GET("/active-requests/:request_id/debug-log", s.HandleGetActiveRequestDebugLog)
 		admin.POST("/active-requests/:request_id/skip", s.HandleSkipActiveRequest)
+		admin.POST("/active-requests/:request_id/cancel", s.HandleCancelActiveRequest) // 取消整个请求（流式已提交后仍有效）
 		admin.GET("/metrics", s.HandleMetrics)
 		admin.GET("/stats", s.HandleStats)
 		admin.GET("/stats/filter-options", s.HandleStatsFilterOptions)

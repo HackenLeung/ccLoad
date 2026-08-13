@@ -15,9 +15,11 @@ import (
 
 var (
 	errManualChannelSkip             = errors.New("manual channel skip")
+	errManualRequestCancel           = errors.New("manual request cancel")
 	errActiveRequestNotFound         = errors.New("active request not found")
 	errActiveRequestAttemptMismatch  = errors.New("active request attempt changed")
 	errActiveRequestSkipNotAvailable = errors.New("active request cannot be skipped")
+	errActiveRequestAlreadyCanceled  = errors.New("active request cancel already requested")
 )
 
 // ActiveRequest 表示一个进行中的请求
@@ -39,9 +41,10 @@ type ActiveRequest struct {
 	CostMultiplier      float64 `json:"cost_multiplier"`                  // 渠道成本倍率
 	DebugLogAvailable   bool    `json:"debug_log_available,omitempty"`    // 运行中请求是否已有可读取的调试快照
 	ThinkingEffort      string  `json:"thinking_effort,omitempty"`
-	AttemptID           int64   `json:"attempt_id,omitempty"`     // 当前上游尝试编号，用于防止过期操作取消新尝试
-	CanSkip             bool    `json:"can_skip,omitempty"`       // 尚未向客户端提交响应时允许跳过当前渠道
-	SkipRequested       bool    `json:"skip_requested,omitempty"` // 已收到跳过请求，等待代理循环切换渠道
+	AttemptID           int64   `json:"attempt_id,omitempty"`       // 当前上游尝试编号，用于防止过期操作取消新尝试
+	CanSkip             bool    `json:"can_skip,omitempty"`         // 尚未向客户端提交响应时允许跳过当前渠道
+	SkipRequested       bool    `json:"skip_requested,omitempty"`   // 已收到跳过请求，等待代理循环切换渠道
+	CancelRequested     bool    `json:"cancel_requested,omitempty"` // 已收到整请求取消，等待代理链路收尾
 }
 
 type activeRequest struct {
@@ -66,6 +69,11 @@ type activeRequest struct {
 	attemptCancel context.CancelCauseFunc
 	canSkip       bool
 	skipRequested bool
+
+	// requestCancel 取消整个请求（含所有后续渠道重试），与 attemptCancel 相互独立：
+	// attemptCancel 只结束当前上游尝试，代理循环会继续下一个候选渠道。
+	requestCancel   context.CancelCauseFunc
+	cancelRequested bool
 
 	bytesCounter            atomic.Int64 // 上游已返回的字节数（原子累加）
 	clientFirstByteTimeUsec atomic.Int64 // 客户端侧首字节响应时间（微秒），CAS保证只写一次，0表示未设置
@@ -126,6 +134,56 @@ func (m *activeRequestManager) Update(id int64, channelID int64, channelName, ch
 		req.bytesCounter.Store(0)
 	}
 	m.mu.Unlock()
+}
+
+// BindRequestCancel 绑定“取消整个请求”的取消函数（在 HandleProxyRequest 注册请求后立即调用）。
+func (m *activeRequestManager) BindRequestCancel(id int64, cancel context.CancelCauseFunc) {
+	if cancel == nil {
+		return
+	}
+	m.mu.Lock()
+	if req, ok := m.requests[id]; ok {
+		req.requestCancel = cancel
+	}
+	m.mu.Unlock()
+}
+
+// MatchesStartTime 校验请求的当前起始时间（Unix 毫秒）是否与调用方预期一致。
+// 用于防护进程重启后请求 ID 从 1 重新分配、旧页面误取消新请求。
+func (m *activeRequestManager) MatchesStartTime(id, startTime int64) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	req, ok := m.requests[id]
+	return ok && req.StartTime == startTime
+}
+
+// CancelRequest 取消整个请求：掐断请求级 context，代理循环不会再尝试其他渠道。
+// 取消原因为 errManualRequestCancel，底层仍是 context.Canceled，因此分类为 499（客户端级、
+// 不重试、不计失败、不冷却渠道），只在日志文案上与真实客户端断开区分开。
+// 取消函数必须在解锁后调用，避免 context.AfterFunc 回调与状态锁互相等待。
+func (m *activeRequestManager) CancelRequest(id int64) error {
+	m.mu.Lock()
+	req, ok := m.requests[id]
+	if !ok {
+		m.mu.Unlock()
+		return errActiveRequestNotFound
+	}
+	if req.cancelRequested {
+		m.mu.Unlock()
+		return errActiveRequestAlreadyCanceled
+	}
+	if req.requestCancel == nil {
+		m.mu.Unlock()
+		return errActiveRequestNotFound
+	}
+
+	cancel := req.requestCancel
+	req.cancelRequested = true
+	req.canSkip = false
+	m.mu.Unlock()
+
+	cancel(errManualRequestCancel)
+	return nil
 }
 
 // SetBaseURL 更新活跃请求的上游URL（在URL循环中调用）
@@ -314,6 +372,7 @@ func (m *activeRequestManager) List() []*ActiveRequest {
 			AttemptID:         req.attemptID,
 			CanSkip:           req.canSkip,
 			SkipRequested:     req.skipRequested,
+			CancelRequested:   req.cancelRequested,
 		}
 		if usec := req.clientFirstByteTimeUsec.Load(); usec > 0 {
 			view.ClientFirstByteTime = float64(usec) / 1e6

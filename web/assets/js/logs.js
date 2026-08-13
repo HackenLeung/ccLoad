@@ -267,7 +267,21 @@ function formatBytes(bytes) {
   return value.toFixed(i > 0 ? 1 : 0) + ' ' + UNITS[i];
 }
 
-function buildActiveRequestInfoContent(req) {
+// 取消按钮的耗时阈值（秒）。0 = 始终显示；由 bootstrap 下发的
+// active_request_cancel_threshold_seconds 覆盖。
+let activeRequestCancelThresholdSeconds = 1000;
+
+// 判断当前渠道耗时是否已达到显示取消按钮的阈值。
+// 注意：elapsedSeconds 基于 req.start_time，而 start_time 每次切换渠道/Key 都会重置，
+// 因此这里判断的是「当前渠道耗时」而非请求总耗时——这正是需求语义。
+function shouldShowActiveRequestCancel(elapsedSeconds) {
+  if (!Number.isFinite(elapsedSeconds)) return false;
+  const threshold = Number(activeRequestCancelThresholdSeconds);
+  if (!Number.isFinite(threshold) || threshold <= 0) return true;
+  return elapsedSeconds >= threshold;
+}
+
+function buildActiveRequestInfoContent(req, elapsedSeconds) {
   const bytesInfo = formatBytes(req?.bytes_received);
   const hasBytes = !!bytesInfo;
   const infoDisplay = hasBytes ? `已接收 ${bytesInfo}` : '请求处理中...';
@@ -275,22 +289,38 @@ function buildActiveRequestInfoContent(req) {
   const infoHtml = `<span style="color: ${infoColor};">${escapeHtml(infoDisplay)}</span>`;
   const activeRequestId = Number(req?.id);
   const attemptId = Number(req?.attempt_id);
+  const hasValidId = Number.isFinite(activeRequestId) && activeRequestId > 0;
 
   let content = infoHtml;
-  if (req?.debug_log_available && Number.isFinite(activeRequestId) && activeRequestId > 0) {
+  if (req?.debug_log_available && hasValidId) {
     content = `<span class="debug-log-link has-upstream-detail" data-active-request-id="${activeRequestId}" title="${escapeHtml(t('logs.debugLogTitle'))}">${infoHtml}</span>`;
   }
 
+  const buttons = [];
+
   const canSkip = !!req?.can_skip || !!req?.skip_requested;
-  if (!canSkip || !Number.isFinite(activeRequestId) || activeRequestId <= 0 || !Number.isFinite(attemptId) || attemptId <= 0) {
-    return content;
+  if (canSkip && hasValidId && Number.isFinite(attemptId) && attemptId > 0) {
+    const skipRequested = !!req?.skip_requested;
+    const skipLabel = skipRequested ? t('logs.skipChannelSwitching') : t('logs.skipChannel');
+    const disabled = skipRequested ? ' disabled aria-disabled="true"' : '';
+    buttons.push(`<button type="button" class="skip-active-channel-btn${skipRequested ? ' is-pending' : ''}" data-active-request-id="${activeRequestId}" data-attempt-id="${attemptId}" title="${escapeHtml(t('logs.skipChannelTitle'))}"${disabled}>${escapeHtml(skipLabel)}</button>`);
   }
 
-  const skipRequested = !!req?.skip_requested;
-  const skipLabel = skipRequested ? t('logs.skipChannelSwitching') : t('logs.skipChannel');
-  const disabled = skipRequested ? ' disabled aria-disabled="true"' : '';
-  const skipButton = `<button type="button" class="skip-active-channel-btn${skipRequested ? ' is-pending' : ''}" data-active-request-id="${activeRequestId}" data-attempt-id="${attemptId}" title="${escapeHtml(t('logs.skipChannelTitle'))}"${disabled}>${escapeHtml(skipLabel)}</button>`;
-  return `<span class="active-request-info">${content}${skipButton}</span>`;
+  // 取消整个请求：与 skip 互补——响应已提交给客户端后 skip 不可用，取消仍然有效。
+  // 已在取消中时保持按钮可见但禁用（该列每轮轮询整体重绘，靠后端 cancel_requested 保持状态）。
+  const cancelRequested = !!req?.cancel_requested;
+  if (hasValidId && (cancelRequested || shouldShowActiveRequestCancel(elapsedSeconds))) {
+    const cancelLabel = cancelRequested ? t('logs.cancelRequestCanceling') : t('logs.cancelRequest');
+    const disabled = cancelRequested ? ' disabled aria-disabled="true"' : '';
+    const startTime = Number(req?.start_time);
+    const startAttr = Number.isFinite(startTime) && startTime > 0 ? ` data-start-time="${startTime}"` : '';
+    buttons.push(`<button type="button" class="cancel-active-request-btn${cancelRequested ? ' is-pending' : ''}" data-active-request-id="${activeRequestId}"${startAttr} title="${escapeHtml(t('logs.cancelRequestTitle'))}"${disabled}>${escapeHtml(cancelLabel)}</button>`);
+  }
+
+  if (buttons.length === 0) {
+    return content;
+  }
+  return `<span class="active-request-info">${content}${buttons.join('')}</span>`;
 }
 
 async function skipActiveRequestChannel(button) {
@@ -324,6 +354,54 @@ async function skipActiveRequestChannel(button) {
       button.textContent = originalLabel;
     }
     const message = error?.message || t('logs.skipChannelFailed');
+    if (window.showError) {
+      window.showError(message);
+    } else if (window.showAlertDialog) {
+      await window.showAlertDialog({ message });
+    }
+  }
+}
+
+async function cancelActiveRequest(button) {
+  const activeRequestId = Number(button?.dataset?.activeRequestId);
+  if (!Number.isFinite(activeRequestId) || activeRequestId <= 0 || button.disabled) {
+    return;
+  }
+
+  const confirmMessage = t('logs.cancelRequestConfirm');
+  if (window.showConfirmDialog) {
+    const confirmed = await window.showConfirmDialog({ message: confirmMessage });
+    if (!confirmed) return;
+  }
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.classList.add('is-pending');
+  button.setAttribute('aria-disabled', 'true');
+  button.textContent = t('logs.cancelRequestCanceling');
+
+  // start_time 用于防护进程重启后请求 ID 重新分配导致误取消
+  const startTime = Number(button?.dataset?.startTime);
+  const payload = Number.isFinite(startTime) && startTime > 0 ? { start_time: startTime } : {};
+
+  try {
+    const response = await fetchAPIWithAuth(`/admin/active-requests/${activeRequestId}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.success) {
+      throw new Error(response.error || t('logs.cancelRequestFailed'));
+    }
+  } catch (error) {
+    console.error('取消请求失败:', error);
+    if (button.isConnected) {
+      button.disabled = false;
+      button.classList.remove('is-pending');
+      button.removeAttribute('aria-disabled');
+      button.textContent = originalLabel;
+    }
+    const message = error?.message || t('logs.cancelRequestFailed');
     if (window.showError) {
       window.showError(message);
     } else if (window.showAlertDialog) {
@@ -897,7 +975,9 @@ function renderActiveRequests(activeRequests) {
       keyDisplay = `<span class="logs-api-key-text logs-mono-text">${escapeHtml(req.api_key_used)}</span>`;
     }
 
-    const infoContent = buildActiveRequestInfoContent(req);
+    // 传入 elapsedRaw：取消按钮按「当前渠道耗时」阈值显示。
+    // 该单元格每轮轮询整体重绘，因此耗时跨过阈值后按钮会自动出现。
+    const infoContent = buildActiveRequestInfoContent(req, elapsedRaw);
 
     let existingRow = tbody.querySelector(`tr.pending-row[data-req-id="${id}"]`);
 
@@ -912,7 +992,10 @@ function renderActiveRequests(activeRequests) {
         upstreamProtocolCell.innerHTML = upstreamProtocolDisplay;
         upstreamProtocolCell.classList.toggle('mobile-empty-cell', !upstreamProtocolDisplay);
       }
-      const msgCell = existingRow.querySelector('.logs-col-message');
+      // 窄屏（totalCols < 8）用单个 colspan 单元格，没有 .logs-col-message，
+      // 必须回退到 .active-request-info-slot，否则该行创建后就再也不刷新——
+      // 取消按钮依赖耗时跨过阈值后重绘，不刷新就永远不出现。
+      const msgCell = existingRow.querySelector('.logs-col-message') || existingRow.querySelector('.active-request-info-slot');
       if (msgCell) msgCell.innerHTML = infoContent;
     } else {
       // 创建新行
@@ -927,7 +1010,7 @@ function renderActiveRequests(activeRequests) {
               <span class="logs-mono-text" style="margin-left: 8px;" title="${escapeHtml(req.client_ip || '')}">${escapeHtml(maskIP(req.client_ip) || '-')}</span>
               <span style="margin-left: 8px;">${modelDisplay}</span>
               <span style="margin-left: 8px;">${durationDisplay} ${streamFlag}</span>
-              <span style="margin-left: 8px;">${infoContent}</span>
+              <span class="active-request-info-slot" style="margin-left: 8px;">${infoContent}</span>
             </td>
           `;
       } else {
@@ -1842,6 +1925,10 @@ window.initPageBootstrap({
     if (bootstrap.channel_test_content) logsDefaultTestContent = bootstrap.channel_test_content;
     const clickAction = String(bootstrap.log_channel_click_action || '').trim().toLowerCase();
     logChannelClickAction = clickAction === 'navigate' ? 'navigate' : 'edit';
+    const cancelThreshold = Number(bootstrap.active_request_cancel_threshold_seconds);
+    if (Number.isFinite(cancelThreshold) && cancelThreshold >= 0) {
+      activeRequestCancelThresholdSeconds = cancelThreshold;
+    }
     window.availableLogsModels = [...new Set(bootstrap.models || [])];
     window.logsChannels = bootstrap.channels || [];
     if (logsChannelNameCombobox) logsChannelNameCombobox.refresh();
@@ -1889,6 +1976,12 @@ window.initPageBootstrap({
       const skipChannelBtn = e.target.closest('.skip-active-channel-btn[data-active-request-id]');
       if (skipChannelBtn) {
         void skipActiveRequestChannel(skipChannelBtn);
+        return;
+      }
+
+      const cancelRequestBtn = e.target.closest('.cancel-active-request-btn[data-active-request-id]');
+      if (cancelRequestBtn) {
+        void cancelActiveRequest(cancelRequestBtn);
         return;
       }
 

@@ -18,6 +18,8 @@ type LogsBootstrapResponse struct {
 	ChannelTestContent        string                `json:"channel_test_content"`
 	LogChannelClickAction     string                `json:"log_channel_click_action"`
 	ChannelCheckIntervalHours float64               `json:"channel_check_interval_hours"`
+	// ActiveRequestCancelThresholdSeconds 进行中请求当前渠道耗时超过此值才显示取消按钮（0=始终显示，-1=未配置时取默认值）
+	ActiveRequestCancelThresholdSeconds int `json:"active_request_cancel_threshold_seconds"`
 	AuthTokens                []*model.AuthToken    `json:"auth_tokens"`
 	Models                    []string              `json:"models"`
 	Channels                  []model.ChannelNameID `json:"channels"`
@@ -48,6 +50,9 @@ func (s *Server) HandleLogsBootstrap(c *gin.Context) {
 		firstErr error
 		wg       sync.WaitGroup
 	)
+
+	// 默认值必须在 fan-out 之前写入：goroutine 内只在读到有效配置时覆盖
+	resp.ActiveRequestCancelThresholdSeconds = DefaultActiveRequestCancelThresholdSeconds
 
 	setErr := func(err error) {
 		mu.Lock()
@@ -98,6 +103,25 @@ func (s *Server) HandleLogsBootstrap(c *gin.Context) {
 			resp.ChannelCheckIntervalHours = n
 			mu.Unlock()
 		}
+	})
+
+	// goroutine 3.5: active_request_cancel_threshold_seconds
+	wg.Go(func() {
+		setting, err := s.configService.GetSettingFresh(ctx, "active_request_cancel_threshold_seconds")
+		if err != nil && !errors.Is(err, model.ErrSettingNotFound) {
+			setErr(err)
+			return
+		}
+		if setting == nil {
+			return
+		}
+		n, convErr := strconv.Atoi(setting.Value)
+		if convErr != nil || n < 0 {
+			return
+		}
+		mu.Lock()
+		resp.ActiveRequestCancelThresholdSeconds = n
+		mu.Unlock()
 	})
 
 	// goroutine 4: auth tokens

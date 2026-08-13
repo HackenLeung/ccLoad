@@ -50,7 +50,9 @@ internal/{model,config,version,testutil}/   web/  前端(HTML+assets/{css,js,loc
 - 渠道级(5xx/520/524,404/405 无客户端语义)→ 切渠道
 - 客户端错误(406/413,404+`model_not_found`)→ 直接返回,不重试
 - 成本限额达到 → 跳过该渠道
-- 指数退避:2 → 4 → 8 → 30 min
+- 指数退避:2 → 4 → 8 → 30 min(`MaxCooldownDuration`)
+- 例外:429 带 `Anthropic-Ratelimit-Unified-Reset` → 渠道级,按该时刻冷却(组织级配额,换 Key 同样被拒)
+- 上游给出的固定截止时间(1308/DAILY_LIMIT/统一配额重置等)不走退避;绝对时刻受 `MaxUpstreamResetCooldown`(24h)约束,超限或无法解析则回落常规分类
 
 ## 自定义状态码(改相关代码前先读语义)
 

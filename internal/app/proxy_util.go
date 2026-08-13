@@ -201,6 +201,12 @@ func isManualChannelSkip(ctx context.Context) bool {
 	return ctx != nil && errors.Is(context.Cause(ctx), errManualChannelSkip)
 }
 
+// isManualRequestCancel 判断请求是否被管理端整体取消。
+// 与 isManualChannelSkip 使用不同 cause，避免取消被误当成「跳过渠道」而继续重试下一个渠道。
+func isManualRequestCancel(ctx context.Context) bool {
+	return ctx != nil && errors.Is(context.Cause(ctx), errManualRequestCancel)
+}
+
 func manualChannelSkipResult(cfg *model.Config) *proxyResult {
 	channelID := cfg.ID
 	return &proxyResult{

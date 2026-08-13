@@ -161,14 +161,21 @@ func (s *Server) handleNetworkError(
 ) (*proxyResult, cooldown.Action) {
 	statusCode, _, shouldRetry := util.ClassifyError(err)
 
+	// 管理端手动取消：底层仍是 context.Canceled（499/不重试/不冷却），仅在日志文案上与
+	// 真实客户端断开区分，便于事后追查“是人杀的还是客户端跑了”。
+	logMsg := err.Error()
+	if isManualRequestCancel(ctx) {
+		logMsg = "canceled by admin: " + logMsg
+	}
+
 	// 记录日志：requestModel=原始请求模型，actualModel=实际转发模型
 	// Duration 使用「当前渠道开始到现在」的累计耗时：覆盖渠道内多 Key/多 URL 的累计等待时间，
 	// 但不跨越渠道边界，避免把先前渠道耗时算到本渠道日志上。
-	s.logProxyResult(reqCtx, cfg, actualModel, selectedKey, statusCode, time.Since(reqCtx.channelStartTime).Seconds(), res, err.Error())
+	s.logProxyResult(reqCtx, cfg, actualModel, selectedKey, statusCode, time.Since(reqCtx.channelStartTime).Seconds(), res, logMsg)
 
 	failure := &proxyResult{
 		status:           statusCode,
-		body:             []byte(err.Error()),
+		body:             []byte(logMsg),
 		channelID:        &cfg.ID,
 		duration:         duration,
 		succeeded:        false,
