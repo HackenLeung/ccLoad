@@ -43,6 +43,110 @@ func TestBuildAndRewriteVisionAssistOpenAIRequest(t *testing.T) {
 	}
 }
 
+func TestVisionAssistUsesOnlyLatestUserImageTurn(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{
+		"model":"deepseek-v4",
+		"messages":[
+			{"role":"user","content":[
+				{"type":"text","text":"old request"},
+				{"type":"image_url","image_url":{"url":"data:image/png;base64,b2xk"}}
+			]},
+			{"role":"assistant","content":[{"type":"text","text":"old answer"}]},
+			{"role":"user","content":[
+				{"type":"text","text":"new request"},
+				{"type":"image_url","image_url":{"url":"data:image/png;base64,bmV3"}}
+			]}
+		]
+	}`)
+
+	visionBody, hasImages, err := BuildVisionAssistRequest(protocol.OpenAI, raw, "qwen-vl")
+	if err != nil || !hasImages {
+		t.Fatalf("BuildVisionAssistRequest: hasImages=%v err=%v", hasImages, err)
+	}
+	visionText := string(visionBody)
+	if !strings.Contains(visionText, "data:image/png;base64,bmV3") || strings.Contains(visionText, "data:image/png;base64,b2xk") {
+		t.Fatalf("vision request included the wrong image: %s", visionText)
+	}
+	if !strings.Contains(visionText, "new request") || strings.Contains(visionText, "old request") {
+		t.Fatalf("vision request included the wrong user context: %s", visionText)
+	}
+
+	rewritten, err := RewriteImagesAsText(protocol.OpenAI, raw, "new image description")
+	if err != nil {
+		t.Fatalf("RewriteImagesAsText: %v", err)
+	}
+	rewrittenText := string(rewritten)
+	if strings.Contains(rewrittenText, "data:image/png;base64,") || !strings.Contains(rewrittenText, "new image description") {
+		t.Fatalf("rewritten request still contains image data or lost description: %s", rewrittenText)
+	}
+	if !strings.Contains(rewrittenText, "old request") || !strings.Contains(rewrittenText, "new request") {
+		t.Fatalf("rewritten request lost conversation text: %s", rewrittenText)
+	}
+}
+
+func TestVisionAssistCacheKeyIgnoresOlderImageTurns(t *testing.T) {
+	t.Parallel()
+	request := func(oldImage string) []byte {
+		return []byte(`{"model":"deepseek-v4","messages":[` +
+			`{"role":"user","content":[{"type":"image_url","image_url":{"url":"` + oldImage + `"}}]},` +
+			`{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,bmV3"}}]}` +
+			`]}`)
+	}
+
+	first, firstCacheable, err := VisionAssistCacheKey(protocol.OpenAI, request("data:image/png;base64,b2xk"))
+	if err != nil || !firstCacheable {
+		t.Fatalf("first VisionAssistCacheKey: cacheable=%v err=%v", firstCacheable, err)
+	}
+	second, secondCacheable, err := VisionAssistCacheKey(protocol.OpenAI, request("data:image/png;base64, b3RoZXI"))
+	if err != nil || !secondCacheable {
+		t.Fatalf("second VisionAssistCacheKey: cacheable=%v err=%v", secondCacheable, err)
+	}
+	if first != second {
+		t.Fatalf("cache key changed with an older image: first=%s second=%s", first, second)
+	}
+}
+
+func TestVisionAssistUsesOnlyLatestAnthropicImageTurn(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{
+		"model":"claude-opus-5",
+		"max_tokens":100,
+		"messages":[
+			{"role":"user","content":[
+				{"type":"text","text":"old request"},
+				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"b2xk"}}
+			]},
+			{"role":"assistant","content":[{"type":"text","text":"old answer"}]},
+			{"role":"user","content":[
+				{"type":"text","text":"new request"},
+				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"bmV3"}}
+			]}
+		]
+	}`)
+
+	visionBody, hasImages, err := BuildVisionAssistRequest(protocol.Anthropic, raw, "qwen-vl")
+	if err != nil || !hasImages {
+		t.Fatalf("BuildVisionAssistRequest: hasImages=%v err=%v", hasImages, err)
+	}
+	visionText := string(visionBody)
+	if !strings.Contains(visionText, "data:image/png;base64,bmV3") || strings.Contains(visionText, "data:image/png;base64,b2xk") {
+		t.Fatalf("Anthropic vision request included the wrong image: %s", visionText)
+	}
+	if !strings.Contains(visionText, "new request") || strings.Contains(visionText, "old request") {
+		t.Fatalf("Anthropic vision request included the wrong user context: %s", visionText)
+	}
+
+	rewritten, err := RewriteImagesAsText(protocol.Anthropic, raw, "new image description")
+	if err != nil {
+		t.Fatalf("RewriteImagesAsText: %v", err)
+	}
+	rewrittenText := string(rewritten)
+	if strings.Contains(rewrittenText, `"type":"image"`) || strings.Contains(rewrittenText, `"data":"b2xk"`) || !strings.Contains(rewrittenText, "new image description") {
+		t.Fatalf("Anthropic request was not scoped and rewritten: %s", rewrittenText)
+	}
+}
+
 func TestRewriteImagesAsTextSupportedProtocols(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

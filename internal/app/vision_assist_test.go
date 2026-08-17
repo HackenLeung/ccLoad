@@ -88,6 +88,82 @@ func TestProxyVisionAssistUsesSameChannelAndRewritesRequest(t *testing.T) {
 	t.Fatal("vision assist log was not persisted")
 }
 
+func TestProxyVisionAssistIgnoresHistoricalImages(t *testing.T) {
+	var visionCalls atomic.Int32
+	var mainCalls atomic.Int32
+	upstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		bodyText := string(body)
+		switch {
+		case strings.Contains(bodyText, `"model":"vision-vl"`):
+			visionCalls.Add(1)
+			if !strings.Contains(bodyText, "data:image/png;base64,bmV3") || strings.Contains(bodyText, "data:image/png;base64,b2xk") {
+				t.Errorf("vision request did not isolate the latest image: %s", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"latest image description"}}]}`))
+		case strings.Contains(bodyText, `"model":"deepseek-v4"`):
+			mainCalls.Add(1)
+			if strings.Contains(bodyText, "data:image/png;base64,") || !strings.Contains(bodyText, "latest image description") {
+				t.Errorf("main request retained a historical image or lost the description: %s", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		default:
+			t.Errorf("unexpected request body: %s", body)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer upstream.Close()
+
+	env := setupProxyTestEnv(t, []testChannel{{name: "same-channel", models: "deepseek-v4,vision-vl"}}, map[int]string{0: upstream.URL})
+	cfgs, err := env.store.ListConfigs(context.Background())
+	if err != nil || len(cfgs) != 1 {
+		t.Fatalf("ListConfigs: len=%d err=%v", len(cfgs), err)
+	}
+	for i := range cfgs[0].ModelEntries {
+		switch cfgs[0].ModelEntries[i].Model {
+		case "deepseek-v4":
+			cfgs[0].ModelEntries[i].VisionAssistEnabled = true
+		case "vision-vl":
+			cfgs[0].ModelEntries[i].VisionPoolEnabled = true
+			cfgs[0].ModelEntries[i].VisionPriority = 100
+		}
+	}
+	if _, err := env.store.UpdateConfig(context.Background(), cfgs[0].ID, cfgs[0]); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+	env.server.InvalidateChannelListCache()
+
+	response := doProxyRequest(t, env.engine, http.MethodPost, "/v1/chat/completions", map[string]any{
+		"model": "deepseek-v4",
+		"messages": []any{
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "text", "text": "old request"},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,b2xk"}},
+			}},
+			map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "text", "text": "old answer"},
+			}},
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "text", "text": "new request"},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,bmV3"}},
+			}},
+		},
+	}, nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "ok") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if visionCalls.Load() != 1 || mainCalls.Load() != 1 {
+		t.Fatalf("vision calls=%d main calls=%d", visionCalls.Load(), mainCalls.Load())
+	}
+}
+
 func TestProxyVisionAssistReusesDescriptionForSameImageAcrossRequests(t *testing.T) {
 	var visionCalls atomic.Int32
 	var mainCalls atomic.Int32
