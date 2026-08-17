@@ -303,6 +303,7 @@ window.I18N_LOCALES['zh-CN'] = {
   'channels.redirectEnabled': '已开启',
   'channels.redirectDisabled': '未开启',
   'channels.enableChannel': '启用',
+  'channels.useProxy': '使用代理',
   'channels.enableScheduledCheck': '定时检测',
   'channels.priority': '优先级',
   'channels.dailyCostLimit': '每日限额',

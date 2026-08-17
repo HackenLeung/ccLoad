@@ -714,6 +714,94 @@ if (typeof module !== 'undefined' && module.exports) {
     }));
   }
 
+  function loadChannelProxyControl() {
+    const checkbox = {
+      checked: false,
+      dataset: {},
+      listeners: {},
+      addEventListener(type, listener) { this.listeners[type] = listener; }
+    };
+    const input = {
+      value: '',
+      disabled: false,
+      attributes: {},
+      setAttribute(name, value) { this.attributes[name] = value; }
+    };
+    const restoreGlobals = replaceGlobals({
+      window: { ChannelProtocolConfig: {} },
+      document: {
+        getElementById(id) {
+          if (id === 'channelUseProxy') return checkbox;
+          if (id === 'channelProxyURL') return input;
+          return null;
+        }
+      }
+    });
+    const modulePath = require.resolve('./channels-modals.js');
+    delete require.cache[modulePath];
+    try {
+      return {
+        mod: require('./channels-modals.js'),
+        checkbox,
+        input,
+        restore() {
+          delete require.cache[modulePath];
+          restoreGlobals();
+        }
+      };
+    } catch (error) {
+      restoreGlobals();
+      throw error;
+    }
+  }
+
+  test('新渠道默认启用本地代理', () => {
+    const runtime = loadChannelProxyControl();
+    try {
+      runtime.mod.setNewChannelProxyDefaults();
+      assert.equal(runtime.checkbox.checked, true);
+      assert.equal(runtime.input.value, 'http://127.0.0.1:7890');
+      assert.equal(runtime.input.disabled, false);
+      assert.equal(runtime.mod.getSubmittedChannelProxyURL(), 'http://127.0.0.1:7890');
+    } finally {
+      runtime.restore();
+    }
+  });
+
+  test('关闭代理开关时保存空代理，重新打开保留自定义地址', () => {
+    const runtime = loadChannelProxyControl();
+    try {
+      runtime.mod.setChannelProxyFormValue('socks5://127.0.0.1:1080');
+      assert.equal(runtime.checkbox.checked, true);
+      assert.equal(runtime.input.disabled, false);
+
+      runtime.checkbox.checked = false;
+      runtime.mod.syncChannelProxyInputState();
+      assert.equal(runtime.input.disabled, true);
+      assert.equal(runtime.input.value, 'socks5://127.0.0.1:1080');
+      assert.equal(runtime.mod.getSubmittedChannelProxyURL(), '');
+
+      runtime.checkbox.checked = true;
+      runtime.mod.syncChannelProxyInputState({ fillDefault: true });
+      assert.equal(runtime.input.value, 'socks5://127.0.0.1:1080');
+      assert.equal(runtime.mod.getSubmittedChannelProxyURL(), 'socks5://127.0.0.1:1080');
+    } finally {
+      runtime.restore();
+    }
+  });
+
+  test('编辑无代理渠道保持关闭状态', () => {
+    const runtime = loadChannelProxyControl();
+    try {
+      runtime.mod.setChannelProxyFormValue('');
+      assert.equal(runtime.checkbox.checked, false);
+      assert.equal(runtime.input.disabled, true);
+      assert.equal(runtime.mod.getSubmittedChannelProxyURL(), '');
+    } finally {
+      runtime.restore();
+    }
+  });
+
   test('addCommonModels 只添加手动维护的 Codex 常用模型', async () => {
     const runtime = loadChannelEditor({
       rows: [{ model: 'GPT-5.4', redirect_enabled: false, protocol_aliases: {} }],

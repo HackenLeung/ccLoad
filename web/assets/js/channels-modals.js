@@ -1,3 +1,59 @@
+const DEFAULT_CHANNEL_PROXY_URL = 'http://127.0.0.1:7890';
+
+function syncChannelProxyInputState({ fillDefault = false } = {}) {
+  const checkbox = document.getElementById('channelUseProxy');
+  const input = document.getElementById('channelProxyURL');
+  if (!checkbox || !input) return;
+  if (checkbox.checked && fillDefault && !input.value.trim()) {
+    input.value = DEFAULT_CHANNEL_PROXY_URL;
+  }
+  input.disabled = !checkbox.checked;
+  input.setAttribute('aria-disabled', checkbox.checked ? 'false' : 'true');
+}
+
+function setChannelProxyFormValue(proxyURL) {
+  const checkbox = document.getElementById('channelUseProxy');
+  const input = document.getElementById('channelProxyURL');
+  if (!checkbox || !input) return;
+  input.value = String(proxyURL || '').trim();
+  checkbox.checked = input.value !== '';
+  syncChannelProxyInputState();
+}
+
+function initChannelProxyControl() {
+  const checkbox = document.getElementById('channelUseProxy');
+  const input = document.getElementById('channelProxyURL');
+  if (checkbox && checkbox.dataset.bound !== '1') {
+    checkbox.addEventListener('change', () => {
+      syncChannelProxyInputState({ fillDefault: checkbox.checked });
+      if (typeof markChannelFormDirty === 'function') markChannelFormDirty();
+    });
+    checkbox.dataset.bound = '1';
+  }
+  if (input && input.dataset.bound !== '1') {
+    input.addEventListener('input', () => {
+      if (typeof markChannelFormDirty === 'function') markChannelFormDirty();
+    });
+    input.dataset.bound = '1';
+  }
+}
+
+function setNewChannelProxyDefaults() {
+  const checkbox = document.getElementById('channelUseProxy');
+  const input = document.getElementById('channelProxyURL');
+  if (!checkbox || !input) return;
+  checkbox.checked = true;
+  input.value = DEFAULT_CHANNEL_PROXY_URL;
+  syncChannelProxyInputState();
+}
+
+function getSubmittedChannelProxyURL() {
+  const checkbox = document.getElementById('channelUseProxy');
+  const input = document.getElementById('channelProxyURL');
+  if (!checkbox || !checkbox.checked) return '';
+  return (input?.value || '').trim() || DEFAULT_CHANNEL_PROXY_URL;
+}
+
 function setChannelModalTitle(i18nKey) {
   const titleEl = document.getElementById('modalTitle');
   if (!titleEl) return;
@@ -473,6 +529,7 @@ function initChannelEditorActions() {
   }
 
   ensureScheduledCheckModelCombobox();
+  initChannelProxyControl();
 }
 
 async function showAddModal() {
@@ -512,6 +569,7 @@ async function showAddModal() {
   renderInlineKeyTable();
 
   invokeChannelEditorAction('resetCustomRulesState', null);
+  setNewChannelProxyDefaults();
 
   resetChannelFormDirty();
   document.getElementById('channelModal').classList.add('show');
@@ -596,8 +654,7 @@ async function editChannel(id) {
 
   invokeChannelEditorAction('resetCustomRulesState', channel.custom_request_rules || null);
 
-  const proxyUrlInput = document.getElementById('channelProxyURL');
-  if (proxyUrlInput) proxyUrlInput.value = channel.proxy_url || '';
+  setChannelProxyFormValue(channel.proxy_url);
 
   resetChannelFormDirty();
   document.getElementById('channelModal').classList.add('show');
@@ -861,7 +918,7 @@ async function saveChannel(event) {
     scheduled_check_enabled: document.getElementById('channelScheduledCheckEnabled').checked,
     scheduled_check_model: document.getElementById('channelScheduledCheckModel').value.trim(),
     custom_request_rules: invokeChannelEditorAction('collectCustomRulesForSubmit') || null,
-    proxy_url: (document.getElementById('channelProxyURL')?.value || '').trim()
+    proxy_url: getSubmittedChannelProxyURL()
   };
 
   if (!formData.name || !formData.url || !formData.api_key || formData.models.length === 0) {
@@ -1553,6 +1610,8 @@ async function copyChannel(id, name) {
   if (modelFilterInput) modelFilterInput.value = '';
   renderRedirectTable();
   syncScheduledCheckModelState();
+
+  setChannelProxyFormValue(channel.proxy_url);
 
   resetChannelFormDirty();
   document.getElementById('channelModal').classList.add('show');
@@ -2633,6 +2692,10 @@ if (typeof module !== 'undefined' && module.exports) {
     findDuplicatePublicModels,
     normalizeEditorModelRow,
     parseModelAddEntries,
-    setModelRedirectEnabled
+    setModelRedirectEnabled,
+    syncChannelProxyInputState,
+    setChannelProxyFormValue,
+    setNewChannelProxyDefaults,
+    getSubmittedChannelProxyURL
   };
 }

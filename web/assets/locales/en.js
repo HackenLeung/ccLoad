@@ -303,6 +303,7 @@ window.I18N_LOCALES['en'] = {
   'channels.redirectEnabled': 'Enabled',
   'channels.redirectDisabled': 'Disabled',
   'channels.enableChannel': 'Enable',
+  'channels.useProxy': 'Use Proxy',
   'channels.enableScheduledCheck': 'Scheduled Checks',
   'channels.priority': 'Priority',
   'channels.dailyCostLimit': 'Daily Limit',
