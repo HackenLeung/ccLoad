@@ -604,6 +604,103 @@ function buildChannelLastRequestFailureHtml(stats) {
   </div>`;
 }
 
+const CHANNEL_RISK_STATUSES = new Set([
+  'unobserved',
+  'configuration_attention',
+  'clear',
+  'attention',
+  'high_risk'
+]);
+
+function normalizeChannelRiskStatus(status) {
+  return CHANNEL_RISK_STATUSES.has(status) ? status : 'unobserved';
+}
+
+function channelRiskFindingText(finding) {
+  const code = finding && typeof finding.code === 'string' ? finding.code : '';
+  const key = `channels.risk.finding.${code}`;
+  const translated = window.t(key);
+  return translated && translated !== key ? translated : code || window.t('channels.risk.unknownFinding');
+}
+
+function buildChannelRiskHtml(channel) {
+  const status = normalizeChannelRiskStatus(channel.risk_status);
+  const statusText = window.t(`channels.risk.status.${status}`);
+  const score = Number.isFinite(Number(channel.risk_score)) ? Number(channel.risk_score) : null;
+  const scoreText = score === null ? '--' : String(score);
+  const sampleCount = Number.isFinite(Number(channel.risk_sample_count))
+    ? Math.max(0, Number(channel.risk_sample_count))
+    : 0;
+  const channelID = escapeChannelRefreshText(channel.id);
+  const channelName = escapeChannelRefreshText(channel.name || '');
+  const canCheckRisk = typeof isTokenChannelsReadOnly !== 'function' || !isTokenChannelsReadOnly();
+  const riskButtonHtml = canCheckRisk ? `<button type="button" class="ch-risk-button channel-action-btn" data-action="risk-check"
+        data-channel-id="${channelID}" data-channel-name="${channelName}"
+        title="${escapeChannelRefreshText(window.t('channels.risk.check'))}"
+        aria-label="${escapeChannelRefreshText(window.t('channels.risk.check'))}">
+        ${escapeChannelRefreshText(window.t('channels.risk.check'))}
+      </button>` : '';
+
+  return `<div class="ch-risk-stack ch-risk-stack--${status}">
+    <div class="ch-risk-main">
+      <span class="ch-risk-status">${escapeChannelRefreshText(statusText)}</span>
+      <span class="ch-risk-score">${escapeChannelRefreshText(window.t('channels.risk.score', { score: scoreText }))}</span>
+    </div>
+    <div class="ch-risk-meta">
+      <span class="ch-risk-samples">${escapeChannelRefreshText(window.t('channels.risk.samples', { count: sampleCount }))}</span>
+      ${riskButtonHtml}
+    </div>
+  </div>`;
+}
+
+async function showChannelRiskReport(channelID, channelName) {
+  try {
+    const report = await fetchDataWithAuth(`/admin/channels/${channelID}/risk-check`, { method: 'POST' });
+    const status = normalizeChannelRiskStatus(report && report.risk_status);
+    const score = report && report.risk_score !== null && report.risk_score !== undefined
+      ? String(report.risk_score)
+      : '--';
+    const sampleCount = Number.isFinite(Number(report && report.risk_sample_count))
+      ? Number(report.risk_sample_count)
+      : 0;
+    const configFindings = Array.isArray(report && report.config_findings) ? report.config_findings : [];
+    const globalFindings = Array.isArray(report && report.global_findings) ? report.global_findings : [];
+    const observedFindings = Array.isArray(report && report.observed_findings) ? report.observed_findings : [];
+    const findingLines = (findings) => findings.length > 0
+      ? findings.map(finding => `- ${channelRiskFindingText(finding)}`)
+      : [`- ${window.t('channels.risk.noneFound')}`];
+    const lines = [
+      `${window.t('channels.risk.channel')}: ${channelName || channelID}`,
+      `${window.t('channels.risk.statusLabel')}: ${window.t(`channels.risk.status.${status}`)}`,
+      `${window.t('channels.risk.scoreLabel')}: ${score}`,
+      `${window.t('channels.risk.sampleLabel')}: ${sampleCount}`,
+      '',
+      window.t('channels.risk.configFindings'),
+      ...findingLines(configFindings),
+      '',
+      window.t('channels.risk.globalFindings'),
+      ...findingLines(globalFindings),
+      '',
+      window.t('channels.risk.observedFindings'),
+      ...findingLines(observedFindings),
+      '',
+      window.t('channels.risk.notAccessedUpstream'),
+      window.t('channels.risk.debugNotRequired')
+    ];
+    await window.showAlertDialog({
+      title: window.t('channels.risk.reportTitle'),
+      message: lines.join('\n')
+    });
+    await loadChannels(filters.channelType);
+  } catch (error) {
+    console.error('Channel risk check failed', error);
+    await window.showAlertDialog({
+      title: window.t('channels.risk.reportTitle'),
+      message: window.t('channels.risk.checkFailed', { error: error.message || error })
+    });
+  }
+}
+
 /**
  * 使用模板引擎创建渠道表格行
  * @param {Object} channel - 渠道数据
@@ -680,6 +777,7 @@ function createChannelCard(channel) {
     protocolTransformBadges: buildProtocolTransformBadges(channelTypeRaw, channel.protocol_transforms),
     url: channel.url,
     batchRefreshStatusHtml: buildBatchRefreshStatusHtml(batchRefreshResult),
+    riskHtml: buildChannelRiskHtml(channel),
     modelsText: modelsText,
     priority: channel.priority,
     effectivePriorityHtml: buildEffectivePriorityHtml(channel),
@@ -698,6 +796,7 @@ function createChannelCard(channel) {
     costCellClass: costHtml ? '' : 'ch-mobile-empty',
     lastSuccessCellClass: lastSuccessHtml ? '' : 'ch-mobile-empty',
     mobileLabelModels: window.t('channels.table.models'),
+    mobileLabelRisk: window.t('channels.table.risk'),
     mobileLabelPriority: window.t('channels.table.priority'),
     mobileLabelDuration: window.t('channels.table.duration'),
     mobileLabelUsage: window.t('channels.table.usage'),
@@ -794,7 +893,7 @@ function initChannelEventDelegation() {
     if (!btn) return;
 
     const action = btn.dataset.action;
-    if (isTokenChannelsReadOnly() && ['edit', 'test', 'copy', 'delete', 'toggle'].includes(action)) {
+    if (isTokenChannelsReadOnly() && ['edit', 'test', 'copy', 'delete', 'toggle', 'risk-check'].includes(action)) {
       return;
     }
     const channelId = parseInt(btn.dataset.channelId);
@@ -807,6 +906,9 @@ function initChannelEventDelegation() {
         break;
       case 'test':
         testChannel(channelId, channelName);
+        break;
+      case 'risk-check':
+        showChannelRiskReport(channelId, channelName);
         break;
       case 'toggle':
         toggleChannel(channelId, !enabled);
@@ -850,6 +952,7 @@ function renderChannels(channelsToRender = channels) {
     <tr>
       <th class="ch-col-checkbox"><label id="visibleSelectionToggle" class="channel-selection-toggle channel-table-selection-toggle" data-i18n-title="channels.batchSelectVisible" title="全选"><input id="visibleSelectionCheckbox" type="checkbox" data-change-action="toggle-visible-channels-selection"><span id="visibleSelectionToggleText" data-i18n="channels.batchSelectVisible">全选</span></label></th>
       <th class="ch-col-name">${window.t('channels.table.nameAndUrl')}</th>
+      <th class="ch-col-risk">${window.t('channels.table.risk')}</th>
       <th class="ch-col-models">${window.t('channels.table.models')}</th>
       <th class="ch-col-priority">${window.t('channels.table.priority')}</th>
       <th class="ch-col-duration">${window.t('channels.table.duration')}</th>

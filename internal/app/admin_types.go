@@ -660,6 +660,10 @@ type ChannelWithCooldown struct {
 	KeyCooldowns        []KeyCooldownInfo `json:"key_cooldowns,omitempty"`
 	EffectivePriority   *float64          `json:"effective_priority,omitempty"` // 健康度模式下的有效优先级
 	SuccessRate         *float64          `json:"success_rate,omitempty"`       // 成功率(0-1)
+	RiskStatus          string            `json:"risk_status,omitempty"`
+	RiskScore           *int              `json:"risk_score,omitempty"`
+	RiskSampleCount     int               `json:"risk_sample_count"`
+	RiskLastObservedAt  *time.Time        `json:"risk_last_observed_at,omitempty"`
 }
 
 // ChannelImportSummary 导入结果统计

@@ -23,6 +23,10 @@ type dashboardChannelView struct {
 	Models                []model.ModelEntry `json:"models"`
 	CostMultiplier        float64            `json:"cost_multiplier"`
 	CooldownRemainingMS   int64              `json:"cooldown_remaining_ms,omitempty"`
+	RiskStatus            string             `json:"risk_status,omitempty"`
+	RiskScore             *int               `json:"risk_score,omitempty"`
+	RiskSampleCount       int                `json:"risk_sample_count"`
+	RiskLastObservedAt    *time.Time         `json:"risk_last_observed_at,omitempty"`
 }
 
 type channelFilterOptionsResponse struct {
@@ -90,6 +94,11 @@ func (s *Server) HandleDashboardChannels(c *gin.Context) {
 			Models:                append([]model.ModelEntry(nil), cfg.ModelEntries...),
 			CostMultiplier:        cfg.CostMultiplier,
 		}
+		riskReport := s.buildChannelRiskReport(cfg)
+		view.RiskStatus = riskReport.Status
+		view.RiskScore = riskReport.Score
+		view.RiskSampleCount = riskReport.SampleCount
+		view.RiskLastObservedAt = riskReport.LastObservedAt
 		if until, ok := cooldowns[cfg.ID]; ok && until.After(now) {
 			view.CooldownRemainingMS = until.Sub(now).Milliseconds()
 		}

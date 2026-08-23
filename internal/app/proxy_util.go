@@ -135,8 +135,9 @@ func logStartTimeForResult(attemptStartTime time.Time, res *fwResult) time.Time 
 
 // ForwardObserver 封装转发过程中的观测回调（遵循SRP，避免函数签名膨胀）
 type ForwardObserver struct {
-	OnBytesRead          func(int64) // 字节读取回调（可选）
-	OnFirstByteRead      func()      // 首字节读取回调（可选）
+	OnBytesRead          func(int64)  // 字节读取回调（可选）
+	OnResponseBytes      func([]byte) // 原始上游响应字节（仅用于轻量风险观察）
+	OnFirstByteRead      func()       // 首字节读取回调（可选）
 	OnDebugCapture       func(*debugCapture)
 	BeforeResponseCommit func() error // 实际写回客户端前调用；可阻止未提交的响应
 }

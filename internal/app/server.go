@@ -55,6 +55,7 @@ type Server struct {
 	proxyTransports               sync.Map              // proxyURL → *http.Transport（渠道级代理缓存）
 	skipTLSVerify                 bool                  // 透传给渠道级 Transport
 	activeRequests                *activeRequestManager // 进行中请求（内存状态，不持久化）
+	channelRisk                   *channelRiskObserver  // 被动风险观察（仅保存摘要，不持久化原文）
 	scheduledChannelChecksRunning atomic.Bool
 
 	// 异步统计（有界队列，避免每请求起goroutine）
@@ -183,6 +184,7 @@ func NewServer(store storage.Store) *Server {
 		tokenStatsCh: make(chan tokenStatsUpdate, config.DefaultTokenStatsBufferSize),
 
 		activeRequests:            newActiveRequestManager(),
+		channelRisk:               newChannelRiskObserver(),
 		channelRPMLimiter:         newChannelRPMLimiter(time.Now),
 		channelConcurrencyLimiter: newChannelConcurrencyLimiter(),
 		visionAssistCache:         newVisionAssistCache(),
@@ -827,6 +829,8 @@ func (s *Server) SetupRoutes(r *gin.Engine) {
 		admin.GET("/channels", s.HandleChannels)
 		admin.POST("/channels", s.HandleChannels)
 		admin.GET("/channels/filter-options", s.HandleChannelsFilterOptions)
+		admin.GET("/channels/:id/risk-check", s.HandleChannelRiskCheck)
+		admin.POST("/channels/:id/risk-check", s.HandleChannelRiskCheck)
 		admin.GET("/channels/export", s.HandleExportChannelsCSV)
 		admin.POST("/channels/import", s.HandleImportChannelsCSV)
 		admin.POST("/channels/check-duplicate", s.HandleCheckDuplicateChannel)

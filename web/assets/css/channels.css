@@ -1312,7 +1312,7 @@
 
     /* ===== 渠道表格布局 ===== */
     .channel-table {
-      min-width: 1360px;
+      min-width: 1490px;
       table-layout: fixed;
     }
 
@@ -1405,6 +1405,80 @@
       width: 160px;
       min-width: 160px;
       max-width: 160px;
+    }
+
+    .ch-col-risk {
+      width: 145px;
+      min-width: 145px;
+      max-width: 145px;
+      text-align: center;
+    }
+
+    .ch-risk-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      min-width: 0;
+      line-height: 1.2;
+    }
+
+    .ch-risk-main,
+    .ch-risk-meta {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .ch-risk-status {
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .ch-risk-score,
+    .ch-risk-samples {
+      color: var(--neutral-500);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .ch-risk-stack--unobserved .ch-risk-status {
+      color: var(--neutral-500);
+    }
+
+    .ch-risk-stack--configuration_attention .ch-risk-status,
+    .ch-risk-stack--attention .ch-risk-status {
+      color: var(--warning-600);
+    }
+
+    .ch-risk-stack--clear .ch-risk-status {
+      color: var(--success-600);
+    }
+
+    .ch-risk-stack--high_risk .ch-risk-status {
+      color: var(--error-600);
+    }
+
+    .ch-risk-button {
+      min-height: 24px;
+      padding: 2px 7px;
+      border: 1px solid var(--surface-border-strong);
+      border-radius: 5px;
+      background: var(--surface-bg-strong);
+      color: var(--primary-600);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.2;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .ch-risk-button:hover {
+      border-color: var(--primary-400);
+      background: var(--primary-50);
     }
 
     @media (min-width: 769px) and (max-width: 1360px) {
@@ -4358,8 +4432,13 @@
 
       .channel-table .ch-col-name,
       .channel-table .ch-col-models,
+      .channel-table .ch-col-risk,
       .channel-table .ch-col-actions {
         grid-column: 1 / -1;
+      }
+
+      .channel-table .ch-col-risk {
+        order: 9;
       }
 
       .channel-table .ch-col-priority {
@@ -4397,6 +4476,7 @@
       }
 
       .channel-table .ch-col-priority,
+      .channel-table .ch-col-risk,
       .channel-table .ch-col-duration,
       .channel-table .ch-col-usage,
       .channel-table .ch-col-cost,
@@ -4409,6 +4489,7 @@
       }
 
       .channel-table .ch-col-priority,
+      .channel-table .ch-col-risk,
       .channel-table .ch-col-cost,
       .channel-table .ch-col-last-success,
       .channel-table .ch-col-enabled {
@@ -4419,6 +4500,7 @@
       }
 
       .channel-table .ch-col-priority::before,
+      .channel-table .ch-col-risk::before,
       .channel-table .ch-col-cost::before,
       .channel-table .ch-col-last-success::before,
       .channel-table .ch-col-enabled::before {
@@ -4427,8 +4509,13 @@
       }
 
       .channel-table .ch-col-priority .ch-priority-stack,
+      .channel-table .ch-col-risk .ch-risk-stack,
       .channel-table .ch-col-cost .cost-stack {
         margin-left: auto;
+      }
+
+      .channel-table .ch-col-risk .ch-risk-stack {
+        align-items: flex-end;
       }
 
       .channel-table .ch-col-cost .cost-stack {

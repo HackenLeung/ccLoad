@@ -40,9 +40,10 @@ type streamReadStats struct {
 // firstByteDetector 检测首字节读取时间和传输统计的Reader包装器
 type firstByteDetector struct {
 	io.ReadCloser
-	stats       *streamReadStats
-	onFirstRead func()
-	onBytesRead func(int64) // 可选：每次读取后的回调（nil 时不触发）
+	stats           *streamReadStats
+	onFirstRead     func()
+	onBytesRead     func(int64)  // 可选：每次读取后的回调（nil 时不触发）
+	onResponseBytes func([]byte) // 可选：传递本次实际读取的响应字节
 }
 
 // Read 实现io.Reader接口，记录读取统计
@@ -62,6 +63,9 @@ func (r *firstByteDetector) Read(p []byte) (n int, err error) {
 		// 触发字节读取回调（可选）
 		if r.onBytesRead != nil {
 			r.onBytesRead(int64(n))
+		}
+		if r.onResponseBytes != nil {
+			r.onResponseBytes(p[:n])
 		}
 	}
 	return

@@ -123,6 +123,12 @@ func (s *Server) handleListChannels(c *gin.Context) {
 		}
 	}
 	priorityMap, successRateMap := s.sortChannelsByEffectivePriority(cfgs, healthEnabled)
+	riskReports := make(map[int64]ChannelRiskReport, len(cfgs))
+	for _, cfg := range cfgs {
+		if cfg != nil {
+			riskReports[cfg.ID] = s.buildChannelRiskReport(cfg)
+		}
+	}
 
 	totalCount := len(cfgs)
 
@@ -138,6 +144,7 @@ func (s *Server) handleListChannels(c *gin.Context) {
 		channelCooldownsMap: allChannelCooldowns,
 		keyCooldownsMap:     allKeyCooldowns,
 		apiKeysMap:          allAPIKeys,
+		riskReports:         riskReports,
 	}
 	out := make([]ChannelWithCooldown, 0, len(cfgs))
 	for _, cfg := range cfgs {
@@ -278,6 +285,7 @@ type channelEnrichmentContext struct {
 	channelCooldownsMap map[int64]time.Time
 	keyCooldownsMap     map[int64]map[int]time.Time
 	apiKeysMap          map[int64][]*model.APIKey
+	riskReports         map[int64]ChannelRiskReport
 }
 
 // enrichChannel 把单个 cfg 拼装为 ChannelWithCooldown：
@@ -318,7 +326,29 @@ func (ectx *channelEnrichmentContext) enrichChannel(cfg *model.Config) ChannelWi
 		keyCooldowns = append(keyCooldowns, keyInfo)
 	}
 	oc.KeyCooldowns = keyCooldowns
+	if report, ok := ectx.riskReports[cfg.ID]; ok {
+		oc.RiskStatus = report.Status
+		oc.RiskScore = report.Score
+		oc.RiskSampleCount = report.SampleCount
+		oc.RiskLastObservedAt = report.LastObservedAt
+	}
 	return oc
+}
+
+// HandleChannelRiskCheck returns a local-only risk report.
+// It never sends a request to the channel and does not run the normal channel test.
+func (s *Server) HandleChannelRiskCheck(c *gin.Context) {
+	id, err := ParseInt64Param(c, "id")
+	if err != nil {
+		RespondErrorMsg(c, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	cfg, err := s.store.GetConfig(c.Request.Context(), id)
+	if err != nil || cfg == nil {
+		RespondErrorMsg(c, http.StatusNotFound, "channel not found")
+		return
+	}
+	RespondJSON(c, http.StatusOK, s.buildChannelRiskReport(cfg))
 }
 
 // HandleChannelsFilterOptions 返回渠道筛选下拉的全集（渠道名/模型），

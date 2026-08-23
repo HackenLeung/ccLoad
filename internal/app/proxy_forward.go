@@ -1213,6 +1213,11 @@ func attachFirstByteDetector(
 				observer.OnBytesRead(n)
 			}
 		},
+		onResponseBytes: func(data []byte) {
+			if observer != nil && observer.OnResponseBytes != nil {
+				observer.OnResponseBytes(data)
+			}
+		},
 	}
 }
 
@@ -1416,6 +1421,9 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 	reqCtx.originalModel = plan.ResponseModel()
 	defer reqCtx.cleanup() // [INFO] 统一清理：定时器 + context（总是安全）
 
+	var riskCapture *channelRiskResponseCapture
+	attemptObserver := observer
+
 	if s.protocolRegistry != nil && plan.NeedsTransform {
 		translatedBody, err := s.protocolRegistry.TranslateRequest(plan.ClientProtocol, plan.UpstreamProtocol, plan.RequestModel(), plan.TranslatedBody, plan.Streaming)
 		if err != nil {
@@ -1441,11 +1449,26 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 	if err != nil {
 		return nil, 0, err
 	}
+	if s.channelRisk != nil {
+		riskCapture = &channelRiskResponseCapture{}
+		observerCopy := ForwardObserver{}
+		if observer != nil {
+			observerCopy = *observer
+		}
+		previousOnResponseBytes := observerCopy.OnResponseBytes
+		observerCopy.OnResponseBytes = func(data []byte) {
+			if previousOnResponseBytes != nil {
+				previousOnResponseBytes(data)
+			}
+			riskCapture.append(data)
+		}
+		attemptObserver = &observerCopy
+	}
 
 	// 2.5 Debug捕获：记录发送前的请求信息
 	dc := s.captureDebugRequest(req, reqCtx.transformPlan.TranslatedBody)
-	if observer != nil && observer.OnDebugCapture != nil {
-		observer.OnDebugCapture(dc)
+	if attemptObserver != nil && attemptObserver.OnDebugCapture != nil {
+		attemptObserver.OnDebugCapture(dc)
 	}
 
 	// 3. 发送请求。日志时间使用请求实际写入上游连接的时刻，避免把本地
@@ -1494,7 +1517,7 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 	// 4. 处理响应(传递channelType用于精确识别usage格式,传递渠道信息用于日志记录,传递观测回调)
 	var res *fwResult
 	var duration float64
-	res, duration, err = s.handleResponse(reqCtx, resp, w, string(reqCtx.upstreamProtocol), cfg, apiKey, observer)
+	res, duration, err = s.handleResponse(reqCtx, resp, w, string(reqCtx.upstreamProtocol), cfg, apiKey, attemptObserver)
 	if isManualChannelSkip(ctx) {
 		err = errManualChannelSkip
 	}
@@ -1521,6 +1544,9 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 	if res != nil {
 		res.RequestSentAt = requestSentAt
 		res.DebugData = dc.buildEntry(resp)
+	}
+	if err == nil {
+		s.recordChannelRiskObservation(cfg.ID, res, riskCapture)
 	}
 
 	return res, duration, err
