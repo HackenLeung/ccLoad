@@ -568,6 +568,22 @@ func (s *Server) runProxyAttemptLoop(
 ) (lastResult *proxyResult, succeeded bool) {
 	var lastVisionAssistErr error
 	for _, cfg := range cands {
+		if cfg == nil {
+			continue
+		}
+		enabled, err := s.isChannelEnabledForAttempt(ctx, cfg)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return buildCtxDoneResult(cfg, ctxErr), false
+			}
+			log.Printf("[WARN] 检查渠道 %s (ID=%d) 启用状态失败，跳过本次尝试: %v", cfg.Name, cfg.ID, err)
+			continue
+		}
+		if !enabled {
+			log.Printf("[INFO] 渠道 %s (ID=%d) 已禁用，跳过本次尝试", cfg.Name, cfg.ID)
+			continue
+		}
+
 		if err := s.prepareVisionAssistForChannel(ctx, cfg, reqCtx); err != nil {
 			lastVisionAssistErr = err
 			continue
@@ -599,6 +615,10 @@ func (s *Server) runProxyAttemptLoop(
 		}
 
 		if result != nil {
+			if result.channelDisabled {
+				log.Printf("[INFO] 渠道 %s (ID=%d) 在请求重试期间被禁用，跳过后续尝试", cfg.Name, cfg.ID)
+				continue
+			}
 			if result.succeeded {
 				return nil, true
 			}

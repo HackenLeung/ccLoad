@@ -2473,6 +2473,19 @@ func (s *Server) attemptKeyAcrossURLs(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return buildCtxDoneResult(cfg, ctxErr), nil, nil
 		}
+		if urlIdx > 0 {
+			enabled, err := s.isChannelEnabledForAttempt(ctx, cfg)
+			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return buildCtxDoneResult(cfg, ctxErr), nil, nil
+				}
+				log.Printf("[WARN] 检查渠道 %s (ID=%d) 启用状态失败，停止后续URL尝试: %v", cfg.Name, cfg.ID, err)
+				return channelDisabledResult(cfg, urlLastFailure), nil, nil
+			}
+			if !enabled {
+				return channelDisabledResult(cfg, urlLastFailure), nil, nil
+			}
+		}
 
 		// 更新活跃请求的当前URL（用于前端显示）
 		if reqCtx.activeReqID > 0 && s.activeRequests != nil {
@@ -2540,6 +2553,19 @@ func (s *Server) tryChannelWithKeys(ctx context.Context, cfg *model.Config, reqC
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return buildCtxDoneResult(cfg, ctxErr), nil
 	}
+	if reqCtx != nil && reqCtx.isolatedSubrequest {
+		enabled, err := s.isChannelEnabledForAttempt(ctx, cfg)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return buildCtxDoneResult(cfg, ctxErr), nil
+			}
+			log.Printf("[WARN] 检查渠道 %s (ID=%d) 启用状态失败，跳过视觉辅助尝试: %v", cfg.Name, cfg.ID, err)
+			return channelDisabledResult(cfg, nil), nil
+		}
+		if !enabled {
+			return channelDisabledResult(cfg, nil), nil
+		}
+	}
 
 	// 查询渠道的API Keys（缓存优先，缓存不可用自动降级到数据库查询）
 	apiKeys, err := s.getAPIKeys(ctx, cfg.ID)
@@ -2584,10 +2610,23 @@ func (s *Server) tryChannelWithKeys(ctx context.Context, cfg *model.Config, reqC
 	}
 
 	// Key重试循环
-	for range maxKeyRetries {
+	for attempt := 0; attempt < maxKeyRetries; attempt++ {
 		// 检查context是否已取消/超时
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return buildCtxDoneResult(cfg, ctxErr), nil
+		}
+		if attempt > 0 {
+			enabled, err := s.isChannelEnabledForAttempt(ctx, cfg)
+			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return buildCtxDoneResult(cfg, ctxErr), nil
+				}
+				log.Printf("[WARN] 检查渠道 %s (ID=%d) 启用状态失败，停止后续Key尝试: %v", cfg.Name, cfg.ID, err)
+				return channelDisabledResult(cfg, lastFailure), nil
+			}
+			if !enabled {
+				return channelDisabledResult(cfg, lastFailure), nil
+			}
 		}
 
 		// 选择可用的API Key（直接传入apiKeys，避免重复查询）

@@ -195,6 +195,7 @@ type proxyResult struct {
 	succeeded         bool
 	isClientCanceled  bool            // 客户端主动取消请求（context.Canceled）
 	manualChannelSkip bool            // 管理端主动跳过当前渠道，不计入失败或冷却
+	channelDisabled   bool            // 渠道在本次请求重试期间被管理员禁用
 	nextAction        cooldown.Action // 统一重试决策：RetryKey/RetryChannel/ReturnClient
 }
 
@@ -218,6 +219,38 @@ func manualChannelSkipResult(cfg *model.Config) *proxyResult {
 		manualChannelSkip: true,
 		nextAction:        cooldown.ActionRetryChannel,
 	}
+}
+
+func channelDisabledResult(cfg *model.Config, previous *proxyResult) *proxyResult {
+	if previous != nil {
+		previous.channelDisabled = true
+		previous.nextAction = cooldown.ActionRetryChannel
+		return previous
+	}
+
+	channelID := cfg.ID
+	return &proxyResult{
+		status:          http.StatusServiceUnavailable,
+		body:            []byte(`{"error":"channel disabled"}`),
+		channelID:       &channelID,
+		channelDisabled: true,
+		nextAction:      cooldown.ActionRetryChannel,
+	}
+}
+
+func (s *Server) isChannelEnabledForAttempt(ctx context.Context, cfg *model.Config) (bool, error) {
+	if cfg == nil {
+		return false, nil
+	}
+	if s == nil || s.store == nil || cfg.ID <= 0 {
+		return cfg.Enabled, nil
+	}
+
+	current, err := s.GetConfig(ctx, cfg.ID)
+	if err != nil {
+		return false, err
+	}
+	return current != nil && current.Enabled, nil
 }
 
 // ErrorAction 已迁移到 cooldown.Action (internal/cooldown/manager.go)

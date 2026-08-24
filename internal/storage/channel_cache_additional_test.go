@@ -3,12 +3,31 @@ package storage_test
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"ccLoad/internal/model"
 	"ccLoad/internal/storage"
 )
+
+type staleSnapshotStore struct {
+	storage.Store
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *staleSnapshotStore) GetEnabledChannelsByModel(ctx context.Context, modelName string) ([]*model.Config, error) {
+	configs, err := s.Store.GetEnabledChannelsByModel(ctx, modelName)
+	if modelName == "*" {
+		s.once.Do(func() {
+			close(s.started)
+			<-s.release
+		})
+	}
+	return configs, err
+}
 
 func TestChannelCache_GetConfig(t *testing.T) {
 	ctx := context.Background()
@@ -97,6 +116,68 @@ func TestChannelCache_InvalidateCache_ForcesRefresh(t *testing.T) {
 	}
 	if len(got3) != 2 {
 		t.Fatalf("expected refreshed result len=2, got %d", len(got3))
+	}
+}
+
+func TestChannelCache_InvalidateDuringRefreshDoesNotPublishStaleSnapshot(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "cache_refresh_race.db")
+	store, err := storage.CreateSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("CreateSQLiteStore failed: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	created, err := store.CreateConfig(ctx, &model.Config{
+		Name:         "race-channel",
+		URL:          "https://api.example.com",
+		Priority:     1,
+		ModelEntries: []model.ModelEntry{{Model: "m1"}},
+		Enabled:      true,
+	})
+	if err != nil {
+		t.Fatalf("CreateConfig failed: %v", err)
+	}
+
+	blockingStore := &staleSnapshotStore{
+		Store:   store,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	cache := storage.NewChannelCache(blockingStore, time.Hour)
+	resultCh := make(chan []*model.Config, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		configs, err := cache.GetEnabledChannelsByModel(ctx, "*")
+		resultCh <- configs
+		errCh <- err
+	}()
+
+	select {
+	case <-blockingStore.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cache refresh did not start")
+	}
+
+	if _, err := store.UpdateChannelEnabled(ctx, created.ID, false); err != nil {
+		t.Fatalf("UpdateChannelEnabled failed: %v", err)
+	}
+	cache.InvalidateCache()
+	close(blockingStore.release)
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("cache refresh failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cache refresh did not finish")
+	}
+
+	configs := <-resultCh
+	if len(configs) != 0 {
+		t.Fatalf("stale disabled channel was published: %+v", configs)
 	}
 }
 

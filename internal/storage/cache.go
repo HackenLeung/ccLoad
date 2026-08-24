@@ -26,6 +26,7 @@ type ChannelCache struct {
 	channelsByExposedProtocol  map[string][]*modelpkg.Config            // protocol → channels
 	allChannels                []*modelpkg.Config                       // 所有渠道
 	lastUpdate                 time.Time
+	refreshGeneration          uint64 // 失效代次，防止旧刷新结果覆盖新状态
 	mutex                      sync.RWMutex
 	refreshMutex               sync.Mutex // 串行化刷新动作，避免数据库 IO 在 mutex 锁内阻塞读者
 	ttl                        time.Duration
@@ -277,77 +278,89 @@ func (c *ChannelCache) refreshIfNeeded(ctx context.Context) error {
 // 缓存内部索引共享指针；对外统一返回深拷贝，避免调用方污染缓存。
 // 调用方必须已持有 refreshMutex 以串行化刷新动作。
 func (c *ChannelCache) refreshCache(ctx context.Context) error {
-	start := time.Now()
+	for {
+		start := time.Now()
 
-	allChannels, err := c.store.GetEnabledChannelsByModel(ctx, "*")
-	if err != nil {
-		return err
-	}
+		// 记录本次刷新开始时的失效代次。若刷新期间发生失效，
+		// 本次数据库快照可能已经过期，不能发布到缓存。
+		c.mutex.RLock()
+		generation := c.refreshGeneration
+		c.mutex.RUnlock()
 
-	// 构建按类型分组的索引（内部共享指针，对外深拷贝隔离）
-	byModel := make(map[string][]*modelpkg.Config)
-	byModelAndProtocol := make(map[string]map[string][]*modelpkg.Config)
-	byAliasAndProtocol := make(map[string]map[string][]*modelpkg.Config)
-	byType := make(map[string][]*modelpkg.Config)
-	byExposedProtocol := make(map[string][]*modelpkg.Config)
-
-	for _, channel := range allChannels {
-		channelType := channel.GetChannelType()
-		byType[channelType] = append(byType[channelType], channel) // 内部共享
-		protocols := channel.SupportedProtocols()
-		for _, protocol := range protocols {
-			byExposedProtocol[protocol] = append(byExposedProtocol[protocol], channel)
+		allChannels, err := c.store.GetEnabledChannelsByModel(ctx, "*")
+		if err != nil {
+			return err
 		}
 
-		// 上游模型对所有暴露协议都可直接请求；协议别名只在对应协议下生效。
-		for _, entry := range channel.ModelEntries {
-			byModel[entry.Model] = append(byModel[entry.Model], channel) // 内部共享
-			if _, exists := byModelAndProtocol[entry.Model]; !exists {
-				byModelAndProtocol[entry.Model] = make(map[string][]*modelpkg.Config)
-			}
+		// 构建按类型分组的索引（内部共享指针，对外深拷贝隔离）
+		byModel := make(map[string][]*modelpkg.Config)
+		byModelAndProtocol := make(map[string]map[string][]*modelpkg.Config)
+		byAliasAndProtocol := make(map[string]map[string][]*modelpkg.Config)
+		byType := make(map[string][]*modelpkg.Config)
+		byExposedProtocol := make(map[string][]*modelpkg.Config)
+
+		for _, channel := range allChannels {
+			channelType := channel.GetChannelType()
+			byType[channelType] = append(byType[channelType], channel) // 内部共享
+			protocols := channel.SupportedProtocols()
 			for _, protocol := range protocols {
-				byModelAndProtocol[entry.Model][protocol] = append(byModelAndProtocol[entry.Model][protocol], channel)
+				byExposedProtocol[protocol] = append(byExposedProtocol[protocol], channel)
 			}
-			if !entry.RedirectEnabled {
-				continue
-			}
-			for protocol, aliases := range entry.ProtocolAliases {
-				protocol = normalizeProtocol(protocol)
-				if !channel.SupportsProtocol(protocol) {
+
+			// 上游模型对所有暴露协议都可直接请求；协议别名只在对应协议下生效。
+			for _, entry := range channel.ModelEntries {
+				byModel[entry.Model] = append(byModel[entry.Model], channel) // 内部共享
+				if _, exists := byModelAndProtocol[entry.Model]; !exists {
+					byModelAndProtocol[entry.Model] = make(map[string][]*modelpkg.Config)
+				}
+				for _, protocol := range protocols {
+					byModelAndProtocol[entry.Model][protocol] = append(byModelAndProtocol[entry.Model][protocol], channel)
+				}
+				if !entry.RedirectEnabled {
 					continue
 				}
-				for _, alias := range aliases {
-					alias = strings.ToLower(strings.TrimSpace(alias))
-					if alias == "" {
+				for protocol, aliases := range entry.ProtocolAliases {
+					protocol = normalizeProtocol(protocol)
+					if !channel.SupportsProtocol(protocol) {
 						continue
 					}
-					if _, exists := byAliasAndProtocol[alias]; !exists {
-						byAliasAndProtocol[alias] = make(map[string][]*modelpkg.Config)
+					for _, alias := range aliases {
+						alias = strings.ToLower(strings.TrimSpace(alias))
+						if alias == "" {
+							continue
+						}
+						if _, exists := byAliasAndProtocol[alias]; !exists {
+							byAliasAndProtocol[alias] = make(map[string][]*modelpkg.Config)
+						}
+						byAliasAndProtocol[alias][protocol] = append(byAliasAndProtocol[alias][protocol], channel)
 					}
-					byAliasAndProtocol[alias][protocol] = append(byAliasAndProtocol[alias][protocol], channel)
 				}
 			}
 		}
+
+		// 失效发生在数据库读取或索引构建期间时，丢弃旧快照并重试。
+		c.mutex.Lock()
+		if generation != c.refreshGeneration {
+			c.mutex.Unlock()
+			continue
+		}
+		c.allChannels = allChannels
+		c.channelsByModel = byModel
+		c.channelsByModelAndProtocol = byModelAndProtocol
+		c.channelsByAliasAndProtocol = byAliasAndProtocol
+		c.channelsByType = byType
+		c.channelsByExposedProtocol = byExposedProtocol
+		c.lastUpdate = time.Now()
+		c.mutex.Unlock()
+
+		refreshDuration := time.Since(start)
+		if refreshDuration > 5*time.Second {
+			log.Printf("[WARN]  缓存刷新过慢: %v, 渠道数: %d, 模型数: %d, 类型数: %d",
+				refreshDuration, len(allChannels), len(byModel), len(byType))
+		}
+
+		return nil
 	}
-
-	// 原子性更新缓存（整体替换指针，临界区只覆盖赋值瞬间）
-	c.mutex.Lock()
-	c.allChannels = allChannels
-	c.channelsByModel = byModel
-	c.channelsByModelAndProtocol = byModelAndProtocol
-	c.channelsByAliasAndProtocol = byAliasAndProtocol
-	c.channelsByType = byType
-	c.channelsByExposedProtocol = byExposedProtocol
-	c.lastUpdate = time.Now()
-	c.mutex.Unlock()
-
-	refreshDuration := time.Since(start)
-	if refreshDuration > 5*time.Second {
-		log.Printf("[WARN]  缓存刷新过慢: %v, 渠道数: %d, 模型数: %d, 类型数: %d",
-			refreshDuration, len(allChannels), len(byModel), len(byType))
-	}
-
-	return nil
 }
 
 // InvalidateCache 手动失效缓存
@@ -355,6 +368,7 @@ func (c *ChannelCache) InvalidateCache() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
+	c.refreshGeneration++
 	c.lastUpdate = time.Time{} // 重置为0时间，强制刷新
 }
 

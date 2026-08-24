@@ -166,6 +166,110 @@ func TestRunProxyAttemptLoop_ManualSkipMovesToNextChannel(t *testing.T) {
 	}
 }
 
+func TestRunProxyAttemptLoop_SkipsDisabledChannelBeforeNextKeyRetry(t *testing.T) {
+	srv := newInMemoryServer(t)
+	var firstCfg *model.Config
+	disableErr := make(chan error, 1)
+	var firstCalls atomic.Int32
+	var secondKeyCalls atomic.Int32
+	firstUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Authorization"), "first-second-key") {
+			secondKeyCalls.Add(1)
+		}
+		if firstCalls.Add(1) == 1 {
+			if _, err := srv.store.UpdateChannelEnabled(context.Background(), firstCfg.ID, false); err != nil {
+				disableErr <- err
+			} else {
+				srv.InvalidateChannelListCache()
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid api key","type":"authentication_error"}}`))
+	}))
+
+	var secondCalls atomic.Int32
+	secondUpstream := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		secondCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"from-second-channel"}`))
+	}))
+
+	srv.urlSelector = nil
+	srv.maxKeyRetries = 2
+
+	createChannel := func(name, upstreamURL string, keys ...string) *model.Config {
+		t.Helper()
+		cfg, err := srv.store.CreateConfig(context.Background(), &model.Config{
+			Name:         name,
+			URL:          upstreamURL,
+			Priority:     1,
+			ChannelType:  "openai",
+			Enabled:      true,
+			ModelEntries: []model.ModelEntry{{Model: "test-model"}},
+		})
+		if err != nil {
+			t.Fatalf("CreateConfig(%s) error = %v", name, err)
+		}
+
+		apiKeys := make([]*model.APIKey, 0, len(keys))
+		for index, key := range keys {
+			apiKeys = append(apiKeys, &model.APIKey{
+				ChannelID:   cfg.ID,
+				KeyIndex:    index,
+				APIKey:      key,
+				KeyStrategy: model.KeyStrategySequential,
+			})
+		}
+		if err := srv.store.CreateAPIKeysBatch(context.Background(), apiKeys); err != nil {
+			t.Fatalf("CreateAPIKeysBatch(%s) error = %v", name, err)
+		}
+		srv.InvalidateAPIKeysCache(cfg.ID)
+		return cfg
+	}
+
+	firstCfg = createChannel("disabled-first", firstUpstream.URL, "first-key", "first-second-key")
+	secondCfg := createChannel("working-second", secondUpstream.URL, "working-key")
+
+	body := []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`)
+	clientReq := newRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	clientReq.Header.Set("Content-Type", "application/json")
+	c, recorder := newTestContext(t, clientReq)
+	reqCtx := &proxyRequestContext{
+		originalModel:  "test-model",
+		clientProtocol: protocol.OpenAI,
+		requestMethod:  http.MethodPost,
+		requestPath:    "/v1/chat/completions",
+		body:           body,
+		translatedBody: body,
+		header:         clientReq.Header,
+		startTime:      time.Now(),
+		clientIP:       "127.0.0.1",
+	}
+
+	last, succeeded := srv.runProxyAttemptLoop(context.Background(), []*model.Config{firstCfg, secondCfg}, reqCtx, c.Writer)
+	if !succeeded || last != nil {
+		t.Fatalf("runProxyAttemptLoop() = (%+v, %v), want (nil, true)", last, succeeded)
+	}
+	if firstCalls.Load() != 1 {
+		t.Fatalf("disabled channel calls = %d, want 1", firstCalls.Load())
+	}
+	select {
+	case err := <-disableErr:
+		t.Fatalf("disable channel failed: %v", err)
+	default:
+	}
+	if secondKeyCalls.Load() != 0 {
+		t.Fatalf("disabled channel second-key calls = %d, want 0", secondKeyCalls.Load())
+	}
+	if secondCalls.Load() != 1 {
+		t.Fatalf("second channel calls = %d, want 1", secondCalls.Load())
+	}
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "from-second-channel") {
+		t.Fatalf("client response = %d %q, want success from second channel", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestWriteFinalProxyResponse_ManualChannelSkipExhausted(t *testing.T) {
 	srv := &Server{}
 	c, recorder := newTestContext(t, newRequest(http.MethodPost, "/v1/chat/completions", nil))
