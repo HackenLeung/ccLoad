@@ -126,31 +126,7 @@ func (s *Server) pickBestChannelWhenAllCooled(
 
 	// 计算渠道的恢复时间
 	getReadyAt := func(ch *modelpkg.Config) time.Time {
-		readyAt := now
-		if until, ok := channelCooldowns[ch.ID]; ok && until.After(readyAt) {
-			readyAt = until
-		}
-		// Key全冷却时，取最早解禁时间
-		if ch.KeyCount > 0 {
-			if keyMap := keyCooldowns[ch.ID]; keyMap != nil && len(keyMap) >= ch.KeyCount {
-				var earliest time.Time
-				hasAvailableKey := false
-				for _, until := range keyMap {
-					if !until.After(now) {
-						hasAvailableKey = true
-						break
-					}
-					if earliest.IsZero() || until.Before(earliest) {
-						earliest = until
-					}
-				}
-				// 当“所有Key都在冷却”时：渠道真正可用时间 = max(渠道冷却, 最早Key解禁)
-				if !hasAvailableKey && !earliest.IsZero() && earliest.After(readyAt) {
-					readyAt = earliest
-				}
-			}
-		}
-		return readyAt
+		return channelReadyAt(ch, channelCooldowns, keyCooldowns, now)
 	}
 
 	// 计算有效优先级
@@ -190,6 +166,46 @@ func (s *Server) pickBestChannelWhenAllCooled(
 	}
 
 	return best, readyIn
+}
+
+// channelReadyAt 计算渠道真正可用的时刻：max(渠道级冷却, 所有Key都冷却时的最早解禁)。
+// 未冷却的渠道返回 now。
+func channelReadyAt(
+	ch *modelpkg.Config,
+	channelCooldowns map[int64]time.Time,
+	keyCooldowns map[int64]map[int]time.Time,
+	now time.Time,
+) time.Time {
+	if ch == nil {
+		return now
+	}
+
+	readyAt := now
+	if until, ok := channelCooldowns[ch.ID]; ok && until.After(readyAt) {
+		readyAt = until
+	}
+
+	// Key全冷却时，取最早解禁时间；只要还有一个Key可用，就不因Key冷却推迟就绪时刻。
+	if ch.KeyCount > 0 {
+		if keyMap := keyCooldowns[ch.ID]; keyMap != nil && len(keyMap) >= ch.KeyCount {
+			var earliest time.Time
+			hasAvailableKey := false
+			for _, until := range keyMap {
+				if !until.After(now) {
+					hasAvailableKey = true
+					break
+				}
+				if earliest.IsZero() || until.Before(earliest) {
+					earliest = until
+				}
+			}
+			if !hasAvailableKey && !earliest.IsZero() && earliest.After(readyAt) {
+				readyAt = earliest
+			}
+		}
+	}
+
+	return readyAt
 }
 
 // filterCooledChannels 过滤冷却中的渠道

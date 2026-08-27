@@ -490,8 +490,8 @@ func TestHandleError_RateLimitClassification(t *testing.T) {
 				"Retry-After": {"30"},
 			},
 			responseBody:   []byte(`{"error":{"type":"rate_limit_error"}}`),
-			expectedAction: ActionRetryKey,
-			description:    "Retry-After <= 60s indicates key-level rate limit",
+			expectedAction: ActionRetryChannel,
+			description:    "Retry-After 给出明确等待秒数：按该时刻冷却渠道，不走指数退避",
 		},
 		{
 			name: "429-Retry-After为HTTP日期",

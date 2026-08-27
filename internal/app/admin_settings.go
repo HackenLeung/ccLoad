@@ -21,6 +21,12 @@ const (
 
 	// DefaultActiveRequestCancelThresholdSeconds 进行中请求显示取消按钮的默认耗时阈值（秒）
 	DefaultActiveRequestCancelThresholdSeconds = 1000
+
+	// DefaultAllCooledWaitSeconds 所有渠道冷却时的默认等待预算（秒）
+	DefaultAllCooledWaitSeconds = 60
+	// MaxAllCooledWaitSeconds 等待预算上限（秒）。
+	// 等待期间会占用一个并发槽位，放得太大等于把限流压力转成排队积压。
+	MaxAllCooledWaitSeconds = 300
 )
 
 // AdminListSettings 获取所有配置项
@@ -217,6 +223,10 @@ func validateSettingValue(key, valueType, value string) error {
 		case "active_request_cancel_threshold_seconds":
 			if intVal < 0 {
 				return fmt.Errorf("active_request_cancel_threshold_seconds must be >= 0 (0 = always show)")
+			}
+		case "cooldown_all_cooled_wait_seconds":
+			if intVal < 0 || intVal > MaxAllCooledWaitSeconds {
+				return fmt.Errorf("cooldown_all_cooled_wait_seconds must be 0-%d (0 = do not wait)", MaxAllCooledWaitSeconds)
 			}
 		default:
 			if intVal < -1 {

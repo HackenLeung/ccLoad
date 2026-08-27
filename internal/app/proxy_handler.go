@@ -40,6 +40,10 @@ var ErrChannelRPMExceeded = errors.New("channel rpm limit exceeded")
 // ErrChannelConcurrencyExceeded 表示渠道并发限制已达到
 var ErrChannelConcurrencyExceeded = errors.New("channel concurrency limit exceeded")
 
+// maxProxyRounds 是「候选全冷却 → 等待 → 重新选路」的最大轮数上限。
+// 真正的终止条件是等待预算（cooldown_all_cooled_wait_seconds），这里只做兜底。
+const maxProxyRounds = 8
+
 // ============================================================================
 // 并发控制
 // ============================================================================
@@ -377,7 +381,12 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 	defer cancelRequest(nil)
 	s.activeRequests.BindRequestCancel(activeID, cancelRequest)
 
-	cands, err := s.selectRouteCandidates(ctx, c, originalModel, string(clientProtocol))
+	// Native GPT policy is separate from "is this a compact request":
+	// compact path is detected on its own, while search/computer add body checks.
+	// Both share requireNativeGPT for candidate filtering + multi-channel retry.
+	requireNativeGPT := shouldRouteToNativeGPT(requestMethod, effectiveRequestPath, originalModel, all)
+
+	cands, rejection, err := s.resolveProxyCandidates(ctx, c, originalModel, clientProtocol, tokenHashStr, requireNativeGPT)
 	if err != nil {
 		if errors.Is(err, errUnknownChannelType) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "unsupported path"})
@@ -386,54 +395,9 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-
-	// Native GPT policy is separate from "is this a compact request":
-	// compact path is detected on its own, while search/computer add body checks.
-	// Both share requireNativeGPT for candidate filtering + multi-channel retry.
-	requireNativeGPT := shouldRouteToNativeGPT(requestMethod, effectiveRequestPath, originalModel, all)
-	if requireNativeGPT {
-		cands = filterNativeGPTCandidates(cands, originalModel)
-	}
-	blockedByDisabledUpstream := false
-	if len(cands) > 0 {
-		cands, blockedByDisabledUpstream = s.filterGlobalDisabledModelCandidates(cands, originalModel, string(clientProtocol))
-	}
-
 	if len(cands) == 0 {
-		if blockedByDisabledUpstream {
-			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
-				"message": "all matching upstream models are globally disabled",
-				"type":    "model_disabled",
-				"code":    "model_disabled",
-			}})
-			return
-		}
-		s.AddLogAsync(&model.LogEntry{
-			Time:           model.JSONTime{Time: time.Now()},
-			Model:          originalModel,
-			LogSource:      model.LogSourceProxy,
-			AuthTokenID:    tokenIDInt64,
-			StatusCode:     503,
-			Message:        "no available upstream (all cooled or none)",
-			IsStreaming:    isStreaming,
-			ClientIP:       c.ClientIP(),
-			ThinkingEffort: thinkingEffort,
-		})
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no available upstream (all cooled or none)"})
+		s.writeCandidateRejection(c, rejection, originalModel, isStreaming, tokenIDInt64, thinkingEffort)
 		return
-	}
-
-	if tokenHashStr != "" {
-		filtered, restricted := s.authService.FilterAllowedChannels(tokenHashStr, cands)
-		if restricted {
-			cands = filtered
-			if len(cands) == 0 {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error": "no allowed upstream channel for this token",
-				})
-				return
-			}
-		}
 	}
 
 	reqCtx := &proxyRequestContext{
@@ -466,12 +430,128 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 		},
 	}
 
-	lastResult, succeeded := s.runProxyAttemptLoop(ctx, cands, reqCtx, c.Writer)
-	if succeeded {
-		return
+	// 轮次循环：一轮候选全败后，若所有候选都只是在冷却且很快恢复，等到那一刻重新选路再打一轮。
+	// 上游按分钟窗口限流时（“1分钟内最多5次”），这比直接给客户端报错要有用得多。
+	//
+	// 终止条件由等待预算把关（每轮扣减实际等待耗时）；maxProxyRounds 只是兜底，
+	// 避免"冷却时刻恰好落在当下"这类极端时序把请求线程卡在循环里。
+	budgetLeft := s.allCooledWait
+	candidateCount := len(cands)
+	var lastResult *proxyResult
+
+	for round := 0; round < maxProxyRounds; round++ {
+		roundResult, succeeded := s.runProxyAttemptLoop(ctx, cands, reqCtx, c.Writer)
+		if succeeded {
+			return
+		}
+		if roundResult != nil {
+			lastResult = roundResult
+		}
+
+		waitStart := time.Now()
+		if !s.waitForCooledCandidates(ctx, cands, lastResult, budgetLeft) {
+			break
+		}
+		budgetLeft -= time.Since(waitStart)
+
+		nextCands, _, err := s.resolveProxyCandidates(ctx, c, originalModel, clientProtocol, tokenHashStr, requireNativeGPT)
+		if err != nil || len(nextCands) == 0 {
+			break
+		}
+		cands = nextCands
+		candidateCount = max(candidateCount, len(cands))
 	}
 
-	s.writeFinalProxyResponse(c, reqCtx, originalModel, isStreaming, lastResult, len(cands))
+	s.writeFinalProxyResponse(c, reqCtx, originalModel, isStreaming, lastResult, candidateCount)
+}
+
+// candidateRejection 说明候选池为空的原因，决定对外状态码与文案。
+type candidateRejection int
+
+const (
+	candidateRejectionNone          candidateRejection = iota // 候选非空，无需拒绝
+	candidateRejectionNoUpstream                              // 503：无可用上游（全冷却或没有匹配渠道）
+	candidateRejectionDisabledModel                           // 403：匹配到的上游模型全被全局禁用
+	candidateRejectionTokenChannel                            // 403：令牌不允许访问任何匹配渠道
+)
+
+// resolveProxyCandidates 选路并逐层过滤候选渠道。
+// 候选为空时通过 rejection 说明原因，由调用方决定如何响应（首轮写错误，重试轮次直接放弃）。
+func (s *Server) resolveProxyCandidates(
+	ctx context.Context,
+	c *gin.Context,
+	originalModel string,
+	clientProtocol protocol.Protocol,
+	tokenHash string,
+	requireNativeGPT bool,
+) ([]*model.Config, candidateRejection, error) {
+	cands, err := s.selectRouteCandidates(ctx, c, originalModel, string(clientProtocol))
+	if err != nil {
+		return nil, candidateRejectionNoUpstream, err
+	}
+
+	if requireNativeGPT {
+		cands = filterNativeGPTCandidates(cands, originalModel)
+	}
+
+	blockedByDisabledUpstream := false
+	if len(cands) > 0 {
+		cands, blockedByDisabledUpstream = s.filterGlobalDisabledModelCandidates(cands, originalModel, string(clientProtocol))
+	}
+	if len(cands) == 0 {
+		if blockedByDisabledUpstream {
+			return nil, candidateRejectionDisabledModel, nil
+		}
+		return nil, candidateRejectionNoUpstream, nil
+	}
+
+	if tokenHash != "" {
+		filtered, restricted := s.authService.FilterAllowedChannels(tokenHash, cands)
+		if restricted {
+			cands = filtered
+			if len(cands) == 0 {
+				return nil, candidateRejectionTokenChannel, nil
+			}
+		}
+	}
+
+	return cands, candidateRejectionNone, nil
+}
+
+// writeCandidateRejection 按候选为空的原因写最终响应。
+func (s *Server) writeCandidateRejection(
+	c *gin.Context,
+	rejection candidateRejection,
+	originalModel string,
+	isStreaming bool,
+	tokenID int64,
+	thinkingEffort string,
+) {
+	switch rejection {
+	case candidateRejectionDisabledModel:
+		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
+			"message": "all matching upstream models are globally disabled",
+			"type":    "model_disabled",
+			"code":    "model_disabled",
+		}})
+	case candidateRejectionTokenChannel:
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "no allowed upstream channel for this token",
+		})
+	default:
+		s.AddLogAsync(&model.LogEntry{
+			Time:           model.JSONTime{Time: time.Now()},
+			Model:          originalModel,
+			LogSource:      model.LogSourceProxy,
+			AuthTokenID:    tokenID,
+			StatusCode:     503,
+			Message:        "no available upstream (all cooled or none)",
+			IsStreaming:    isStreaming,
+			ClientIP:       c.ClientIP(),
+			ThinkingEffort: thinkingEffort,
+		})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no available upstream (all cooled or none)"})
+	}
 }
 
 func (s *Server) filterGlobalDisabledModelCandidates(candidates []*model.Config, originalModel, clientProtocol string) ([]*model.Config, bool) {

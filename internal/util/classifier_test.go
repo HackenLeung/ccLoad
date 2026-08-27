@@ -442,8 +442,8 @@ func TestClassifyRateLimitError(t *testing.T) {
 				"Retry-After": {"30"},
 			},
 			responseBody: []byte(`{"error":"rate limit exceeded"}`),
-			expected:     ErrorLevelKey,
-			reason:       "Retry-After ≤ 60秒表示Key级限流，应冷却Key",
+			expected:     ErrorLevelChannel,
+			reason:       "上游给了明确等待秒数，按该时刻冷却渠道而非走指数退避",
 		},
 		{
 			name: "retry_after_60_seconds_boundary",
@@ -451,8 +451,8 @@ func TestClassifyRateLimitError(t *testing.T) {
 				"Retry-After": {"60"},
 			},
 			responseBody: []byte(`{"error":"rate limit exceeded"}`),
-			expected:     ErrorLevelKey,
-			reason:       "Retry-After = 60秒边界值，保守策略为Key级",
+			expected:     ErrorLevelChannel,
+			reason:       "60秒同样是明确等待时长，按该时刻冷却渠道",
 		},
 		{
 			name: "retry_after_http_date",
@@ -620,7 +620,7 @@ func TestClassifyRateLimitError(t *testing.T) {
 			},
 			responseBody: []byte(`{"error":"rate limit"}`),
 			expected:     ErrorLevelChannel,
-			reason:       "Retry-After检查优先于Scope，但>60秒判断优先",
+			reason:       "Retry-After 可换算成明确时刻时优先于 Scope，直接冷却渠道",
 		},
 		{
 			name: "combined_scope_and_body",
@@ -1206,4 +1206,125 @@ func TestClassifyHTTPResponseWithMeta_UsageLimitReached(t *testing.T) {
 			t.Fatalf("cooldown duration=%v, want about 30m", duration)
 		}
 	})
+}
+
+func TestClassifyRateLimitShortWindow(t *testing.T) {
+	// museai 线上原文案：code 为空、type 为站点自定义，只有文案里带窗口长度。
+	museaiBody := []byte(`{"error":{"code":"","message":"您已达到请求数限制: 1分钟内最多请求5次 (request id: 20260827035010740)","type":"museai_error"}}`)
+
+	tests := []struct {
+		name       string
+		headers    map[string][]string
+		body       []byte
+		wantWindow time.Duration
+		wantReason string
+	}{
+		{
+			name:       "museai_chinese_one_minute_window",
+			body:       museaiBody,
+			wantWindow: time.Minute,
+			wantReason: RateLimitWindowReason,
+		},
+		{
+			name:       "chinese_seconds_window",
+			body:       []byte(`{"error":{"message":"请求过快：10秒内最多请求2次"}}`),
+			wantWindow: 10 * time.Second,
+			wantReason: RateLimitWindowReason,
+		},
+		{
+			name:       "chinese_every_minute_without_count",
+			body:       []byte(`{"error":{"message":"每分钟最多请求 5 次"}}`),
+			wantWindow: time.Minute,
+			wantReason: RateLimitWindowReason,
+		},
+		{
+			name:       "english_per_minute",
+			body:       []byte(`{"error":{"message":"Rate limit reached: 5 requests per minute"}}`),
+			wantWindow: time.Minute,
+			wantReason: RateLimitWindowReason,
+		},
+		{
+			name:       "english_per_n_seconds",
+			body:       []byte(`{"error":{"message":"limit of 3 requests per 30 seconds"}}`),
+			wantWindow: 30 * time.Second,
+			wantReason: RateLimitWindowReason,
+		},
+		{
+			name:       "english_compact_slash_form",
+			body:       []byte(`{"error":{"message":"rate limit: 5/min"}}`),
+			wantWindow: time.Minute,
+			wantReason: RateLimitWindowReason,
+		},
+		{
+			name:       "retry_after_header_wins_over_body_window",
+			headers:    map[string][]string{"Retry-After": {"12"}},
+			body:       museaiBody,
+			wantWindow: 12 * time.Second,
+			wantReason: RetryAfterReason,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := time.Now()
+			result := ClassifyHTTPResponseWithMeta(429, tt.headers, tt.body)
+
+			if result.Level != ErrorLevelChannel {
+				t.Fatalf("Level=%v, want ErrorLevelChannel（短窗口限流按渠道级冷却）", result.Level)
+			}
+			if !result.HasChannelCooldownUntil {
+				t.Fatal("expected HasChannelCooldownUntil")
+			}
+			if result.ChannelCooldownReason != tt.wantReason {
+				t.Errorf("ChannelCooldownReason=%q, want %q", result.ChannelCooldownReason, tt.wantReason)
+			}
+			got := result.ChannelCooldownUntil.Sub(before)
+			if got < tt.wantWindow-2*time.Second || got > tt.wantWindow+2*time.Second {
+				t.Errorf("冷却时长=%v, want 约 %v", got, tt.wantWindow)
+			}
+		})
+	}
+}
+
+func TestClassifyRateLimitLongWindowFallsBackToBackoff(t *testing.T) {
+	// 长窗口（每天/每小时超限）窗口起点未知，按整窗冷却会过度封禁：
+	// 必须回落常规分类，由指数退避决定时长。
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{name: "chinese_daily", body: []byte(`{"error":{"message":"1天内最多请求100次"}}`)},
+		{name: "chinese_hourly", body: []byte(`{"error":{"message":"每小时最多请求200次"}}`)},
+		{name: "english_per_day", body: []byte(`{"error":{"message":"100 requests per day"}}`)},
+		{name: "english_per_10_minutes", body: []byte(`{"error":{"message":"50 requests per 10 minutes"}}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ClassifyHTTPResponseWithMeta(429, map[string][]string{}, tt.body)
+			if result.HasChannelCooldownUntil {
+				t.Errorf("不应产生固定渠道冷却时刻: until=%v reason=%q",
+					result.ChannelCooldownUntil, result.ChannelCooldownReason)
+			}
+			if result.Level != ErrorLevelKey {
+				t.Errorf("Level=%v, want ErrorLevelKey（回落常规 429 分类）", result.Level)
+			}
+		})
+	}
+}
+
+func TestParseShortRateLimitWindowRejectsNoise(t *testing.T) {
+	// 正常业务文案不该被误判成限流窗口。
+	noises := []string{
+		``,
+		`{"error":{"message":"invalid api key"}}`,
+		`{"error":{"message":"context length exceeded"}}`,
+		`{"error":{"message":"0分钟内最多请求5次"}}`,
+	}
+
+	for _, body := range noises {
+		if window, ok := parseShortRateLimitWindow([]byte(body)); ok {
+			t.Errorf("body=%q 被误判为限流窗口 %v", body, window)
+		}
+	}
 }

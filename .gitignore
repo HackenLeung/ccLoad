@@ -67,3 +67,6 @@ start-dev.cmd
 start-dev.ps1
 stop-dev.cmd
 stop-dev.ps1
+
+# Local dev-only mock upstream servers
+_dev/

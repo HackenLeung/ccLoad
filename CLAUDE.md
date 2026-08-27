@@ -46,12 +46,13 @@ internal/{model,config,version,testutil}/   web/  前端(HTML+assets/{css,js,loc
 
 ## 故障切换(`util/classifier.go`)
 
-- Key 级(401/403/429)→ 重试同渠道其他 Key
+- Key 级(401/403,429 无明确重试信息时)→ 重试同渠道其他 Key
 - 渠道级(5xx/520/524,404/405 无客户端语义)→ 切渠道
 - 客户端错误(406/413,404+`model_not_found`)→ 直接返回,不重试
 - 成本限额达到 → 跳过该渠道
 - 指数退避:2 → 4 → 8 → 30 min(`MaxCooldownDuration`)
-- 例外:429 带 `Anthropic-Ratelimit-Unified-Reset` → 渠道级,按该时刻冷却(组织级配额,换 Key 同样被拒)
+- **429 只要上游给了明确重试信息就走渠道级 + 固定截止时刻**(不退避),优先级:`Anthropic-Ratelimit-Unified-Reset` 头(组织级配额,换 Key 同样被拒)→ `Retry-After` 头 → 响应体声明的限流窗口长度(`parseRateLimitCooldownUntil`)
+- 短窗口限流文案(`1分钟内最多5次`/`per minute`/`5/min`)按**整个窗口长度**冷却:上游没说窗口起点,宁可多等也不要过早重试把退避推上去;超 `MaxShortRateLimitWindow`(5min)不采信,回落常规分类
 - 上游给出的固定截止时间(1308/DAILY_LIMIT/统一配额重置等)不走退避;绝对时刻受 `MaxUpstreamResetCooldown`(24h)约束,超限或无法解析则回落常规分类
 
 ## 自定义状态码(改相关代码前先读语义)
@@ -65,6 +66,7 @@ internal/{model,config,version,testutil}/   web/  前端(HTML+assets/{css,js,loc
 ## 关键机制(要点,细节读对应文件)
 
 - **选择**:渠道平滑加权轮询(按有效 Key 数)+ 冷却感知,成本限额检查优先于冷却;多 URL 探索优先→1/EWMA 加权随机,失败 URL 独立退避;渠道 URL 末尾 `#`(`ExactUpstreamURLMarker`)= 精确转发,不自动追加路径
+- **全冷却等待**(`proxy_cooldown_wait.go`):`HandleProxyRequest` 是轮次循环(`maxProxyRounds`=8 兜底)。一轮候选全败后,若**所有**候选都在冷却且最早恢复落在 `cooldown_all_cooled_wait_seconds`(默认 60,0=关,上限 300)预算内,等到该时刻重新选路再打一轮。只要还有可用候选就不等(等待无意义,上一轮已试过);等待监听 `ctx.Done()`。注意:单渠道持续限流会占并发槽位等满预算
 - **协议转换**:四协议互转,`upstream`(原生)/`local`(本地翻译)两模式;渠道配 `ProtocolTransformMode`+`ProtocolTransforms`
 - **自定义请求规则**(`custom_rules.go`):`channels.custom_request_rules` JSON;header remove/override/append、body remove/override(点分路径);`validateCustomRequestRules` 强制认证头黑名单 + 禁 CRLF
 - **上游超时**(`server.go:loadChannelTypeTimeouts`):`upstream_first_byte_timeout`(0=禁用,仅流式)、`non_stream_timeout`(120s),按渠道类型 `{type}_*` 覆盖;写回前调 `disableResponseWriteTimeout` 防 `WriteTimeout` 截断响应体

@@ -67,6 +67,7 @@ type Server struct {
 	firstByteTimeout    time.Duration                       // 上游首字节超时（流式请求）
 	nonStreamTimeout    time.Duration                       // 非流式请求超时
 	channelTypeTimeouts map[string]channelTypeTimeoutConfig // 按运行时上游协议覆盖超时，0=回退全局
+	allCooledWait       time.Duration                       // 全渠道冷却时的等待预算，0=不等待
 	// 模型匹配配置（启动时从数据库加载，修改后重启生效）
 	modelFuzzyMatch bool // 未命中时启用模糊匹配（子串匹配+版本排序）
 
@@ -160,6 +161,7 @@ func NewServer(store storage.Store) *Server {
 		firstByteTimeout:    runtimeCfg.FirstByteTimeout,
 		nonStreamTimeout:    runtimeCfg.NonStreamTimeout,
 		channelTypeTimeouts: runtimeCfg.ChannelTypeTimeouts,
+		allCooledWait:       runtimeCfg.AllCooledWait,
 		// 模型匹配配置（启动时加载，修改后重启生效）
 		modelFuzzyMatch: runtimeCfg.ModelFuzzyMatch,
 
@@ -326,6 +328,7 @@ type serverRuntimeConfig struct {
 	FirstByteTimeout    time.Duration
 	NonStreamTimeout    time.Duration
 	ChannelTypeTimeouts map[string]channelTypeTimeoutConfig
+	AllCooledWait       time.Duration
 	LogRetentionDays    int
 	ModelFuzzyMatch     bool
 }
@@ -352,6 +355,13 @@ func loadServerRuntimeConfig(cs *ConfigService) serverRuntimeConfig {
 
 	channelTypeTimeouts := loadChannelTypeTimeouts(cs)
 
+	allCooledWaitSeconds := cs.GetInt("cooldown_all_cooled_wait_seconds", DefaultAllCooledWaitSeconds)
+	if allCooledWaitSeconds < 0 || allCooledWaitSeconds > MaxAllCooledWaitSeconds {
+		log.Printf("[WARN] 无效的 cooldown_all_cooled_wait_seconds=%d（必须 0-%d），已使用默认值 %d",
+			allCooledWaitSeconds, MaxAllCooledWaitSeconds, DefaultAllCooledWaitSeconds)
+		allCooledWaitSeconds = DefaultAllCooledWaitSeconds
+	}
+
 	logRetentionDays := cs.GetInt("log_retention_days", 7)
 
 	modelFuzzyMatch := cs.GetBool("model_fuzzy_match", false)
@@ -364,6 +374,7 @@ func loadServerRuntimeConfig(cs *ConfigService) serverRuntimeConfig {
 		FirstByteTimeout:    firstByteTimeout,
 		NonStreamTimeout:    nonStreamTimeout,
 		ChannelTypeTimeouts: channelTypeTimeouts,
+		AllCooledWait:       time.Duration(allCooledWaitSeconds) * time.Second,
 		LogRetentionDays:    logRetentionDays,
 		ModelFuzzyMatch:     modelFuzzyMatch,
 	}

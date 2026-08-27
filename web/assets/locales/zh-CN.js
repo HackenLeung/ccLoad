@@ -1095,6 +1095,7 @@ window.I18N_LOCALES['zh-CN'] = {
   'settings.desc.health_score_update_interval': '成功率缓存更新间隔(秒)',
   'settings.desc.health_min_confident_sample': '置信样本量阈值(样本量达到此值时惩罚全额生效)',
   'settings.desc.cooldown_fallback_enabled': '所有渠道冷却时选最优渠道兜底(关闭则直接拒绝请求)',
+  'settings.desc.cooldown_all_cooled_wait_seconds': '所有渠道都在冷却时，最多等待多久待渠道恢复后重试一轮(秒,0=不等待直接返回错误,上限300)',
   'settings.desc.log_channel_click_action': '日志页点击渠道名行为(edit=打开编辑器,navigate=跳转到渠道管理定位)',
   'settings.desc.debug_log_enabled': '启用Debug日志(记录上游请求/响应原始数据)',
   'settings.desc.debug_log_retention_minutes': 'Debug日志保留时长(分钟,1-1440)',

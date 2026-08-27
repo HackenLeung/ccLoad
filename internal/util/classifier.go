@@ -39,6 +39,19 @@ var retryAfterSecondsRegex = regexp.MustCompile(`(?i)\bretry\s+after\s+([0-9]+)\
 // globalFixedWindowRetryClockRegex 匹配“请在 今天 12:00 后再试”这类全站固定窗口限额文案。
 var globalFixedWindowRetryClockRegex = regexp.MustCompile(`(今天|明天)\s*(\d{1,2})\s*[:：]\s*(\d{1,2})`)
 
+// 短窗口限流文案：上游在 429 里直接声明了限流窗口长度（而非重置时刻）。
+// 例：“您已达到请求数限制: 1分钟内最多请求5次”、“5 requests per minute”、“limit: 5/min”。
+var (
+	// shortRateLimitWindowCNRegex 匹配“N 秒/分钟/小时内”。
+	shortRateLimitWindowCNRegex = regexp.MustCompile(`(\d{1,4})\s*(秒|分钟|分|小时)(?:钟)?内`)
+	// shortRateLimitWindowCNEveryRegex 匹配无数字的“每秒/每分钟/每小时”。
+	shortRateLimitWindowCNEveryRegex = regexp.MustCompile(`每\s*(秒|分钟|分|小时)(?:钟)?`)
+	// shortRateLimitWindowPerRegex 匹配“per minute”/“per 5 seconds”。
+	shortRateLimitWindowPerRegex = regexp.MustCompile(`(?i)\bper\s+(?:(\d{1,4})\s*)?(second|minute|min|hour)s?\b`)
+	// shortRateLimitWindowSlashRegex 匹配“5/min”、“10 / hour”这类紧凑写法。
+	shortRateLimitWindowSlashRegex = regexp.MustCompile(`(?i)\d\s*/\s*(sec|second|min|minute|hour|s|m|h)\b`)
+)
+
 // HTTP 状态码常量（统一定义，避免魔法数字）
 const (
 	// StatusClientClosedRequest 客户端取消请求（Nginx扩展状态码）
@@ -78,6 +91,14 @@ const (
 	// 该值来自上游响应头，畸形或异常值（如 2099 年）会让渠道近乎永久失效，
 	// 因此超出该窗口的重置时刻一律不采信，回落到常规分类与指数退避。
 	MaxUpstreamResetCooldown = 24 * time.Hour
+	// MaxShortRateLimitWindow 是采信「响应体声明的限流窗口长度」的上限。
+	// 只有短窗口（如“1分钟内最多5次”）才值得按窗口长度精确冷却；
+	// “每天 N 次”这类长窗口窗口起点未知，按整窗冷却会过度封禁，交回常规分类。
+	MaxShortRateLimitWindow = 5 * time.Minute
+	// RateLimitWindowReason 标记冷却来源为「上游声明的限流窗口」。
+	RateLimitWindowReason = "rate_limit_window"
+	// RetryAfterReason 标记冷却来源为 Retry-After 响应头。
+	RetryAfterReason = "retry_after"
 )
 
 // ErrorLevel 表示错误的严重级别。
@@ -311,9 +332,9 @@ func classifyHTTPResponseWithMetaAt(statusCode int, headers map[string][]string,
 
 	// 429错误：需要结合 headers 判断限流范围
 	if statusCode == 429 {
+		// Anthropic 统一配额窗口按组织计算：换 Key 同样被拒，
+		// 直接按上游给出的重置时刻冷却整个渠道，避免把 429 打满所有 Key。
 		if headers != nil {
-			// Anthropic 统一配额窗口按组织计算：换 Key 同样被拒，
-			// 直接按上游给出的重置时刻冷却整个渠道，避免把 429 打满所有 Key。
 			if until, ok := parseAnthropicRateLimitReset(headers, now); ok {
 				return HTTPResponseClassification{
 					Level:                   ErrorLevelChannel,
@@ -322,6 +343,20 @@ func classifyHTTPResponseWithMetaAt(statusCode int, headers map[string][]string,
 					ChannelCooldownReason:   AnthropicUnifiedResetReason,
 				}
 			}
+		}
+
+		// 上游明确说了「多久之后可以再来」：按它说的冷却整个渠道，不走指数退避。
+		// 退避会把 1 分钟级的限流窗口一路推到 MaxCooldownDuration，让渠道白白失效半小时。
+		if until, reason, ok := parseRateLimitCooldownUntil(headers, responseBody, now); ok {
+			return HTTPResponseClassification{
+				Level:                   ErrorLevelChannel,
+				ChannelCooldownUntil:    until,
+				HasChannelCooldownUntil: true,
+				ChannelCooldownReason:   reason,
+			}
+		}
+
+		if headers != nil {
 			return HTTPResponseClassification{Level: classifyRateLimitError(headers, responseBody)}
 		}
 		return HTTPResponseClassification{Level: ErrorLevelKey}
@@ -379,8 +414,12 @@ func classifyHTTPResponseWithMetaAt(statusCode int, headers map[string][]string,
 // classifyRateLimitError 分析429 Rate Limit错误的具体类型
 // 增强429错误处理,区分Key级和渠道级限流
 //
+// 前置条件：调用方已先试过 parseRateLimitCooldownUntil。
+// 也就是说上游没给出可用的 Retry-After，也没在文案里声明短限流窗口，
+// 这里只能靠「限流范围」的线索做粗分级，冷却时长交给指数退避。
+//
 // 判断逻辑:
-//  1. 检查Retry-After头: 如果>60秒,可能是IP/账户级限流 → 渠道级
+//  1. 检查Retry-After头: 无法换算成可用时刻但格式像时间 → 长时间限流 → 渠道级
 //  2. 检查X-RateLimit-Scope: 如果是"global"或"ip" → 渠道级
 //  3. 检查响应体中的错误描述
 //  4. 默认: Key级(保守策略)
@@ -389,21 +428,10 @@ func classifyHTTPResponseWithMetaAt(statusCode int, headers map[string][]string,
 //   - headers: HTTP响应头
 //   - responseBody: 响应体内容
 func classifyRateLimitError(headers map[string][]string, responseBody []byte) ErrorLevel {
-	// 1. 解析Retry-After头
+	// 1. Retry-After 是过去时刻（已过期的 HTTP 日期）：上游在做长窗口限流，按渠道级处理。
+	// 未过期的时刻与正数秒数已由 parseRateLimitCooldownUntil 精确处理，不会走到这里。
 	if retryAfterValues, ok := headers["Retry-After"]; ok && len(retryAfterValues) > 0 {
-		retryAfter := retryAfterValues[0]
-
-		// Retry-After可能是秒数或HTTP日期
-		// 尝试解析为秒数
-		if seconds, err := strconv.Atoi(retryAfter); err == nil {
-			// [INFO] 如果Retry-After > 阈值,可能是账户级或IP级限流
-			// 这种长时间限流通常影响整个渠道
-			if seconds > RetryAfterThresholdSeconds {
-				return ErrorLevelChannel
-			}
-		}
-		// 如果是HTTP日期格式,通常表示长时间限流,也视为渠道级
-		if _, err := time.Parse(time.RFC1123, retryAfter); err == nil {
+		if _, err := http.ParseTime(strings.TrimSpace(retryAfterValues[0])); err == nil {
 			return ErrorLevelChannel
 		}
 	}
@@ -462,6 +490,118 @@ func parseAnthropicRateLimitReset(headers map[string][]string, now time.Time) (t
 		return time.Time{}, false
 	}
 	return time.Time{}, false
+}
+
+// parseRateLimitCooldownUntil 解析 429 里上游明确声明的可重试时刻。
+// 优先级：Retry-After 头（上游直接给出的等待秒数/时刻）> 响应体声明的限流窗口长度。
+// 两者都拿不到时返回 false，回落到 classifyRateLimitError + 指数退避。
+func parseRateLimitCooldownUntil(headers map[string][]string, responseBody []byte, now time.Time) (time.Time, string, bool) {
+	if until, ok := parseRetryAfterHeader(headers, now); ok {
+		return until, RetryAfterReason, true
+	}
+	if window, ok := parseShortRateLimitWindow(responseBody); ok {
+		return now.Add(window), RateLimitWindowReason, true
+	}
+	return time.Time{}, "", false
+}
+
+// parseRetryAfterHeader 解析 Retry-After（RFC 7231：秒数或 HTTP 日期）。
+// 只采信落在 (now, now+MaxUpstreamResetCooldown] 内的时刻，避免畸形值让渠道近乎永久失效。
+func parseRetryAfterHeader(headers map[string][]string, now time.Time) (time.Time, bool) {
+	for name, values := range headers {
+		if !strings.EqualFold(name, "Retry-After") {
+			continue
+		}
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if seconds, err := strconv.Atoi(value); err == nil {
+				if seconds <= 0 {
+					continue
+				}
+				return now.Add(time.Duration(seconds) * time.Second), true
+			}
+			if at, err := http.ParseTime(value); err == nil {
+				if at.After(now) && !at.After(now.Add(MaxUpstreamResetCooldown)) {
+					return at, true
+				}
+			}
+		}
+		return time.Time{}, false
+	}
+	return time.Time{}, false
+}
+
+// parseShortRateLimitWindow 从 429 响应体文案里提取上游声明的限流窗口长度。
+//
+// 注意语义：这是「窗口长度」而不是「剩余时间」——上游没说窗口何时开始。
+// 按整窗冷却是保守正确的：宁可多等一会儿，也不要过早重试再吃一次 429 把退避推上去。
+// 超过 MaxShortRateLimitWindow 的窗口（如“每天 N 次”）不采信，交回常规分类。
+func parseShortRateLimitWindow(responseBody []byte) (time.Duration, bool) {
+	if len(responseBody) == 0 {
+		return 0, false
+	}
+	body := string(responseBody)
+
+	if m := shortRateLimitWindowCNRegex.FindStringSubmatch(body); m != nil {
+		if window, ok := scaleRateLimitWindow(m[1], m[2]); ok {
+			return window, true
+		}
+	}
+	if m := shortRateLimitWindowPerRegex.FindStringSubmatch(body); m != nil {
+		if window, ok := scaleRateLimitWindow(m[1], m[2]); ok {
+			return window, true
+		}
+	}
+	if m := shortRateLimitWindowCNEveryRegex.FindStringSubmatch(body); m != nil {
+		if window, ok := scaleRateLimitWindow("", m[1]); ok {
+			return window, true
+		}
+	}
+	if m := shortRateLimitWindowSlashRegex.FindStringSubmatch(body); m != nil {
+		if window, ok := scaleRateLimitWindow("", m[1]); ok {
+			return window, true
+		}
+	}
+	return 0, false
+}
+
+// scaleRateLimitWindow 把「数量 + 单位」换算为窗口时长。count 为空表示 1 个单位。
+func scaleRateLimitWindow(count, unit string) (time.Duration, bool) {
+	unitDuration, ok := rateLimitWindowUnit(unit)
+	if !ok {
+		return 0, false
+	}
+
+	multiplier := 1
+	if count != "" {
+		parsed, err := strconv.Atoi(strings.TrimSpace(count))
+		if err != nil || parsed <= 0 {
+			return 0, false
+		}
+		multiplier = parsed
+	}
+
+	window := time.Duration(multiplier) * unitDuration
+	if window <= 0 || window > MaxShortRateLimitWindow {
+		return 0, false
+	}
+	return window, true
+}
+
+func rateLimitWindowUnit(unit string) (time.Duration, bool) {
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case "秒", "s", "sec", "second":
+		return time.Second, true
+	case "分", "分钟", "m", "min", "minute":
+		return time.Minute, true
+	case "小时", "h", "hour":
+		return time.Hour, true
+	default:
+		return 0, false
+	}
 }
 
 // classifySSEError 分析SSE error事件的具体类型
