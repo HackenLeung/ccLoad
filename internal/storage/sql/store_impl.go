@@ -53,7 +53,7 @@ func (s *SQLStore) GetHealthTimeline(ctx context.Context, params model.HealthTim
 			channel_id,
 			COALESCE(model, '') AS model,
 			SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) AS success,
-			SUM(CASE WHEN (status_code < 200 OR status_code >= 300) AND status_code != 499 THEN 1 ELSE 0 END) AS error,
+			SUM(CASE WHEN (status_code < 200 OR status_code >= 300) AND status_code NOT IN (413, 499) THEN 1 ELSE 0 END) AS error,
 			SUM(CASE WHEN status_code = 429 THEN 1 ELSE 0 END) AS rate_limited,
 			COALESCE(AVG(CASE WHEN first_byte_time > 0 AND status_code >= 200 AND status_code < 300 THEN first_byte_time ELSE NULL END), 0) AS avg_first_byte_time,
 			COALESCE(AVG(CASE WHEN duration > 0 AND status_code >= 200 AND status_code < 300 THEN duration ELSE NULL END), 0) AS avg_duration,
@@ -69,7 +69,7 @@ func (s *SQLStore) GetHealthTimeline(ctx context.Context, params model.HealthTim
 	qb := NewQueryBuilder(baseQuery).
 		Where("time >= ?", params.SinceMs).
 		Where("time <= ?", params.UntilMs).
-		Where("status_code != 499").
+		Where("status_code NOT IN (413, 499)").
 		Where("channel_id > 0")
 
 	_, isEmpty, err := s.applyChannelFilter(ctx, qb, params.Filter)

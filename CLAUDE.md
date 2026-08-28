@@ -48,7 +48,7 @@ internal/{model,config,version,testutil}/   web/  前端(HTML+assets/{css,js,loc
 
 - Key 级(401/403,429 无明确重试信息时)→ 重试同渠道其他 Key
 - 渠道级(5xx/520/524,404/405 无客户端语义)→ 切渠道
-- 客户端错误(406/413,404+`model_not_found`)→ 直接返回,不重试
+- 客户端错误(406,404+`model_not_found`)→ 直接返回,不重试;**413**(上游容量/限额拒绝)→ 跳过当前渠道试下一个,不冷却、不计健康度
 - 成本限额达到 → 跳过该渠道
 - 指数退避:2 → 4 → 8 → 30 min(`MaxCooldownDuration`)
 - **429 只要上游给了明确重试信息就走渠道级 + 固定截止时刻**(不退避),优先级:`Anthropic-Ratelimit-Unified-Reset` 头(组织级配额,换 Key 同样被拒)→ `Retry-After` 头 → 响应体声明的限流窗口长度(`parseRateLimitCooldownUntil`)

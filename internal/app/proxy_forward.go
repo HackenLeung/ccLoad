@@ -2518,6 +2518,10 @@ func (s *Server) attemptKeyAcrossURLs(
 		if nextAction == cooldown.ActionRetryKey {
 			break
 		}
+		// 容量/限额类错误（413 ActionSkipChannel）：跳过当前渠道，轮到下一个候选渠道（不冷却）
+		if nextAction == cooldown.ActionSkipChannel {
+			break
+		}
 		// 客户端错误：直接返回
 		if nextAction == cooldown.ActionReturnClient {
 			return urlLastFailure, nil, nil

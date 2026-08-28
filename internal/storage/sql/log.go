@@ -496,7 +496,7 @@ func (s *SQLStore) GetTodayChannelURLStats(ctx context.Context, dayStart time.Ti
 			channel_id,
 			base_url,
 			SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) AS requests,
-			SUM(CASE WHEN status_code != 499 AND (status_code < 200 OR status_code >= 300) THEN 1 ELSE 0 END) AS failures,
+			SUM(CASE WHEN status_code NOT IN (413, 499) AND (status_code < 200 OR status_code >= 300) THEN 1 ELSE 0 END) AS failures,
 			COALESCE(AVG(
 				CASE
 					WHEN status_code >= 200 AND status_code < 300 AND first_byte_time > 0 THEN first_byte_time * 1000

@@ -111,6 +111,10 @@ const (
 	ErrorLevelKey
 	// ErrorLevelChannel 渠道级错误：应该冷却整个渠道，切换到其他渠道
 	ErrorLevelChannel
+	// ErrorLevelRetryChannel 渠道级跳过错误：跳过当前渠道试下一个，但不冷却、不计健康度
+	// 典型：上游容量/限额类拒绝（413 Payload Too Large）——不是渠道故障，换一个限额更大的上游可能成功；
+	// 但也不该反复打同一个小限额渠道，因此不写冷却、不冷却、不扣健康分。
+	ErrorLevelRetryChannel
 	// ErrorLevelClient 客户端错误：不应该冷却，直接返回给客户端
 	ErrorLevelClient
 )
@@ -224,7 +228,7 @@ var statusCodeMetaMap = map[int]StatusCodeMeta{
 	405: {ErrorLevelChannel}, // Method Not Allowed
 	406: {ErrorLevelClient},  // Not Acceptable
 	410: {ErrorLevelClient},  // Gone
-	413: {ErrorLevelClient},  // Payload Too Large
+	413: {ErrorLevelRetryChannel}, // Payload Too Large - 上游容量/限额拒绝：跳过渠道试下一个（不冷却、不计健康度）
 	414: {ErrorLevelClient},  // URI Too Long
 	415: {ErrorLevelClient},  // Unsupported Media Type
 	416: {ErrorLevelClient},  // Range Not Satisfiable
@@ -297,6 +301,13 @@ func ClassifyHTTPResponseWithMeta(statusCode int, headers map[string][]string, r
 }
 
 func classifyHTTPResponseWithMetaAt(statusCode int, headers map[string][]string, responseBody []byte, now time.Time) HTTPResponseClassification {
+	// 413（容量/限额拒绝）：无论响应体内容，一律走「跳过渠道、不冷却」路径。
+	// 上游容量限制是渠道/端点的属性，与 Key 配额无关；即使错误体恰好带
+	// 1308/配额类文案，也不应触发 Key/渠道冷却（约定：413 不冷却、试下一个渠道）。
+	if statusCode == http.StatusRequestEntityTooLarge {
+
+		return HTTPResponseClassification{Level: ErrorLevelRetryChannel}
+	}
 	// [INFO] 特殊处理：检测1308错误（可能以SSE error事件形式出现，HTTP状态码是200）
 	// 1308错误表示达到使用上限，应该触发Key级冷却
 	if resetTime, has1308 := ParseResetTimeFrom1308Error(responseBody); has1308 {

@@ -19,6 +19,7 @@ const (
 	ActionRetryKey     Action = iota // ActionRetryKey 表示重试当前渠道的其他Key
 	ActionRetryChannel               // ActionRetryChannel 表示切换到下一个渠道
 	ActionReturnClient               // ActionReturnClient 表示直接返回给客户端
+	ActionSkipChannel                // ActionSkipChannel 表示跳过当前渠道（容量/限额类 413）、不写入任何冷却
 )
 
 // NoKeyIndex 表示错误与特定Key无关（网络错误、DNS解析失败等）。
@@ -132,6 +133,8 @@ func (m *Manager) classifyDecision(ctx context.Context, in ErrorInput) cooldownD
 		decision.action = ActionRetryKey
 	case util.ErrorLevelChannel:
 		decision.action = ActionRetryChannel
+	case util.ErrorLevelRetryChannel:
+		decision.action = ActionSkipChannel
 	default:
 		decision.action = ActionReturnClient
 	}
@@ -227,6 +230,10 @@ func (m *Manager) HandleError(ctx context.Context, in ErrorInput) Action {
 			log.Printf("[WARN] 更新渠道冷却失败 (channel=%d): %v", channelID, err)
 		}
 		return ActionRetryChannel
+
+	case ActionSkipChannel:
+		// 容量/限额类错误（如 413）：跳过当前渠道、不写 Key/渠道 任何冷却
+		return ActionSkipChannel
 
 	default:
 		// 未知错误级别:保守策略,直接返回

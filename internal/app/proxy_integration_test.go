@@ -3710,6 +3710,54 @@ func TestProxy_ChannelRetry_On503(t *testing.T) {
 	}
 }
 
+func TestProxy_413SkipsChannelAndFallsThroughToNextChannel(t *testing.T) {
+	t.Parallel()
+
+	// 渠道1：nginx 风格 413（HTML 错误体，容量/限额拒绝）
+	upstream1 := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_, _ = w.Write([]byte(`<html><head><title>413 Request Entity Too Large</title></head></html>`))
+	}))
+	defer upstream1.Close()
+
+	// 渠道2：正常返回 200
+	upstream2 := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"from-ch2","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer upstream2.Close()
+
+	env := setupProxyTestEnv(t, []testChannel{
+		{name: "ch1-413", models: "gpt-4", apiKey: "sk-1", priority: 100},
+		{name: "ch2-ok", models: "gpt-4", apiKey: "sk-2", priority: 50},
+	}, map[int]string{0: upstream1.URL, 1: upstream2.URL})
+
+	w := doProxyRequest(t, env.engine, http.MethodPost, "/v1/chat/completions", map[string]any{
+		"model":    "gpt-4",
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	}, nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (fallback to ch2), got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "from-ch2") {
+		t.Fatalf("expected response from ch2, got body: %s", w.Body.String())
+	}
+
+	// 验证 413 不触发任何渠道冷却（容量/限额拒绝不是渠道故障）
+	configs, err := env.store.ListConfigs(context.Background())
+	if err != nil {
+		t.Fatalf("ListConfigs: %v", err)
+	}
+	for _, c := range configs {
+		if c.CooldownUntil > 0 {
+			t.Fatalf("channel %s (ID=%d) should NOT be cooled after 413 skip, got CooldownUntil=%d", c.Name, c.ID, c.CooldownUntil)
+		}
+	}
+}
+
 func TestProxy_NonStreamingEmpty200RetriesNextChannel(t *testing.T) {
 	t.Parallel()
 

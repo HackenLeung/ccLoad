@@ -1062,6 +1062,34 @@ func TestClassify404Error(t *testing.T) {
 	}
 }
 
+// TestClassifyHTTPResponse_413IgnoresQuotaBody 回归：413 无论响应体带不带配额/1308 文案，都必须走「跳过渠道、不冷却」
+func TestClassifyHTTPResponse_413IgnoresQuotaBody(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		responseBody []byte
+	}{
+		{name: "empty_body", responseBody: nil},
+		{name: "nginx_html", responseBody: []byte(`<html><head><title>413 Request Entity Too Large</title></head></html>`)},
+		{name: "api_key_quota_exhausted_body", responseBody: []byte(`{"error":{"code":"API_KEY_QUOTA_EXHAUSTED","message":"quota"}}`)},
+		{name: "usage_limit_reached_body", responseBody: []byte(`{"error":{"code":"USAGE_LIMIT_REACHED","message":"limit"}}`)},
+		{name: "1308_style_body", responseBody: []byte(`{"error":{"type":"overloaded_error","code":"1308"}}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ClassifyHTTPResponseWithMeta(413,, nil,, tt.responseBody)
+			if result.Level != ErrorLevelRetryChannel {
+				t.Errorf("413 with body %q: got Level=%v, want ErrorLevelRetryChannel", string(tt.responseBody), result.Level)
+			}
+			if result.HasKeyCooldownUntil || result.HasChannelCooldownUntil {
+				t.Errorf("413 不应携带任何冷却截止时间: %+v", result)
+			}
+		})
+	}
+}
+
 func TestGetStatusCodeMeta(t *testing.T) {
 	t.Parallel()
 
@@ -1091,9 +1119,9 @@ func TestGetStatusCodeMeta(t *testing.T) {
 		{StatusFirstByteTimeout, ErrorLevelChannel, "598 -> 渠道级"},
 		{StatusStreamIncomplete, ErrorLevelChannel, "599 -> 渠道级"},
 
-		// 客户端错误
+		// 客户端错误（406 等直返；413 为渠道级跳过，不冷却、不计健康度）
 		{406, ErrorLevelClient, "406 -> 客户端级"},
-		{413, ErrorLevelClient, "413 -> 客户端级"},
+		{413, ErrorLevelRetryChannel, "413 -> 渠级跳过（容量/限额拒绝）"},
 
 		// 默认行为
 		{599, ErrorLevelChannel, "599 -> 渠道级(自定义)"},

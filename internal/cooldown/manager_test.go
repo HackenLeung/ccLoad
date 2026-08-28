@@ -69,6 +69,38 @@ func TestHandleError_ClientError(t *testing.T) {
 	}
 }
 
+// TestHandleError_413SkipChannelNoCooldown 测试 413 容量/限额类错误：跳过渠道但不写入任何冷却
+func TestHandleError_413SkipChannelNoCooldown(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	manager := NewManager(store, nil)
+	ctx := context.Background()
+
+	cfg := createTestChannel(t, store, "test-413-skip")
+
+	action := manager.HandleError(ctx, ErrorInput{
+		ChannelID:      cfg.ID,
+		KeyIndex:       0,
+		StatusCode:     413,
+		ErrorBody:      []byte(`<html>413 Request Entity Too Large</html>`),
+		IsNetworkError: false,
+		Headers:        nil,
+	})
+
+	if action != ActionSkipChannel {
+		t.Fatalf("Expected ActionSkipChannel for 413, got %v", action)
+	}
+
+	// 验证零冷却：渠道与Key 都未被冷却
+	channelCfg, _ := store.GetConfig(ctx, cfg.ID)
+	if channelCfg.CooldownUntil > 0 {
+		t.Errorf("413 should not trigger channel cooldown, got %d", channelCfg.CooldownUntil)
+	}
+	if _, exists := getKeyCooldownUntil(ctx, store, cfg.ID, 0); exists {
+		t.Errorf("413 should not trigger key cooldown")
+	}
+}
+
 // TestHandleError_KeyLevelError 测试Key级错误处理
 func TestHandleError_KeyLevelError(t *testing.T) {
 	store, cleanup := setupTestStore(t)

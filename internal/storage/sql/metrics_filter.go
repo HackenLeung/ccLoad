@@ -27,7 +27,7 @@ func (s *SQLStore) AggregateRangeWithFilter(ctx context.Context, since, until ti
 			FLOOR(logs.minute_bucket / ?) * ? * 60 AS bucket_ts,
 			logs.channel_id,
 			SUM(CASE WHEN logs.status_code >= 200 AND logs.status_code < 300 THEN 1 ELSE 0 END) AS success,
-			SUM(CASE WHEN (logs.status_code < 200 OR logs.status_code >= 300) AND logs.status_code != 499 THEN 1 ELSE 0 END) AS error,
+			SUM(CASE WHEN (logs.status_code < 200 OR logs.status_code >= 300) AND logs.status_code NOT IN (413, 499) THEN 1 ELSE 0 END) AS error,
 			ROUND(
 				AVG(CASE WHEN logs.is_streaming = 1 AND logs.first_byte_time > 0 AND logs.status_code >= 200 AND logs.status_code < 300 THEN logs.first_byte_time ELSE NULL END),
 				3
@@ -45,7 +45,7 @@ func (s *SQLStore) AggregateRangeWithFilter(ctx context.Context, since, until ti
 			SUM(COALESCE(logs.cache_read_input_tokens, 0)) as cache_read_tokens,
 			SUM(COALESCE(logs.cache_creation_input_tokens, 0)) as cache_creation_tokens
 		FROM logs
-		WHERE logs.minute_bucket >= ? AND logs.minute_bucket <= ? AND logs.status_code != 499 AND logs.channel_id > 0
+		WHERE logs.minute_bucket >= ? AND logs.minute_bucket <= ? AND logs.status_code NOT IN (413, 499) AND logs.channel_id > 0
 	`
 
 	args := []any{bucketMinutes, bucketMinutes, sinceBucket, untilBucket}

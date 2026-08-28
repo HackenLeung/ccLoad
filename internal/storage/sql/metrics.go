@@ -25,8 +25,8 @@ func (s *SQLStore) executeStatsQuery(ctx context.Context, startTime, endTime tim
 			channel_id,
 			COALESCE(model, '') AS model,
 			SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) AS success,
-			SUM(CASE WHEN (status_code < 200 OR status_code >= 300) AND status_code != 499 THEN 1 ELSE 0 END) AS error,
-			SUM(CASE WHEN status_code != 499 THEN 1 ELSE 0 END) AS total,
+			SUM(CASE WHEN (status_code < 200 OR status_code >= 300) AND status_code NOT IN (413, 499) THEN 1 ELSE 0 END) AS error,
+			SUM(CASE WHEN status_code NOT IN (413, 499) THEN 1 ELSE 0 END) AS total,
 			ROUND(
 				AVG(CASE WHEN is_streaming = 1 AND first_byte_time > 0 AND status_code >= 200 AND status_code < 300 THEN first_byte_time ELSE NULL END),
 				3
@@ -444,7 +444,7 @@ func buildLatestChannelSuccessQuery(entryIndexesByChannel map[int][]int, filter 
 
 func buildLatestChannelRequestQuery(entryIndexesByChannel map[int][]int, filter *model.LogFilter, scalarProjection bool) (string, []any) {
 	return buildLatestChannelLogQuery(entryIndexesByChannel, filter, []string{"l.time", "l.id", "l.status_code", "l.message"}, scalarProjection, func(qb *QueryBuilder) {
-		qb.Where("status_code != 499")
+		qb.Where("status_code NOT IN (413, 499)")
 	})
 }
 
@@ -457,7 +457,7 @@ func buildLatestEntrySuccessQuery(entryIndexes map[statsRequestKey]int, filter *
 
 func buildLatestEntryRequestQuery(entryIndexes map[statsRequestKey]int, filter *model.LogFilter, scalarProjection bool) (string, []any) {
 	return buildLatestEntryLogQuery(entryIndexes, filter, []string{"l.time", "l.id", "l.status_code", "l.message"}, scalarProjection, func(qb *QueryBuilder) {
-		qb.Where("status_code != 499")
+		qb.Where("status_code NOT IN (413, 499)")
 	})
 }
 
@@ -637,7 +637,7 @@ func (s *SQLStore) GetRPMStats(ctx context.Context, startTime, endTime time.Time
 		Where("minute_bucket >= ?", startBucket).
 		Where("minute_bucket <= ?", endBucket).
 		Where("channel_id > 0").
-		Where("status_code != 499")
+		Where("status_code NOT IN (413, 499)")
 
 	// 应用渠道类型或名称过滤
 	_, isEmpty, err := s.applyChannelFilter(ctx, combinedQB, filter)
@@ -680,7 +680,7 @@ func (s *SQLStore) GetRPMStats(ctx context.Context, startTime, endTime time.Time
 			Where("minute_bucket >= ?", recentStartBucket).
 			Where("minute_bucket <= ?", recentEndBucket).
 			Where("channel_id > 0").
-			Where("status_code != 499")
+			Where("status_code NOT IN (413, 499)")
 
 		// 应用渠道过滤
 		_, isEmpty, err = s.applyChannelFilter(ctx, recentQB, filter)
@@ -740,7 +740,7 @@ func (s *SQLStore) fillStatsRPM(ctx context.Context, stats []model.StatsEntry, s
 		Where("minute_bucket >= ?", startBucket).
 		Where("minute_bucket <= ?", endBucket).
 		Where("channel_id > 0").
-		Where("status_code != 499")
+		Where("status_code NOT IN (413, 499)")
 
 	_, isEmpty, err := s.applyChannelFilter(ctx, peakQB, filter)
 	if err != nil {
@@ -786,7 +786,7 @@ func (s *SQLStore) fillStatsRPM(ctx context.Context, stats []model.StatsEntry, s
 			Where("minute_bucket >= ?", recentStartBucket).
 			Where("minute_bucket <= ?", recentEndBucket).
 			Where("channel_id > 0").
-			Where("status_code != 499")
+			Where("status_code NOT IN (413, 499)")
 
 		_, isEmpty, err := s.applyChannelFilter(ctx, recentQB, filter)
 		if err != nil {
