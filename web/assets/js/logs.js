@@ -287,19 +287,26 @@ function buildActiveRequestInfoContent(req, elapsedSeconds) {
   const infoDisplay = hasBytes ? `已接收 ${bytesInfo}` : '请求处理中...';
   const infoColor = hasBytes ? 'var(--success-600)' : 'var(--neutral-500)';
   const infoHtml = `<span style="color: ${infoColor};">${escapeHtml(infoDisplay)}</span>`;
+  // 视觉转文字辅助子请求：状态文案显示“转文字中”（方案B）
+  const isVisionAssist = req?.log_source === 'vision_assist';
+  const visionInfoHtml = isVisionAssist
+    ? '<span style="color: var(--primary-500);">正在将图片转文字…</span>'
+    : '';
   const activeRequestId = Number(req?.id);
   const attemptId = Number(req?.attempt_id);
   const hasValidId = Number.isFinite(activeRequestId) && activeRequestId > 0;
 
-  let content = infoHtml;
-  if (req?.debug_log_available && hasValidId) {
+  let content = visionInfoHtml || infoHtml;
+  // 视觉行保持“转文字中”文案：子请求不接调试快照，这里显式排除以免将来接上后覆盖文案
+  if (req?.debug_log_available && hasValidId && !isVisionAssist) {
     content = `<span class="debug-log-link has-upstream-detail" data-active-request-id="${activeRequestId}" title="${escapeHtml(t('logs.debugLogTitle'))}">${infoHtml}</span>`;
   }
 
   const buttons = [];
 
+  // 只读子请求没有独立 attempt，本来就取不到 can_skip/attempt_id；显式判 read_only 与下方取消按钮保持一致
   const canSkip = !!req?.can_skip || !!req?.skip_requested;
-  if (canSkip && hasValidId && Number.isFinite(attemptId) && attemptId > 0) {
+  if (canSkip && hasValidId && !req?.read_only && Number.isFinite(attemptId) && attemptId > 0) {
     const skipRequested = !!req?.skip_requested;
     const skipLabel = skipRequested ? t('logs.skipChannelSwitching') : t('logs.skipChannel');
     const disabled = skipRequested ? ' disabled aria-disabled="true"' : '';
@@ -309,7 +316,7 @@ function buildActiveRequestInfoContent(req, elapsedSeconds) {
   // 取消整个请求：与 skip 互补——响应已提交给客户端后 skip 不可用，取消仍然有效。
   // 已在取消中时保持按钮可见但禁用（该列每轮轮询整体重绘，靠后端 cancel_requested 保持状态）。
   const cancelRequested = !!req?.cancel_requested;
-  if (hasValidId && (cancelRequested || shouldShowActiveRequestCancel(elapsedSeconds))) {
+  if (hasValidId && !req?.read_only && (cancelRequested || shouldShowActiveRequestCancel(elapsedSeconds))) {
     const cancelLabel = cancelRequested ? t('logs.cancelRequestCanceling') : t('logs.cancelRequest');
     const disabled = cancelRequested ? ' disabled aria-disabled="true"' : '';
     const startTime = Number(req?.start_time);
@@ -854,6 +861,7 @@ function filterActiveRequests(requests) {
   const modelExact = filters.modelExact;
   const channelType = (document.getElementById('f_channel_type')?.value || '').trim();
   const tokenId = (document.getElementById('f_auth_token')?.value || '').trim();
+  const logSourceFilter = filters.logSource;
 
   return requests.filter(req => {
     if (channelName) {
@@ -869,6 +877,11 @@ function filterActiveRequests(requests) {
       const reqType = (typeof req.channel_type === 'string' ? req.channel_type : '').toLowerCase();
       if (reqType !== channelType.toLowerCase()) return false;
     }
+    // 日志来源精确匹配（活动请求：如 vision_assist 实时行也有 log_source；'all' 表示全部）
+    if (logSourceFilter && logSourceFilter !== 'all') {
+      const reqSource = req.log_source || 'proxy';
+      if (reqSource !== logSourceFilter) return false;
+    }
     // 令牌ID精确匹配
     if (tokenId) {
       if (req.token_id === undefined || req.token_id === null || req.token_id === 0) return false;
@@ -881,7 +894,7 @@ function filterActiveRequests(requests) {
 function shouldSkipActiveRequestsFetch(hours, status, logSource) {
   if (hours && hours !== 'today') return true;
   if (status) return true;
-  return logSource !== 'proxy' && logSource !== 'all';
+  return logSource !== 'proxy' && logSource !== 'all' && logSource !== 'vision_assist';
 }
 
 // 处理从 ui.js 推送的活动请求数据（不再自行发起网络请求）
@@ -965,7 +978,8 @@ function renderActiveRequests(activeRequests) {
 
     const channelDisplay = buildActiveRequestChannelDisplay(req);
     const upstreamProtocolDisplay = buildUpstreamProtocolDisplay(req.upstream_protocol);
-    const modelDisplay = buildLogModelDisplay(req.model, '', req.thinking_effort, req.reasoning_tokens);
+    const visionBadge = req.log_source === 'vision_assist' ? renderLogSourceBadge(req.log_source) : '';
+    const modelDisplay = (visionBadge ? `${visionBadge} ` : '') + buildLogModelDisplay(req.model, '', req.thinking_effort, req.reasoning_tokens);
     const tokenDescDisplay = buildActiveRequestTokenDescDisplay(req);
     const tokenDescCellClass = `logs-col-token-desc${tokenDescDisplay ? '' : ' mobile-empty-cell'}`;
 

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ccLoad/internal/model"
 )
 
 func TestActiveRequestManager_ListSnapshotAndSort(t *testing.T) {
@@ -122,6 +124,35 @@ func TestActiveRequestManager_ChannelSkipLifecycle(t *testing.T) {
 	}
 	if err := m.RequestChannelSkip(id, attemptID); !errors.Is(err, errActiveRequestAttemptMismatch) {
 		t.Fatalf("RequestChannelSkip(ended attempt) error = %v, want attempt mismatch", err)
+	}
+}
+
+func TestActiveRequestManager_RegisterSubReadOnly(t *testing.T) {
+	m := newActiveRequestManager()
+
+	// 只读子请求：独立注册、带 log_source，渠道信息可独立填充
+	subID := m.RegisterSub(time.UnixMilli(123), "vision-vl", "1.1.1.1", model.LogSourceVisionAssist, false)
+	m.SetSubrequestChannel(subID, 7, "vision-ch", "openai", "openai", 2.0)
+
+	view := m.List()[0]
+	if view.LogSource != model.LogSourceVisionAssist || !view.ReadOnly {
+		t.Fatalf("unexpected read-only sub request view: %+v", view)
+	}
+	if view.ChannelID != 7 || view.ChannelName != "vision-ch" {
+		t.Fatalf("sub request channel not surfaced: %+v", view)
+	}
+
+	// 只读子请求不可被单独跳过/取消
+	if err := m.RequestChannelSkip(subID, 1); !errors.Is(err, errActiveRequestSkipNotAvailable) {
+		t.Fatalf("RequestChannelSkip(read-only) error = %v, want skip unavailable", err)
+	}
+	if err := m.CancelRequest(subID); !errors.Is(err, errActiveRequestReadOnly) {
+		t.Fatalf("CancelRequest(read-only) error = %v, want read-only", err)
+	}
+
+	m.Remove(subID)
+	if got := m.List(); len(got) != 0 {
+		t.Fatalf("expected empty list after Remove, got %d", len(got))
 	}
 }
 

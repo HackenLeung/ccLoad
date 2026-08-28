@@ -126,6 +126,9 @@ func (s *Server) HandleCancelActiveRequest(c *gin.Context) {
 				"request_id": requestID,
 				"status":     "canceling",
 			})
+		case errors.Is(err, errActiveRequestReadOnly):
+			// 只读子请求（如视觉转文字辅助）：随宿主主请求生命周期起止，不能单独取消
+			RespondErrorMsg(c, http.StatusConflict, err.Error())
 		default:
 			RespondErrorMsg(c, http.StatusInternalServerError, "failed to cancel active request")
 		}

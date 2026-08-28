@@ -190,6 +190,13 @@ func (s *Server) callVisionModel(
 		logSource:          model.LogSourceVisionAssist,
 		isolatedSubrequest: true,
 	}
+	// 视觉转文字子请求独立注册为只读“进行中”行：匹配到视觉模型的那一刻日志页即可看到，
+	// 不必等子请求结束落库；随本子请求生命周期起止，不可被单独跳过/取消。
+	if s.activeRequests != nil {
+		activeID := s.activeRequests.RegisterSub(time.Now(), visionModel, parent.clientIP, model.LogSourceVisionAssist, false)
+		s.activeRequests.SetSubrequestChannel(activeID, cfg.ID, cfg.Name, cfg.GetChannelType(), cfg.ResolveUpstreamProtocol(string(protocol.OpenAI)), cfg.CostMultiplier)
+		defer s.activeRequests.Remove(activeID)
+	}
 	recorder := httptest.NewRecorder()
 	result, err := s.tryChannelWithKeys(ctx, cfg, visionCtx, recorder)
 	if err != nil {

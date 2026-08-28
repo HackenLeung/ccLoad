@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"ccLoad/internal/model"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -111,6 +113,34 @@ func TestHandleActiveRequests_PreservesZeroCostMultiplier(t *testing.T) {
 	}
 	if got, ok := value.(float64); !ok || got != 0 {
 		t.Fatalf("cost_multiplier=%v, want 0", value)
+	}
+}
+
+func TestHandleReadOnlySubRequestRejectsSkipAndCancel(t *testing.T) {
+	m := newActiveRequestManager()
+	srv := &Server{activeRequests: m}
+
+	// 注册只读子请求（模拟视觉转文字辅助）
+	subID := m.RegisterSub(time.Now(), "vision-vl", "1.2.3.4", model.LogSourceVisionAssist, false)
+	subIDText := strconv.FormatInt(subID, 10)
+
+	// 不允许跳过：只读子请求没有独立尝试
+	skipReq := newRequest(http.MethodPost, "/admin/active-requests/"+subIDText+"/skip", bytes.NewBufferString(`{"attempt_id":1}`))
+	skipReq.Header.Set("Content-Type", "application/json")
+	skipC, skipW := newTestContext(t, skipReq)
+	skipC.Params = gin.Params{{Key: "request_id", Value: subIDText}}
+	srv.HandleSkipActiveRequest(skipC)
+	if skipW.Code != http.StatusConflict {
+		t.Fatalf("skip status=%d, want %d", skipW.Code, http.StatusConflict)
+	}
+
+	// 不允许单独取消
+	cancelReq := newRequest(http.MethodPost, "/admin/active-requests/"+subIDText+"/cancel", bytes.NewBufferString(`{}`))
+	cancelC, cancelW := newTestContext(t, cancelReq)
+	cancelC.Params = gin.Params{{Key: "request_id", Value: subIDText}}
+	srv.HandleCancelActiveRequest(cancelC)
+	if cancelW.Code != http.StatusConflict {
+		t.Fatalf("cancel status=%d, want %d", cancelW.Code, http.StatusConflict)
 	}
 }
 

@@ -20,6 +20,7 @@ var (
 	errActiveRequestAttemptMismatch  = errors.New("active request attempt changed")
 	errActiveRequestSkipNotAvailable = errors.New("active request cannot be skipped")
 	errActiveRequestAlreadyCanceled  = errors.New("active request cancel already requested")
+	errActiveRequestReadOnly         = errors.New("active request is read-only")
 )
 
 // ActiveRequest 表示一个进行中的请求
@@ -41,6 +42,8 @@ type ActiveRequest struct {
 	CostMultiplier      float64 `json:"cost_multiplier"`                  // 渠道成本倍率
 	DebugLogAvailable   bool    `json:"debug_log_available,omitempty"`    // 运行中请求是否已有可读取的调试快照
 	ThinkingEffort      string  `json:"thinking_effort,omitempty"`
+	LogSource           string  `json:"log_source,omitempty"`       // 日志来源（如 vision_assist，普通代理请求为空）
+	ReadOnly            bool    `json:"read_only,omitempty"`        // 只读子请求：不可被单独跳过/取消
 	AttemptID           int64   `json:"attempt_id,omitempty"`       // 当前上游尝试编号，用于防止过期操作取消新尝试
 	CanSkip             bool    `json:"can_skip,omitempty"`         // 尚未向客户端提交响应时允许跳过当前渠道
 	SkipRequested       bool    `json:"skip_requested,omitempty"`   // 已收到跳过请求，等待代理循环切换渠道
@@ -63,6 +66,8 @@ type activeRequest struct {
 
 	CostMultiplier float64 // 渠道成本倍率
 	ThinkingEffort string
+	LogSource      string // 日志来源（如 vision_assist；普通代理请求为空）
+	ReadOnly       bool   // 只读子请求：不可被单独跳过/取消
 	debugCapture   *debugCapture
 
 	attemptID     int64
@@ -115,6 +120,40 @@ func (m *activeRequestManager) Register(startTime time.Time, model, clientIP str
 	m.requests[id] = req
 	m.mu.Unlock()
 	return id
+}
+
+// RegisterSub 注册一个只读的子请求（如视觉转文字辅助请求），返回请求ID（用于后续移除）。
+// 只读子请求独立出现在“进行中请求”列表，但不可被管理端单独跳过/取消——
+// 它随宿主主请求的生命周期起止，误操作只会打断正在进行的图片转文字阶段。
+func (m *activeRequestManager) RegisterSub(startTime time.Time, model, clientIP, logSource string, streaming bool) int64 {
+	id := m.nextID.Add(1)
+	req := &activeRequest{
+		ID:        id,
+		Model:     model,
+		ClientIP:  clientIP,
+		StartTime: startTime.UnixMilli(),
+		Streaming: streaming,
+		LogSource: logSource,
+		ReadOnly:  true,
+	}
+	m.mu.Lock()
+	m.requests[id] = req
+	m.mu.Unlock()
+	return id
+}
+
+// SetSubrequestChannel 为只读子请求设置渠道信息（用于前端展示）。
+// 子请求不参与 attempt/跳过/取消流程，因此只填充展示字段，不动 attemptID/canSkip 等。
+func (m *activeRequestManager) SetSubrequestChannel(id int64, channelID int64, channelName, channelType, upstreamProtocol string, costMultiplier float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if req, ok := m.requests[id]; ok && req.ReadOnly {
+		req.ChannelID = channelID
+		req.ChannelName = channelName
+		req.ChannelType = channelType
+		req.UpstreamProtocol = upstreamProtocol
+		req.CostMultiplier = costMultiplier
+	}
 }
 
 // Update 更新活跃请求的渠道信息（在选择渠道/key后调用）
@@ -171,6 +210,10 @@ func (m *activeRequestManager) CancelRequest(id int64) error {
 	if req.cancelRequested {
 		m.mu.Unlock()
 		return errActiveRequestAlreadyCanceled
+	}
+	if req.ReadOnly {
+		m.mu.Unlock()
+		return errActiveRequestReadOnly
 	}
 	if req.requestCancel == nil {
 		m.mu.Unlock()
@@ -258,6 +301,10 @@ func (m *activeRequestManager) RequestChannelSkip(id, attemptID int64) error {
 	if !ok {
 		m.mu.Unlock()
 		return errActiveRequestNotFound
+	}
+	if req.ReadOnly {
+		m.mu.Unlock()
+		return errActiveRequestSkipNotAvailable
 	}
 	if req.attemptID != attemptID {
 		m.mu.Unlock()
@@ -369,6 +416,8 @@ func (m *activeRequestManager) List() []*ActiveRequest {
 			CostMultiplier:    req.CostMultiplier,
 			DebugLogAvailable: req.debugCapture != nil,
 			ThinkingEffort:    req.ThinkingEffort,
+			LogSource:         req.LogSource,
+			ReadOnly:          req.ReadOnly,
 			AttemptID:         req.attemptID,
 			CanSkip:           req.canSkip,
 			SkipRequested:     req.skipRequested,
