@@ -118,6 +118,9 @@ func (s *Server) buildProxyRequest(
 	// 1.5 anyrouter Anthropic thinking 兜底归一
 	body = normalizeAnyrouterAdaptiveThinking(cfg, requestPath, body)
 
+	// 1.55 messages[].role=developer 降级为 system（多数上游 role 枚举不含 developer）
+	body = normalizeDeveloperMessageRole(requestPath, body)
+
 	// 1.6 自定义请求体规则（仅对 JSON body 生效）
 	body = applyBodyRules(hdr.Get("Content-Type"), body, cfg.BodyRules())
 

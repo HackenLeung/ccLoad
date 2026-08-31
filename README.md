@@ -11,6 +11,7 @@
 - GPT 上下文压缩会跳过模型重定向渠道，按优先级尝试同名原生 GPT 渠道
 - HTTP 200 空响应不会直接结束请求，会继续尝试下一个符合条件的渠道
 - 短窗口限流（如「1 分钟内最多 5 次」）按上游声明的窗口精确冷却，不再套用指数退避
+- 客户端发出的 `developer` 消息角色自动降级为 `system`，兼容 role 枚举不含 `developer` 的上游
 
 ## 本地协议转换
 
@@ -28,6 +29,7 @@
 - Grok 对嵌套 `oneOf` 工具 Schema 的兼容处理
 - data URL 图片转 Anthropic base64 图片，HTTPS 图片保持 URL
 - OpenAI/Anthropic 多文本块、工具调用和最终正文的正确回填
+- `developer` 消息角色降级为语义等价的 `system`（Codex `/v1/responses` 的 `input[]` 保持原样）
 
 ### Codex → OpenAI 上游能力
 

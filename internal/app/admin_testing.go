@@ -898,6 +898,11 @@ func (s *Server) buildTestUpstreamRequest(
 		}
 	}
 
+	// developer→system 降级（与代理链路保持一致）
+	// 此处 fullURL 已是上游 URL（协议转换分支在 buildChannelTestRequestPlan 末尾改写过），
+	// 与 requestBody 的协议一致。
+	requestPlan.requestBody = normalizeDeveloperMessageRole(extractRequestPath(requestPlan.fullURL), requestPlan.requestBody)
+
 	// 渠道级自定义请求体规则（与代理链路一致，仅对 JSON body 生效）
 	requestPlan.requestBody = applyBodyRules(requestPlan.headers.Get("Content-Type"), requestPlan.requestBody, cfgForBuild.BodyRules())
 

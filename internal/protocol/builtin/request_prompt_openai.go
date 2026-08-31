@@ -77,7 +77,7 @@ func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, 
 			// Emit any tool_result collected in this turn first, before the current turn's main message.
 			messages = append(messages, pendingToolMessages...)
 			if len(contentParts) > 0 || len(toolCalls) > 0 || len(reasoningTexts) > 0 {
-				message := map[string]any{"role": role, "content": encodeOpenAIContentValue(contentParts)}
+				message := map[string]any{"role": openAIWireRole(role), "content": encodeOpenAIContentValue(contentParts)}
 				if len(toolCalls) > 0 {
 					message["tool_calls"] = toolCalls
 				}
@@ -229,6 +229,17 @@ func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, 
 		payload.ReasoningEffort = anthropicThinkingToOpenAIEffort(conv.Thinking)
 	}
 	return marshalStableJSON(payload)
+}
+
+// openAIWireRole 把内部会话角色映射成 chat/completions 线上角色。
+// developer 是 OpenAI 官方 o1+ 的新写法，但多数 OpenAI 兼容上游的 role 枚举只有
+// system/user/assistant/tool，见到 developer 会直接 400 反序列化失败。
+// system 语义等价且 OpenAI 自身仍完全接受，故统一降级为 system。
+func openAIWireRole(role string) string {
+	if role == "developer" {
+		return "system"
+	}
+	return role
 }
 
 // normalizeOpenAIEffort 把 OpenAI reasoning_effort 枚举收敛到 Codex 接受的档位。

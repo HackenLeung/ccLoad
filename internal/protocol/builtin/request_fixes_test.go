@@ -634,6 +634,27 @@ func TestConvertCodexRequestToOpenAI_FieldsPreserved(t *testing.T) {
 	}
 }
 
+// 覆盖 encodeOpenAIRequest：developer 角色降级为 system。
+// 多数 OpenAI 兼容上游的 role 枚举只有 system/user/assistant/tool，
+// 原样发出 developer 会在反序列化阶段 400。
+func TestEncodeOpenAIRequest_DeveloperRoleDowngradedToSystem(t *testing.T) {
+	conv := conversation{Turns: []conversationTurn{
+		{Role: "developer", Parts: []conversationPart{{Kind: partKindText, Text: "be brief"}}},
+		{Role: "user", Parts: []conversationPart{{Kind: partKindText, Text: "hi"}}},
+	}}
+	raw, err := encodeOpenAIRequest("gpt-x", conv, false)
+	if err != nil {
+		t.Fatalf("encodeOpenAIRequest failed: %v", err)
+	}
+	body := string(raw)
+	if strings.Contains(body, `"role":"developer"`) {
+		t.Fatalf("developer role should be rewritten: %s", body)
+	}
+	if !strings.Contains(body, `"role":"system"`) {
+		t.Fatalf("expected system role in output: %s", body)
+	}
+}
+
 // 覆盖 Codex→Anthropic：temperature/top_p/max_tokens/stop_sequences/thinking 全部透传，
 // 并在 DisableParallel 时给 tool_choice 注入 disable_parallel_tool_use=true。
 func TestConvertCodexRequestToAnthropic_FieldsPreserved(t *testing.T) {

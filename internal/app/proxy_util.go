@@ -23,6 +23,16 @@ import (
 
 const anthropicBillingHeaderPrefix = "x-anthropic-billing-header:"
 
+// stableSonicCfg 与 protocol/builtin 的同名配置语义一致：
+// - SortMapKeys=true：map 按 key 字母序输出，同一输入两次序列化字节一致。
+// 重新序列化请求体时必须如此，否则 Go map 的随机迭代顺序会让每次请求产出
+// 不同字节，打掉上游 prompt cache 的 prefix 命中。
+// - EscapeHTML=false：保留 <、>、& 原样，避免污染 prompt。
+var stableSonicCfg = sonic.Config{
+	SortMapKeys: true,
+	EscapeHTML:  false,
+}.Froze()
+
 // ============================================================================
 // 常量定义
 // ============================================================================
@@ -501,6 +511,109 @@ func normalizeAnyrouterAdaptiveThinking(cfg *model.Config, requestPath string, b
 		setAnthropicOutputEffort(obj, "high")
 	}
 	newBody, err := sonic.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return newBody
+}
+
+// containsFoldedDeveloperToken 大小写无关地判断 body 里是否出现 developer 字面量。
+//
+// 只作为跳过整体反序列化的快速预筛：宁可放过（多一次 unmarshal 后原样返回），
+// 不可漏判。故不锚定引号——role 值可能带内侧空格（" developer "），
+// 代价是消息正文提到 developer 时也会走一次反序列化，但结果仍由下方严格比较决定。
+func containsFoldedDeveloperToken(body []byte) bool {
+	token := []byte("developer")
+	if len(body) < len(token) {
+		return false
+	}
+	for i := 0; i+len(token) <= len(body); i++ {
+		// 先按首字节筛，避免逐位置调 EqualFold。
+		if body[i] != 'd' && body[i] != 'D' {
+			continue
+		}
+		// bytes.EqualFold 不分配，避免大 body 上做 string 转换。
+		if bytes.EqualFold(body[i:i+len(token)], token) {
+			return true
+		}
+	}
+	return false
+}
+
+// familyUsesMessagesArray 判断请求族的 body 顶层是否为 messages 数组。
+func familyUsesMessagesArray(family protocol.RequestFamily) bool {
+	return family == protocol.RequestFamilyChatCompletions || family == protocol.RequestFamilyMessages
+}
+
+// normalizeDeveloperMessageRole 把 messages[].role 里的 developer 改写成 system。
+//
+// developer 是 OpenAI 为 o1+ 引入的 system 替代写法，新版 SDK/客户端会直接发出它。
+// 但绝大多数 OpenAI 兼容上游（以及 Anthropic 兼容中转）的 role 枚举只有
+// system/user/assistant/tool，收到 developer 会在反序列化阶段直接 400，
+// 且这类失败对整条请求是致命的（换 Key、换渠道都救不回来）。
+// 两者语义等价、OpenAI 自身也仍接受 system，故在发出前统一降级。
+//
+// 只处理带 messages 数组的 chat/completions 与 messages 族；Codex /v1/responses
+// 的 input[] 里 developer 是合法角色，不能碰。
+func normalizeDeveloperMessageRole(requestPath string, body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	if !familyUsesMessagesArray(protocol.DetectRequestFamily(requestPath)) {
+		return body
+	}
+	// 快速排除：绝大多数请求不含 developer，避免无谓的整体反序列化。
+	if !containsFoldedDeveloperToken(body) {
+		return body
+	}
+
+	// 全程 json.RawMessage：只重写 role 字段，其余原样搬运，
+	// 避免 map[string]any 把大整数/浮点压成 float64 丢精度。
+	var obj map[string]json.RawMessage
+	if err := sonic.Unmarshal(body, &obj); err != nil {
+		return body
+	}
+	rawMessages, ok := obj["messages"]
+	if !ok {
+		return body
+	}
+	var messages []json.RawMessage
+	if err := sonic.Unmarshal(rawMessages, &messages); err != nil {
+		return body
+	}
+
+	changed := false
+	for i, rawMsg := range messages {
+		var msg map[string]json.RawMessage
+		if err := sonic.Unmarshal(rawMsg, &msg); err != nil {
+			continue
+		}
+		var role string
+		if err := sonic.Unmarshal(msg["role"], &role); err != nil {
+			continue
+		}
+		// 宽松比较：与 protocol/builtin 的 normalizeRole（lower+trim）语义对齐。
+		if !strings.EqualFold(strings.TrimSpace(role), "developer") {
+			continue
+		}
+		msg["role"] = json.RawMessage(`"system"`)
+		patched, err := stableSonicCfg.Marshal(msg)
+		if err != nil {
+			return body
+		}
+		messages[i] = patched
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+
+	patchedMessages, err := stableSonicCfg.Marshal(messages)
+	if err != nil {
+		return body
+	}
+	obj["messages"] = patchedMessages
+	newBody, err := stableSonicCfg.Marshal(obj)
 	if err != nil {
 		return body
 	}

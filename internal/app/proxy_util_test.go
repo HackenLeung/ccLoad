@@ -1084,3 +1084,115 @@ func TestNormalizeAnyrouterAdaptiveThinking(t *testing.T) {
 		}
 	})
 }
+
+func TestNormalizeDeveloperMessageRole(t *testing.T) {
+	t.Parallel()
+
+	roles := func(body []byte) []string {
+		var obj struct {
+			Messages []struct {
+				Role string `json:"role"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &obj); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		out := make([]string, 0, len(obj.Messages))
+		for _, m := range obj.Messages {
+			out = append(out, m.Role)
+		}
+		return out
+	}
+
+	t.Run("chat/completions developer → system", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-5","messages":[{"role":"developer","content":"be brief"},{"role":"user","content":"hi"}]}`)
+		got := roles(normalizeDeveloperMessageRole("/v1/chat/completions", body))
+		if len(got) != 2 || got[0] != "system" || got[1] != "user" {
+			t.Fatalf("want [system user], got %v", got)
+		}
+	})
+
+	t.Run("messages family developer → system", func(t *testing.T) {
+		body := []byte(`{"model":"claude-sonnet","messages":[{"role":"developer","content":"be brief"}]}`)
+		got := roles(normalizeDeveloperMessageRole("/v1/messages", body))
+		if len(got) != 1 || got[0] != "system" {
+			t.Fatalf("want [system], got %v", got)
+		}
+	})
+
+	// 大小写与内侧空格各自单独成例：合并写会让其中一条借另一条命中快速预筛，
+	// 掩盖预筛本身的漏判。
+	t.Run("uppercase role is rewritten", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-5","messages":[{"role":"Developer","content":"a"}]}`)
+		got := roles(normalizeDeveloperMessageRole("/v1/chat/completions", body))
+		if len(got) != 1 || got[0] != "system" {
+			t.Fatalf("want [system], got %v", got)
+		}
+	})
+
+	t.Run("padded role is rewritten", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-5","messages":[{"role":" developer ","content":"a"}]}`)
+		got := roles(normalizeDeveloperMessageRole("/v1/chat/completions", body))
+		if len(got) != 1 || got[0] != "system" {
+			t.Fatalf("want [system], got %v", got)
+		}
+	})
+
+	// 预筛不锚定引号，这条会走到反序列化，但严格比较后无 role 命中，
+	// 必须原样返回（字节级不变，不能被重新序列化改写）。
+	t.Run("content mentioning developer leaves body byte-identical", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-5","messages":[{"role":"user","content":"I am a Developer"}]}`)
+		got := normalizeDeveloperMessageRole("/v1/chat/completions", body)
+		if !bytes.Equal(got, body) {
+			t.Fatalf("body should be byte-identical when no role changes, got %s", got)
+		}
+	})
+
+	t.Run("codex responses input[] keeps developer", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-5","input":[{"type":"message","role":"developer","content":"x"}]}`)
+		got := normalizeDeveloperMessageRole("/v1/responses", body)
+		if !bytes.Equal(got, body) {
+			t.Fatalf("responses body must not be rewritten, got %s", got)
+		}
+	})
+
+	t.Run("non-JSON and empty body pass through", func(t *testing.T) {
+		for _, body := range [][]byte{nil, []byte(`not json "developer"`)} {
+			if got := normalizeDeveloperMessageRole("/v1/chat/completions", body); !bytes.Equal(got, body) {
+				t.Fatalf("body should pass through unchanged, got %s", got)
+			}
+		}
+	})
+
+	// 重新序列化必须键序稳定：Go map 迭代顺序随机，若不排序则同一请求
+	// 每次产出不同字节，打掉上游 prompt cache 的 prefix 命中。
+	t.Run("rewrite is byte-stable across repeated calls", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-5","top_p":0.9,"messages":[{"role":"developer",` +
+			`"content":"x","name":"n","extra":{"b":1,"a":2}}],"temperature":0.5}`)
+		first := normalizeDeveloperMessageRole("/v1/chat/completions", body)
+		for i := 0; i < 20; i++ {
+			again := normalizeDeveloperMessageRole("/v1/chat/completions", body)
+			if !bytes.Equal(first, again) {
+				t.Fatalf("iteration %d produced different bytes:\n%s\n%s", i, first, again)
+			}
+		}
+	})
+
+	t.Run("rewrite preserves large integers and float precision", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-5","id":9223372036854775807,"temperature":0.7000000000000001,` +
+			`"messages":[{"role":"developer","content":"x","seq":9007199254740993}]}`)
+		got := normalizeDeveloperMessageRole("/v1/chat/completions", body)
+		if !bytes.Contains(got, []byte(`"role":"system"`)) {
+			t.Fatalf("expected role rewritten, got %s", got)
+		}
+		for _, want := range []string{
+			`"id":9223372036854775807`,
+			`"temperature":0.7000000000000001`,
+			`"seq":9007199254740993`,
+		} {
+			if !bytes.Contains(got, []byte(want)) {
+				t.Fatalf("expected %s preserved, got %s", want, got)
+			}
+		}
+	})
+}
