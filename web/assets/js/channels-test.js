@@ -755,14 +755,14 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
-  test('新渠道默认启用本地代理', () => {
+  test('新渠道默认关闭本地代理', () => {
     const runtime = loadChannelProxyControl();
     try {
       runtime.mod.setNewChannelProxyDefaults();
-      assert.equal(runtime.checkbox.checked, true);
+      assert.equal(runtime.checkbox.checked, false);
       assert.equal(runtime.input.value, 'http://127.0.0.1:7890');
-      assert.equal(runtime.input.disabled, false);
-      assert.equal(runtime.mod.getSubmittedChannelProxyURL(), 'http://127.0.0.1:7890');
+      assert.equal(runtime.input.disabled, true);
+      assert.equal(runtime.mod.getSubmittedChannelProxyURL(), '');
     } finally {
       runtime.restore();
     }

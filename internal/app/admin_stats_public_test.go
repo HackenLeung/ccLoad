@@ -85,6 +85,7 @@ func TestAdminStats_PublicAndCooldownEndpoints(t *testing.T) {
 			OutputTokens:             2,
 			CacheReadInputTokens:     4,
 			CacheCreationInputTokens: 5,
+			Cost:                     0.03,
 		},
 		{
 			Time:         model.JSONTime{Time: now},
@@ -196,6 +197,12 @@ func TestAdminStats_PublicAndCooldownEndpoints(t *testing.T) {
 		if anthTS.TodayTokens != 36 || anthTS.CumulativeTokens != 36 {
 			t.Fatalf("unexpected anthropic overview tokens: %+v", anthTS)
 		}
+		if anthTS.TotalCost < 0.00999 || anthTS.TotalCost > 0.01001 || anthTS.CumulativeCost < 0.00999 || anthTS.CumulativeCost > 0.01001 {
+			t.Fatalf("unexpected anthropic costs: %+v", anthTS)
+		}
+		if anthTS.EffectiveCost == nil || *anthTS.EffectiveCost < 0.00999 || *anthTS.EffectiveCost > 0.01001 || anthTS.CumulativeEffectiveCost == nil || *anthTS.CumulativeEffectiveCost < 0.00999 || *anthTS.CumulativeEffectiveCost > 0.01001 {
+			t.Fatalf("unexpected anthropic effective costs: %+v", anthTS)
+		}
 
 		oaiTS, ok := resp.Data.ByType["openai"]
 		if !ok {
@@ -212,6 +219,9 @@ func TestAdminStats_PublicAndCooldownEndpoints(t *testing.T) {
 		}
 		if oaiTS.TodayTokens != 114 || oaiTS.CumulativeTokens != 126 {
 			t.Fatalf("unexpected openai overview tokens: %+v", oaiTS)
+		}
+		if oaiTS.TotalCost < 0.01999 || oaiTS.TotalCost > 0.02001 || oaiTS.CumulativeCost < 0.04999 || oaiTS.CumulativeCost > 0.05001 {
+			t.Fatalf("unexpected openai costs: %+v", oaiTS)
 		}
 	})
 

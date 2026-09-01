@@ -135,6 +135,7 @@ window.I18N_LOCALES['en'] = {
   'index.metrics.successFailed': 'Success/Failed (Rate)',
   'index.metrics.todayTokens': 'Today Tokens',
   'index.metrics.cumulativeTokens': 'Cumulative Tokens',
+  'index.metrics.cumulativeCost': 'Cumulative Cost',
   'index.metrics.performance': 'Performance',
   'index.metrics.avgResponse': 'Average Response',
   'index.apiSection': 'API Endpoints',

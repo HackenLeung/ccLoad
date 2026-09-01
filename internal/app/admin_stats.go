@@ -175,7 +175,7 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 	todayStart := beginningOfDay(now)
 	allTimeStart := time.Unix(0, 0)
 	recentStart := now.Add(-time.Minute)
-	// 累计 Token 是全表聚合，代价高但对新鲜度要求低：默认走 1 小时缓存，
+	// 累计统计是全表聚合，代价高但对新鲜度要求低：默认走 1 小时缓存，
 	// 仅在用户主动刷新（切换时间范围/手动刷新页面）时强制查一次最新值。
 	const cumulativeTokensTTL = time.Hour
 	refreshCumulative := util.ParseBoolDefault(c.Query("refresh_cumulative"), false)
@@ -324,21 +324,6 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 		if stat.TotalOutputTokens != nil {
 			ts.TotalOutputTokens += *stat.TotalOutputTokens
 		}
-		if stat.TotalCost != nil {
-			ts.TotalCost += *stat.TotalCost
-		}
-		if stat.EffectiveCost != nil {
-			if ts.EffectiveCost == nil {
-				ts.EffectiveCost = new(float64)
-			}
-			*ts.EffectiveCost += *stat.EffectiveCost
-		} else if stat.TotalCost != nil {
-			if ts.EffectiveCost == nil {
-				ts.EffectiveCost = new(float64)
-			}
-			*ts.EffectiveCost += *stat.TotalCost
-		}
-
 		if stat.TotalCacheReadInputTokens != nil {
 			ts.TotalCacheReadTokens += *stat.TotalCacheReadInputTokens
 		}
@@ -347,8 +332,18 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 		}
 	}
 
+	for channelType, costs := range summarizeTypeCosts(stats, channelTypes) {
+		ts := ensureTypeSummary(typeStats, channelType)
+		ts.TotalCost = costs.standard
+		if costs.hasEffective {
+			effectiveCost := costs.effective
+			ts.EffectiveCost = &effectiveCost
+		}
+	}
+
 	todayTokens, todayTokensByType := summarizeTokens(todayStats, channelTypes)
 	cumulativeTokens, cumulativeTokensByType := summarizeTokens(allTimeStats, channelTypes)
+	cumulativeCostsByType := summarizeTypeCosts(allTimeStats, channelTypes)
 	recentTPM, _ := summarizeTokens(recentStats, channelTypes)
 	for channelType, tokens := range todayTokensByType {
 		ts := ensureTypeSummary(typeStats, channelType)
@@ -357,6 +352,14 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 	for channelType, tokens := range cumulativeTokensByType {
 		ts := ensureTypeSummary(typeStats, channelType)
 		ts.CumulativeTokens = tokens
+	}
+	for channelType, costs := range cumulativeCostsByType {
+		ts := ensureTypeSummary(typeStats, channelType)
+		ts.CumulativeCost = costs.standard
+		if costs.hasEffective {
+			effectiveCost := costs.effective
+			ts.CumulativeEffectiveCost = &effectiveCost
+		}
 	}
 
 	response := gin.H{
@@ -389,6 +392,8 @@ type TypeSummary struct {
 	TotalCacheCreationTokens int64    `json:"total_cache_creation_tokens,omitempty"` // Claude/Codex专用（prompt caching）
 	TotalCost                float64  `json:"total_cost,omitempty"`                  // 标准成本
 	EffectiveCost            *float64 `json:"effective_cost,omitempty"`              // 倍率后成本
+	CumulativeCost           float64  `json:"cumulative_cost,omitempty"`             // 累计标准成本
+	CumulativeEffectiveCost  *float64 `json:"cumulative_effective_cost,omitempty"`   // 累计倍率后成本
 	TodayTokens              int64    `json:"today_tokens"`
 	CumulativeTokens         int64    `json:"cumulative_tokens"`
 }
@@ -429,6 +434,39 @@ func statsEntryTotalTokens(stat model.StatsEntry) int64 {
 		}
 	}
 	return total
+}
+
+type typeCostTotals struct {
+	standard     float64
+	effective    float64
+	hasEffective bool
+}
+
+func summarizeTypeCosts(stats []model.StatsEntry, channelTypes map[int64]string) map[string]typeCostTotals {
+	byType := make(map[string]typeCostTotals)
+	for _, stat := range stats {
+		if stat.ChannelID == nil {
+			continue
+		}
+		channelType := channelTypes[int64(*stat.ChannelID)]
+		if channelType == "" {
+			continue
+		}
+
+		costs := byType[channelType]
+		if stat.TotalCost != nil {
+			costs.standard += *stat.TotalCost
+		}
+		if stat.EffectiveCost != nil {
+			costs.effective += *stat.EffectiveCost
+			costs.hasEffective = true
+		} else if stat.TotalCost != nil {
+			costs.effective += *stat.TotalCost
+			costs.hasEffective = true
+		}
+		byType[channelType] = costs
+	}
+	return byType
 }
 
 func averageResponseSeconds(stats []model.StatsEntry) float64 {

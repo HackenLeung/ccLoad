@@ -42,7 +42,7 @@ function setNewChannelProxyDefaults() {
   const checkbox = document.getElementById('channelUseProxy');
   const input = document.getElementById('channelProxyURL');
   if (!checkbox || !input) return;
-  checkbox.checked = true;
+  checkbox.checked = false;
   input.value = DEFAULT_CHANNEL_PROXY_URL;
   syncChannelProxyInputState();
 }

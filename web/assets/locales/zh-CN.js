@@ -135,6 +135,7 @@ window.I18N_LOCALES['zh-CN'] = {
   'index.metrics.successFailed': '成功/失败 (成功率)',
   'index.metrics.todayTokens': '今日 Token',
   'index.metrics.cumulativeTokens': '累计 Token',
+  'index.metrics.cumulativeCost': '累计成本',
   'index.metrics.performance': '性能指标',
   'index.metrics.avgResponse': '平均响应',
   'index.apiSection': 'API 接口',

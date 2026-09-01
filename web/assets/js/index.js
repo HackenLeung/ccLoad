@@ -22,7 +22,7 @@
       const query = typeof window.buildDateRangeQuery === 'function'
         ? window.buildDateRangeQuery(currentTimeRange, currentCustomTimeRange)
         : `range=${encodeURIComponent(currentTimeRange)}`;
-      // 累计 Token 走后端 1 小时缓存；用户主动加载/切换范围时强制取最新值。
+      // 累计统计走后端 1 小时缓存；用户主动加载/切换范围时强制取最新值。
       const suffix = forceRefresh ? '&refresh_cumulative=1' : '';
       return `/dashboard/summary?${query}${suffix}`;
     }
@@ -116,10 +116,15 @@
       const effectiveCost = data && data.effective_cost !== undefined && data.effective_cost !== null
         ? Number(data.effective_cost) || 0
         : totalCost;
+      const cumulativeCost = data ? (data.cumulative_cost || 0) : 0;
+      const cumulativeEffectiveCost = data && data.cumulative_effective_cost !== undefined && data.cumulative_effective_cost !== null
+        ? Number(data.cumulative_effective_cost) || 0
+        : cumulativeCost;
 
       document.getElementById(`type-${type}-input`).textContent = formatNumber(inputTokens);
       document.getElementById(`type-${type}-output`).textContent = formatNumber(outputTokens);
       document.getElementById(`type-${type}-cost`).innerHTML = buildCostStackHtml(totalCost, effectiveCost, { tone: 'warning', inline: true });
+      document.getElementById(`type-${type}-cumulative-cost`).innerHTML = buildCostStackHtml(cumulativeCost, cumulativeEffectiveCost, { tone: 'warning', inline: true });
 
       // Claude和Codex类型的缓存统计（缓存读+缓存创建）
       if (type === 'anthropic' || type === 'codex') {

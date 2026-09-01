@@ -167,7 +167,7 @@ func (sc *StatsCache) GetStatsLite(ctx context.Context, startTime, endTime time.
 // GetStatsLiteWithTTL 与 GetStatsLite 类似，但使用自定义 TTL，并支持强制刷新。
 // 缓存键按 ttl 分桶（而非默认 30 秒），保证在同一 TTL 周期内稳定命中。
 // forceRefresh=true 时跳过缓存读取（仍写回），用于用户主动刷新页面等需要最新数据的场景。
-// 典型用途：首页“累计 Token”这类全表聚合，代价高但对新鲜度要求低。
+// 典型用途：首页“累计 Token/成本”这类全表聚合，代价高但对新鲜度要求低。
 func (sc *StatsCache) GetStatsLiteWithTTL(ctx context.Context, startTime, endTime time.Time, filter *model.LogFilter, ttl time.Duration, forceRefresh bool) ([]model.StatsEntry, error) {
 	key := buildCacheKeyWithBucket("stats_lite_ttl", startTime, endTime, filter, ttl)
 
