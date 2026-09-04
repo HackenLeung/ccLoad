@@ -819,6 +819,8 @@ window.I18N_LOCALES['en'] = {
   'logs.colCacheRead': 'Cache Read',
   'logs.colCacheWrite': 'Cache Write',
   'logs.colCacheUtil': 'Cache Hit',
+  'logs.colContext': 'Context',
+  'logs.ctxWindowGuess': 'window estimated from usage',
   'logs.colCost': 'Cost',
   'logs.colMessage': 'Message',
   'logs.colSettings': 'Column visibility settings',

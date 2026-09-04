@@ -272,6 +272,54 @@
       color: var(--neutral-500);
     }
 
+    /* 上下文占用：单元格内填充条，占用比例直接由色块面积体现 */
+    .ctx-usage {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 4px;
+      padding: 2px 5px;
+      border: 1px solid var(--neutral-200);
+      border-radius: 4px;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+      background: linear-gradient(to right,
+          var(--ctx-tint, transparent) var(--ctx-pct, 0%),
+          transparent var(--ctx-pct, 0%));
+    }
+
+    .ctx-pct {
+      font-weight: 700;
+      font-size: 0.95em;
+    }
+
+    .ctx-abs {
+      font-size: 0.78em;
+      color: var(--neutral-500);
+      white-space: nowrap;
+      /* 极端字号下截断而不是撑破单元格 */
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .ctx-usage.ctx-low {
+      --ctx-tint: rgba(5, 150, 105, 0.22);
+      border-color: rgba(5, 150, 105, 0.35);
+      color: var(--success-600);
+    }
+
+    .ctx-usage.ctx-mid {
+      --ctx-tint: rgba(217, 119, 6, 0.24);
+      border-color: rgba(217, 119, 6, 0.42);
+      color: var(--warning-600);
+    }
+
+    .ctx-usage.ctx-high {
+      --ctx-tint: rgba(220, 38, 38, 0.22);
+      border-color: rgba(220, 38, 38, 0.42);
+      color: var(--error-600);
+    }
+
     .stream-flag {
       display: inline-block;
       margin-left: 6px;
@@ -826,8 +874,17 @@
         order: 15;
       }
 
-      .logs-table .logs-col-cost {
+      .logs-table .logs-col-context {
         order: 16;
+      }
+
+      /* 卡片布局里 flex item 会被内容压窄，给填充条留出可读宽度 */
+      .logs-table .logs-col-context .ctx-usage {
+        min-width: 96px;
+      }
+
+      .logs-table .logs-col-cost {
+        order: 17;
       }
 
       .logs-table .logs-col-message {
@@ -851,6 +908,7 @@
       .logs-table .logs-col-cache-read,
       .logs-table .logs-col-cache-write,
       .logs-table .logs-col-cache-util,
+      .logs-table .logs-col-context,
       .logs-table .logs-col-cost,
       .logs-table .logs-col-message {
         display: flex !important;
@@ -875,6 +933,7 @@
       .logs-table .logs-col-cache-read::before,
       .logs-table .logs-col-cache-write::before,
       .logs-table .logs-col-cache-util::before,
+      .logs-table .logs-col-context::before,
       .logs-table .logs-col-cost::before,
       .logs-table .logs-col-message::before {
         width: auto !important;
@@ -1036,6 +1095,14 @@
       /* 缓存命中 */
       min-width: 70px;
       max-width: 70px;
+      padding-right: var(--space-2);
+    }
+
+    .logs-table .logs-col-context {
+      width: 112px;
+      /* 上下文: 填充条 + ~100% + 绝对值 */
+      min-width: 112px;
+      max-width: 112px;
       padding-right: var(--space-2);
     }
 

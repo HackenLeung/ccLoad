@@ -818,6 +818,8 @@ window.I18N_LOCALES['zh-CN'] = {
   'logs.colCacheRead': '缓存读',
   'logs.colCacheWrite': '缓存建',
   'logs.colCacheUtil': '缓存命中',
+  'logs.colContext': '上下文',
+  'logs.ctxWindowGuess': '窗口按用量推测',
   'logs.colCost': '成本',
   'logs.colMessage': '信息',
   'logs.colSettings': '列显隐设置',

@@ -41,6 +41,7 @@ const LOG_COLUMNS = [
   { key: 'cacheRead',   cls: 'logs-col-cache-read',  i18n: 'logs.colCacheRead' },
   { key: 'cacheWrite',  cls: 'logs-col-cache-write', i18n: 'logs.colCacheWrite' },
   { key: 'cacheUtil',   cls: 'logs-col-cache-util',  i18n: 'logs.colCacheUtil' },
+  { key: 'context',     cls: 'logs-col-context',     i18n: 'logs.colContext' },
   { key: 'cost',        cls: 'logs-col-cost',        i18n: 'logs.colCost' },
   { key: 'message',     cls: 'logs-col-message',     i18n: 'logs.colMessage' },
 ];
@@ -619,6 +620,7 @@ function getLogMobileLabels() {
     cacheRead: escapeHtml(t('logs.colCacheRead')),
     cacheWrite: escapeHtml(t('logs.colCacheWrite')),
     cacheUtil: escapeHtml(t('logs.colCacheUtil')),
+    context: escapeHtml(t('logs.colContext')),
     cost: escapeHtml(t('logs.colCost')),
     message: escapeHtml(t('logs.colMessage'))
   };
@@ -1044,6 +1046,7 @@ function renderActiveRequests(activeRequests) {
             <td class="logs-col-cache-read mobile-empty-cell" data-mobile-label="${logMobileLabels.cacheRead}" style="text-align: right; white-space: nowrap;"></td>
             <td class="logs-col-cache-write mobile-empty-cell" data-mobile-label="${logMobileLabels.cacheWrite}" style="text-align: right; white-space: nowrap;"></td>
             <td class="logs-col-cache-util mobile-empty-cell" data-mobile-label="${logMobileLabels.cacheUtil}" style="text-align: right; white-space: nowrap;"></td>
+            <td class="logs-col-context mobile-empty-cell" data-mobile-label="${logMobileLabels.context}" style="text-align: right; white-space: nowrap;"></td>
             <td class="logs-col-cost mobile-empty-cell" data-mobile-label="${logMobileLabels.cost}" style="text-align: right; white-space: nowrap;"></td>
             <td class="logs-col-message" data-mobile-label="${logMobileLabels.message}">${infoContent}</td>
           `;
@@ -1065,7 +1068,7 @@ function getTableColspan() {
   const table = document.getElementById('tbody')?.closest('table')
     || document.querySelector('.logs-table');
   const headerCells = table ? table.querySelectorAll('thead th') : [];
-  return headerCells.length || 17; // fallback到17列（日志页默认列数）
+  return headerCells.length || 18; // fallback到18列（日志页默认列数）
 }
 
 function formatCacheUtilRate(inputTokens, cacheReadTokens, cacheCreationTokens) {
@@ -1076,6 +1079,68 @@ function formatCacheUtilRate(inputTokens, cacheReadTokens, cacheCreationTokens) 
   if (denom <= 0 || r <= 0) return '';
   const pct = (r / denom) * 100;
   return `<span class="token-metric-value" style="color: var(--success-600);">${pct.toFixed(1)}%</span>`;
+}
+
+// === 上下文占用 ===
+// 上游 usage 的 input_tokens 只是非缓存增量（proxy_sse_parser.go 已做语义归一化），
+// 真实上下文水位 = 输入 + 缓存读 + 缓存建。Claude Code 这类客户端每轮重发全量对话，
+// 所以单条日志的这个和就是该请求发出时的上下文占用；日志倒序，第一行即当前状态。
+
+// GENERIC_CONTEXT_TIERS 是认不出系列时的兜底阶梯：取第一个装得下水位的档位当分母。
+// 分母偏小 → 百分比偏保守（宁可让人觉得更满），且随用量增长会自动收敛到真实档位。
+const GENERIC_CONTEXT_TIERS = [128000, 200000, 256000, 400000, 1000000, 2097152];
+
+// resolveContextWindowTiers 返回模型的上下文窗口档位（tokens，升序）以及该档位是否为兜底推测。
+// 注意：logs 表没有记录 anthropic-beta 头，claude 只能默认按 200K 起算，
+// 实测水位超出时才升到 1M（context-1m），这是唯一能自我纠正的信号。
+function resolveContextWindowTiers(model) {
+  const m = String(model || '').toLowerCase();
+  if (!m) return { tiers: [], inferred: false };
+  if (m.includes('gemini')) return { tiers: [1048576, 2097152], inferred: false };
+  if (m.includes('codex') || m.includes('gpt-5') || m.includes('gpt-4.1')) {
+    return { tiers: [400000], inferred: false };
+  }
+  if (m.includes('claude')) {
+    const marked1m = m.includes('[1m]') || m.includes('-1m') || m.includes('context-1m');
+    return { tiers: marked1m ? [1000000] : [200000, 1000000], inferred: false };
+  }
+  // 其余模型（GLM/DeepSeek/Qwen/中转自定义名等）窗口无从得知，走兜底阶梯并标记为推测
+  return { tiers: GENERIC_CONTEXT_TIERS, inferred: true };
+}
+
+// fitContextWindow 取第一个装得下实测水位的档位；全都装不下就以实测值为满格，避免出现 >100%。
+function fitContextWindow(used, tiers) {
+  for (const tier of tiers) {
+    if (used <= tier) return tier;
+  }
+  return tiers.length > 0 ? used : 0;
+}
+
+function buildContextUsageDisplay(entry) {
+  const used = (Number(entry?.input_tokens) || 0)
+    + (Number(entry?.cache_read_input_tokens) || 0)
+    + (Number(entry?.cache_creation_input_tokens) || 0);
+  if (used <= 0) return '';
+
+  const label = t('logs.colContext');
+  // 窗口要按实际转发的上游模型判断：配了模型重定向时 model 只是对外名，actual_model 才是真正处理请求的模型
+  const { tiers, inferred } = resolveContextWindowTiers(entry?.actual_model || entry?.model);
+  const win = fitContextWindow(used, tiers);
+  if (win <= 0) {
+    // 连模型名都没有：只给紧凑绝对值
+    const unknownTitle = `${label}: ${used.toLocaleString()}`;
+    return `<span class="token-metric-value" title="${escapeHtml(unknownTitle)}">${escapeHtml(formatNumber(used))}</span>`;
+  }
+
+  const pct = Math.min(100, (used / win) * 100);
+  const level = pct >= 85 ? 'high' : pct >= 60 ? 'mid' : 'low';
+  // 分母是兜底推测来的只在 hover 里说明，列内不加标记
+  const hint = inferred ? ` · ${t('logs.ctxWindowGuess')}` : '';
+  const title = `${label}: ${used.toLocaleString()} / ${win.toLocaleString()} (${pct.toFixed(1)}%)${hint}`;
+  return `<span class="ctx-usage ctx-${level}" title="${escapeHtml(title)}" style="--ctx-pct: ${pct.toFixed(1)}%">`
+    + `<span class="ctx-pct">${Math.round(pct)}%</span>`
+    + `<span class="ctx-abs">${escapeHtml(formatNumber(used))}</span>`
+    + '</span>';
 }
 
 function renderLogsLoading() {
@@ -1223,6 +1288,7 @@ function renderLogs(data) {
       entry.cache_creation_input_tokens
     );
     const messageContent = buildLogMessageContent(entry);
+    const contextUsageDisplay = buildContextUsageDisplay(entry);
 
     // === 直接拼接行 HTML ===
     htmlParts[i] = `<tr class="mobile-card-row logs-table-row">
@@ -1241,6 +1307,7 @@ function renderLogs(data) {
           <td class="logs-col-cache-read${cacheReadDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.cacheRead}" style="text-align: right; white-space: nowrap;">${cacheReadDisplay}</td>
           <td class="logs-col-cache-write${cacheCreationDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.cacheWrite}" style="text-align: right; white-space: nowrap;">${cacheCreationDisplay}</td>
           <td class="logs-col-cache-util${cacheUtilDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.cacheUtil}" style="text-align: right; white-space: nowrap;">${cacheUtilDisplay}</td>
+          <td class="logs-col-context${contextUsageDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.context}" style="text-align: right; white-space: nowrap;">${contextUsageDisplay}</td>
           <td class="logs-col-cost${costDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.cost}" style="text-align: right; white-space: nowrap;">${costDisplay}</td>
           <td class="logs-col-message${messageContent ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.message}" style="max-width: 300px; word-break: break-word;">${messageContent}</td>
         </tr>`;
