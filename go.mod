@@ -59,6 +59,11 @@ require (
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
+	github.com/tidwall/gjson v1.19.0
+	github.com/tidwall/match v1.2.0
+	github.com/tidwall/pretty v1.2.1
+	github.com/tidwall/sjson v1.2.5
 	golang.org/x/sys v0.45.0 // indirect
 )
