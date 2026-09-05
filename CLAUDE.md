@@ -23,6 +23,7 @@ golangci-lint run ./...   # 提交前必须零警告
 - YAGNI,拒绝过度工程;Fail-Fast:配置错误 `log.Fatal()` 退出
 - Context:`defer cancel()` 无条件调用,用 `context.AfterFunc` 监听取消
 - lint 启用 errcheck/govet/staticcheck/unused/revive/bodyclose(gosec 已禁)
+- 管理页面需要用户选择时，使用项目现有样式的自定义弹窗和可点击选项；不要使用原生 `prompt`，也不要要求用户输入编号。
 
 ## 架构与入口
 

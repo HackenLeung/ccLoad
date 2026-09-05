@@ -2533,7 +2533,8 @@ function areModelRowsEqual(left, right) {
 async function fetchModelsFromAPI() {
   const channelUrl = getValidInlineURLs()[0] || '';
   const channelType = document.querySelector('input[name="channelType"]:checked')?.value || 'anthropic';
-  const firstValidKey = (getValidInlineKeyRows()[0] || {}).api_key || '';
+  const validKeyRows = getValidInlineKeyRows();
+  let selectedKeyIndex = 0;
 
   if (!channelUrl) {
     if (window.showError) {
@@ -2544,7 +2545,7 @@ async function fetchModelsFromAPI() {
     return;
   }
 
-  if (!firstValidKey) {
+  if (validKeyRows.length === 0) {
     if (window.showError) {
       window.showError(window.t('channels.addAtLeastOneKey'));
     } else {
@@ -2553,6 +2554,13 @@ async function fetchModelsFromAPI() {
     return;
   }
 
+  if (validKeyRows.length > 1) {
+    const maskKey = (key) => key.length <= 8 ? key : `${key.slice(0, 4)}...${key.slice(-4)}`;
+    selectedKeyIndex = await selectModelFetchKey(validKeyRows, maskKey);
+    if (selectedKeyIndex < 0) return;
+  }
+  const selectedKey = validKeyRows[selectedKeyIndex].api_key;
+
   const endpoint = '/admin/channels/models/fetch';
   const fetchOptions = {
     method: 'POST',
@@ -2560,7 +2568,7 @@ async function fetchModelsFromAPI() {
     body: JSON.stringify({
       channel_type: channelType,
       url: channelUrl,
-      api_key: firstValidKey
+      api_key: selectedKey
     })
   };
 
@@ -2613,79 +2621,65 @@ async function fetchModelsFromAPI() {
   }
 }
 
-// 常用模型配置
-const COMMON_MODELS = {
-  anthropic: [
-    'claude-haiku-4-5-20251001',
-    'claude-opus-4-8',
-    'claude-sonnet-5',
-    'claude-sonnet-4-6',
-  ],
-  codex: [
-    'gpt-5.4',
-    'gpt-5.4-mini',
-    'gpt-5.5',
-    'gpt-5.6-sol',
-    'gpt-5.6-luna',
-    'gpt-5.6-terra'
-  ],
-  openai: [
-    'gpt-4o',
-    'gpt-5.4',
-    'gpt-5.4-mini',
-    'gpt-5.5',
-    'grok-4.5'
-  ],
-  gemini: [
-    'gemini-3.5-flash',
-    'gemini-2.5-pro',
-    'gemini-3.1-flash-lite',
-    'gemini-3.1-pro'
-  ]
-};
+function selectModelFetchKey(rows, maskKey) {
+  return new Promise(resolve => {
+    const modal = document.getElementById('modelFetchKeyModal');
+    const options = document.getElementById('modelFetchKeyOptions');
+    const close = document.getElementById('modelFetchKeyClose');
+    if (!modal || !options) return resolve(0);
+    options.innerHTML = rows.map((row, index) =>
+      `<button type="button" class="btn btn-secondary" data-key-index="${index}">Key ${index + 1} · ${maskKey(row.api_key)}</button>`
+    ).join('');
+    const finish = index => { modal.classList.remove('show'); resolve(index); };
+    options.querySelectorAll('[data-key-index]').forEach(button => button.addEventListener('click', () => finish(Number(button.dataset.keyIndex)), { once: true }));
+    close.onclick = () => finish(-1);
+    modal.onclick = event => { if (event.target === modal) finish(-1); };
+    modal.classList.add('show');
+    options.querySelector('button')?.focus();
+  });
+}
 
 function addCommonModels() {
   const channelType = document.querySelector('input[name="channelType"]:checked')?.value || 'anthropic';
-  const commonModels = COMMON_MODELS[channelType];
-
-  if (!commonModels || commonModels.length === 0) {
-    if (window.showWarning) {
-      window.showWarning(window.t('channels.noPresetModels', { type: channelType }));
-    } else {
-      window.showAlertDialog({ message: window.t('channels.noPresetModels', { type: channelType }) });
-    }
-    return;
+  const storageKey = `ccload.favoriteModels.${channelType}`;
+  let commonModels;
+  try { commonModels = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { commonModels = []; }
+  if (!Array.isArray(commonModels)) commonModels = [];
+  const modal = document.getElementById('favoriteModelsModal');
+  const options = document.getElementById('favoriteModelsOptions');
+  const input = document.getElementById('favoriteModelInput');
+  const add = document.getElementById('favoriteModelAdd');
+  if (!modal || !options) return;
+  const save = () => localStorage.setItem(storageKey, JSON.stringify(commonModels));
+  const render = () => {
+    options.replaceChildren(...commonModels.map((name, index) => {
+      const row = document.createElement('div'); row.draggable = true; row.style.display = 'flex'; row.style.gap = '8px'; row.dataset.index = index;
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-secondary'; button.textContent = name; button.style.flex = '1';
+      button.onclick = () => { const existing = new Set(redirectTableData.map(item => (item.model || '').toLowerCase())); if (!existing.has(name.toLowerCase())) { redirectTableData.push(normalizeEditorModelRow({ model: name })); renderRedirectTable(); markChannelFormDirty(); } close(); };
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn btn-secondary'; remove.textContent = '删除'; remove.onclick = () => { commonModels.splice(index, 1); save(); render(); };
+      row.append(button, remove); row.ondragstart = event => event.dataTransfer.setData('text/plain', index); row.ondragover = event => event.preventDefault(); row.ondrop = event => { const from = Number(event.dataTransfer.getData('text/plain')); const [moved] = commonModels.splice(from, 1); commonModels.splice(index, 0, moved); save(); render(); };
+      return row;
+    }));
+  };
+  const close = () => modal.classList.remove('show');
+  add.onclick = () => { const name = input.value.trim(); if (!name || commonModels.some(item => item.toLowerCase() === name.toLowerCase())) return; commonModels.push(name); input.value = ''; save(); render(); };
+  render();
+  modal.classList.add('show');
+  const closeButton = document.getElementById('favoriteModelsClose');
+  if (closeButton && closeButton.dataset.bound !== '1') {
+    closeButton.addEventListener('click', () => modal.classList.remove('show'));
+    closeButton.dataset.bound = '1';
   }
-
-  // 获取现有模型名称集合
-  const existingModels = new Set(
-    redirectTableData
-      .map(r => (r.model || '').trim().toLowerCase())
-      .filter(Boolean)
-  );
-
-  // 添加常用模型（不重复）
-  let addedCount = 0;
-  for (const modelName of commonModels) {
-    const modelKey = modelName.toLowerCase();
-    if (!existingModels.has(modelKey)) {
-      redirectTableData.push(normalizeEditorModelRow({ model: modelName }));
-      existingModels.add(modelKey);
-      addedCount++;
-    }
-  }
-
-  renderRedirectTable();
-  if (addedCount > 0) markChannelFormDirty();
-
-  if (window.showSuccess) {
-    window.showSuccess(window.t('channels.addedCommonModels', { count: addedCount }));
+  if (modal.dataset.bound !== '1') {
+    modal.addEventListener('click', event => {
+      if (event.target === modal) modal.classList.remove('show');
+    });
+    modal.dataset.bound = '1';
   }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    COMMON_MODELS,
     addCommonModels,
     getCommonPublicModelOptions,
     findPublicModelUpstreamConflicts,

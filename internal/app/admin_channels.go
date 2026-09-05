@@ -637,17 +637,37 @@ func (s *Server) handleAPIKeyToggle(c *gin.Context, disable bool) {
 	}
 
 	var req struct {
-		KeyIndex *int `json:"key_index"`
+		KeyIndex *int   `json:"key_index"`
+		APIKey   string `json:"api_key"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		RespondErrorMsg(c, http.StatusBadRequest, "key_index is required")
 		return
 	}
-	if req.KeyIndex == nil || *req.KeyIndex < 0 {
+	if req.KeyIndex == nil && strings.TrimSpace(req.APIKey) == "" {
 		RespondErrorMsg(c, http.StatusBadRequest, "invalid key_index")
 		return
 	}
-	keyIndex := *req.KeyIndex
+	keyIndex := -1
+	if strings.TrimSpace(req.APIKey) != "" {
+		keys, listErr := s.store.GetAPIKeys(c.Request.Context(), id)
+		if listErr != nil {
+			RespondErrorMsg(c, http.StatusNotFound, "api key not found")
+			return
+		}
+		for _, key := range keys {
+			if key.APIKey == req.APIKey {
+				keyIndex = key.KeyIndex
+				break
+			}
+		}
+	} else if *req.KeyIndex >= 0 {
+		keyIndex = *req.KeyIndex
+	}
+	if keyIndex < 0 {
+		RespondErrorMsg(c, http.StatusNotFound, "api key not found")
+		return
+	}
 
 	if _, err := s.store.GetAPIKey(c.Request.Context(), id, keyIndex); err != nil {
 		RespondErrorMsg(c, http.StatusNotFound, "api key not found")

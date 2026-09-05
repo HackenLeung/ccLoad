@@ -554,7 +554,7 @@
                     <path d="M8 1L10 5.5L15 6L11.5 9.5L12.5 14.5L8 12L3.5 14.5L4.5 9.5L1 6L6 5.5L8 1Z"
                       stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
                   </svg>
-                  <span data-i18n="channels.commonModels">常用模型</span>
+                  <span>我的常用模型</span>
                 </button>
                 <button type="button" class="btn btn-secondary btn-sm" data-action="fetch-models-from-api"
                   data-i18n-title="channels.fetchModelsTitle" title="从渠道API获取可用模型列表">
@@ -1200,6 +1200,24 @@
         <button type="button" class="btn btn-primary" id="genericConfirmOk"
           data-i18n="common.confirm">确认</button>
       </div>
+    </div>
+  </div>
+  <div id="favoriteModelsModal" class="modal">
+    <div class="modal-content modal-content--md">
+      <div class="modal-header"><h2 class="modal-title">我的常用模型</h2><button type="button" class="close-btn" id="favoriteModelsClose">&times;</button></div>
+      <p>点击模型添加到当前渠道。常用模型保存在本机浏览器中。</p>
+      <div class="form-actions" style="display:flex;gap:8px;margin-bottom:12px"><input id="favoriteModelInput" class="form-input" placeholder="输入模型名称"><button type="button" class="btn btn-primary" id="favoriteModelAdd">添加</button></div>
+      <div id="favoriteModelsOptions" class="form-actions" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+  </div>
+  <div id="modelFetchKeyModal" class="modal">
+    <div class="modal-content" style="max-width:480px">
+      <div class="modal-header">
+        <h2 class="modal-title">选择 API Key</h2>
+        <button type="button" class="close-btn" id="modelFetchKeyClose">&times;</button>
+      </div>
+      <p>请选择用于获取模型的 API Key：</p>
+      <div id="modelFetchKeyOptions" class="form-actions" style="display:flex;flex-direction:column;gap:8px"></div>
     </div>
   </div>
 

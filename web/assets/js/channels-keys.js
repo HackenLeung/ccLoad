@@ -1206,10 +1206,8 @@ function downloadExportKeys() {
 
 async function toggleKeyDisabled(index) {
   if (!editingChannelId) return;
-  if (channelFormDirty) {
-    window.showNotification(window.t('channels.saveBeforeToggleKeyDisabled'), 'error');
-    return;
-  }
+  const apiKey = getInlineKeyValue(index);
+  if (!apiKey || !apiKey.trim()) return;
 
   const keyCooldown = currentChannelKeyCooldowns.find(kc => kc.key_index === index);
   const isCurrentlyDisabled = keyCooldown && keyCooldown.disabled;
@@ -1219,7 +1217,7 @@ async function toggleKeyDisabled(index) {
     await fetchDataWithAuth(`/admin/channels/${editingChannelId}/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key_index: index })
+      body: JSON.stringify({ key_index: index, api_key: apiKey.trim() })
     });
 
     await refreshKeyCooldownStatus();
