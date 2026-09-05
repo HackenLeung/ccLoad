@@ -42,6 +42,15 @@ func (s *Server) runProxyAttemptLoop(
 			continue
 		}
 		result, err := s.tryChannelWithKeys(ctx, cfg, reqCtx, w)
+		// 记录路由决策，不记录 API Key。
+		if result != nil {
+			log.Printf("[PROXY_ATTEMPT] request=%d channel=%d name=%q status=%d action=%v succeeded=%t duration=%.3fs base_url=%q",
+				reqCtx.activeReqID, cfg.ID, cfg.Name, result.status, result.nextAction, result.succeeded,
+				result.duration, reqCtx.baseURL)
+		} else if err != nil {
+			log.Printf("[PROXY_ATTEMPT] request=%d channel=%d name=%q error=%v base_url=%q",
+				reqCtx.activeReqID, cfg.ID, cfg.Name, err, reqCtx.baseURL)
+		}
 		// 所有Key冷却：触发渠道级冷却(503)，防止后续请求重复尝试
 		// 使用 cooldownManager.HandleError 统一处理（DRY原则）
 		if err != nil && errors.Is(err, ErrAllKeysUnavailable) {
