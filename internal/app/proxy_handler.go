@@ -28,6 +28,20 @@ import (
 var errUnknownChannelType = errors.New("unknown channel type for path")
 var errBodyTooLarge = errors.New("request body too large")
 
+// errGetNotProxyable 表示 GET 请求打到了推理端点（/v1/responses、/v1/messages、
+// /v1/chat/completions 等），且拿不到模型名。
+//
+// 这类请求必须就地拒绝，不能进选路：
+//   - 上游对这些端点只接受 POST，转发上去一律 404/405；
+//   - 404（非 model_not_found）与 405 都被判为渠道级故障（util/classifier.go），
+//     会触发渠道冷却并计入健康度；
+//   - 早期实现把模型名兜底成通配符 "*"，而 "*" 在 configSupportsModel 里被特判为
+//     「所有渠道都支持」，于是一个探测请求会遍历同协议下的全部渠道，把它们逐个打进冷却。
+//
+// 真正需要本地响应的 GET（/v1/models、/v1beta/models）已由 handleSpecialRoutes 拦下；
+// 路径里带模型名的 GET 由 extractModelFromPath 正常取到模型名，不走这里。
+var errGetNotProxyable = errors.New("GET request is not proxyable to upstream")
+
 // ErrAllKeysUnavailable 表示所有渠道密钥都不可用
 var ErrAllKeysUnavailable = errors.New("all channel keys unavailable")
 
@@ -121,13 +135,12 @@ func parseIncomingRequest(c *gin.Context) (string, []byte, bool, error) {
 		originalModel = extractModelFromPath(requestPath)
 	}
 
-	// 对于GET请求，如果无法提取模型名称，使用通配符
+	// GET 请求拿不到模型名：不进选路、不转发上游（详见 errGetNotProxyable）
 	if originalModel == "" {
 		if requestMethod == http.MethodGet {
-			originalModel = "*"
-		} else {
-			return "", nil, false, fmt.Errorf("invalid JSON or missing model")
+			return "", nil, false, errGetNotProxyable
 		}
+		return "", nil, false, fmt.Errorf("invalid JSON or missing model")
 	}
 
 	return originalModel, all, isStreaming, nil
@@ -330,6 +343,10 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, errBodyTooLarge) {
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, errGetNotProxyable) {
+			s.rejectNonProxyableGet(c)
 			return
 		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -552,6 +569,37 @@ func (s *Server) writeCandidateRejection(
 		})
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no available upstream (all cooled or none)"})
 	}
+}
+
+// rejectNonProxyableGet 就地拒绝打到推理端点的 GET 请求（详见 errGetNotProxyable）。
+//
+// 不选路、不转发、不冷却、不计健康度；仍写一条 ChannelID=0 的日志，
+// 便于在日志页按 IP/令牌定位是哪个客户端在发这类请求
+// （channel_id=0 的记录被 GetChannelSuccessRates/GetDistinctModels 的
+// `channel_id > 0` 条件排除，不会污染健康度与模型下拉框）。
+//
+// LogEntry 没有路径字段，方法与路径写进 Message；路径由客户端完全控制，
+// 用 truncateErr 截断，避免超长 URL 放大日志存储。
+func (s *Server) rejectNonProxyableGet(c *gin.Context) {
+	tokenID, _ := c.Get("token_id")
+	tokenIDInt64, _ := tokenID.(int64)
+	target := truncateErr(fmt.Sprintf("%s %s", c.Request.Method, c.Request.URL.Path))
+
+	s.AddLogAsync(&model.LogEntry{
+		Time:        model.JSONTime{Time: time.Now()},
+		LogSource:   model.LogSourceProxy,
+		AuthTokenID: tokenIDInt64,
+		StatusCode:  http.StatusMethodNotAllowed,
+		Message:     fmt.Sprintf("local reject: %s (inference endpoint accepts POST only)", target),
+		ClientIP:    c.ClientIP(),
+	})
+
+	c.Header("Allow", "POST")
+	c.JSON(http.StatusMethodNotAllowed, gin.H{"error": gin.H{
+		"message": fmt.Sprintf("Invalid method (%s): this endpoint accepts POST only", target),
+		"type":    "invalid_request_error",
+		"code":    "method_not_allowed",
+	}})
 }
 
 func (s *Server) filterGlobalDisabledModelCandidates(candidates []*model.Config, originalModel, clientProtocol string) ([]*model.Config, bool) {

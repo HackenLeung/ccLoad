@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,33 @@ func TestHandleProxyRequest_UnknownPathReturns404(t *testing.T) {
 
 	if body := w.Body.String(); !bytes.Contains([]byte(body), []byte("unsupported path")) {
 		t.Fatalf("响应内容缺少错误信息，实际: %s", body)
+	}
+}
+
+// TestHandleProxyRequest_GetOnInferenceEndpointReturns405 验证打到推理端点的 GET 请求
+// 在选路之前就被拒绝：返回 405 + Allow: POST，而不是进入渠道尝试。
+//
+// 无渠道时若未拦截，走完选路会得到 503 "no available upstream"，
+// 因此 405 足以证明拦截发生在 parseIncomingRequest 阶段（不转发、不冷却）。
+func TestHandleProxyRequest_GetOnInferenceEndpointReturns405(t *testing.T) {
+	srv := newInMemoryServer(t)
+
+	for _, path := range []string{"/v1/responses", "/v1/messages", "/v1/chat/completions"} {
+		t.Run(path, func(t *testing.T) {
+			c, w := newTestContext(t, newRequest(http.MethodGet, path, nil))
+
+			srv.HandleProxyRequest(c)
+
+			if w.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("预期状态码405，实际%d，响应: %s", w.Code, w.Body.String())
+			}
+			if got := w.Header().Get("Allow"); got != "POST" {
+				t.Fatalf("预期 Allow: POST，实际 %q", got)
+			}
+			if body := w.Body.String(); !strings.Contains(body, "method_not_allowed") {
+				t.Fatalf("响应体缺少 method_not_allowed，实际: %s", body)
+			}
+		})
 	}
 }
 
@@ -109,12 +137,12 @@ func TestParseIncomingRequest_ValidJSON(t *testing.T) {
 			expectError:  false,
 		},
 		{
-			name:         "GET请求-无模型使用通配符",
+			name:         "GET请求-无模型直接拒绝",
 			body:         "",
 			path:         "/v1/models",
-			expectModel:  "*",
+			expectModel:  "",
 			expectStream: false,
-			expectError:  false,
+			expectError:  true,
 		},
 	}
 
