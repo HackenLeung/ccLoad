@@ -4,6 +4,7 @@ package cooldown
 import (
 	"context"
 	"log"
+	"strconv"
 	"time"
 
 	"ccLoad/internal/model"
@@ -21,6 +22,22 @@ const (
 	ActionReturnClient               // ActionReturnClient 表示直接返回给客户端
 	ActionSkipChannel                // ActionSkipChannel 表示跳过当前渠道（容量/限额类 413）、不写入任何冷却
 )
+
+// String 让 Action 在日志与测试失败信息里显示名称而非 iota 整数。
+func (a Action) String() string {
+	switch a {
+	case ActionRetryKey:
+		return "RetryKey"
+	case ActionRetryChannel:
+		return "RetryChannel"
+	case ActionReturnClient:
+		return "ReturnClient"
+	case ActionSkipChannel:
+		return "SkipChannel"
+	default:
+		return "Action(" + strconv.Itoa(int(a)) + ")"
+	}
+}
 
 // NoKeyIndex 表示错误与特定Key无关（网络错误、DNS解析失败等）。
 // 用于 HandleError 的 keyIndex 参数。

@@ -945,6 +945,9 @@ func (s *Server) attemptKeyAcrossURLs(
 
 func (s *Server) tryChannelWithKeys(ctx context.Context, cfg *model.Config, reqCtx *proxyRequestContext, w http.ResponseWriter) (*proxyResult, error) {
 	reqCtx.channelStartTime = time.Now()
+	// 每个渠道进入时重置：baseURL 只在 forwardAttempt 内赋值，
+	// 不清空会让「未发起转发就失败」的渠道沿用上一个渠道的 URL。
+	reqCtx.baseURL = ""
 
 	// Fail-fast：ctx 已结束（客户端断开/请求超时）时不要再做任何 I/O（查库、选Key、发请求）。
 	if ctxErr := ctx.Err(); ctxErr != nil {
