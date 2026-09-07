@@ -249,6 +249,14 @@ function renderProtocolCapabilityOptions(rawCapabilities) {
 }
 
 function syncProtocolCapabilityVisibility() {
+	const transport = document.getElementById('channelResponsesTransport');
+	const transportWrapper = document.getElementById('channelResponsesTransportWrapper');
+	if (transport && transportWrapper) {
+		const base = document.querySelector('input[name="channelType"]:checked')?.value || 'anthropic';
+		const nativeResponses = base === 'codex' || (getSelectedProtocolTransformMode() === 'upstream' && getSelectedProtocolTransforms(base).includes('codex'));
+		transportWrapper.hidden = !nativeResponses;
+		if (!nativeResponses) transport.value = 'http';
+	}
   const panel = document.getElementById('protocolCapabilitiesPanel');
   if (!panel) return;
   const channelType = document.querySelector('input[name="channelType"]:checked')?.value || 'anthropic';
@@ -570,6 +578,8 @@ async function showAddModal() {
 
   invokeChannelEditorAction('resetCustomRulesState', null);
   setNewChannelProxyDefaults();
+	const transport = document.getElementById('channelResponsesTransport');
+	if (transport) transport.value = 'http';
 
   resetChannelFormDirty();
   document.getElementById('channelModal').classList.add('show');
@@ -655,6 +665,9 @@ async function editChannel(id) {
   invokeChannelEditorAction('resetCustomRulesState', channel.custom_request_rules || null);
 
   setChannelProxyFormValue(channel.proxy_url);
+  const transport = document.getElementById('channelResponsesTransport');
+  if (transport) transport.value = channel.responses_transport || 'http';
+  syncProtocolCapabilityVisibility();
 
   resetChannelFormDirty();
   document.getElementById('channelModal').classList.add('show');
@@ -902,6 +915,7 @@ async function saveChannel(event) {
     api_keys: validKeyRows.map(row => ({ api_key: row.api_key, note: row.note || '' })),
     channel_type: channelType,
     protocol_transform_mode: getSelectedProtocolTransformMode(),
+	responses_transport: document.getElementById('channelResponsesTransport')?.value || 'http',
     protocol_transforms: getSelectedProtocolTransforms(channelType),
     protocol_capabilities: getSelectedProtocolCapabilities(channelType),
     key_strategy: keyStrategy,
@@ -1612,6 +1626,9 @@ async function copyChannel(id, name) {
   syncScheduledCheckModelState();
 
   setChannelProxyFormValue(channel.proxy_url);
+  const transport = document.getElementById('channelResponsesTransport');
+  if (transport) transport.value = channel.responses_transport || 'http';
+  syncProtocolCapabilityVisibility();
 
   resetChannelFormDirty();
   document.getElementById('channelModal').classList.add('show');

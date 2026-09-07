@@ -6,17 +6,21 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
 type responsesWebsocketSession struct {
+	upstream           *responsesWSConnection
+	routingOrder       string
 	lastRequest        []byte
 	lastResponseOutput []byte
 	lastResponseID     string
 	streamID           string
 	pendingToolCallIDs []string
+	outcomeUnknown     atomic.Bool
 }
 
 func newResponsesWebsocketSession() *responsesWebsocketSession {
@@ -27,6 +31,9 @@ func (s *responsesWebsocketSession) normalizeRequest(payload []byte) ([]byte, er
 	if !gjson.ValidBytes(payload) {
 		return nil, errors.New("invalid websocket request JSON")
 	}
+	if s.outcomeUnknown.Load() {
+		return nil, errResponsesWSOutcomeUnknown
+	}
 	if streamID := strings.TrimSpace(gjson.GetBytes(payload, "stream_id").String()); streamID != "" {
 		s.streamID = streamID
 	}
@@ -35,6 +42,9 @@ func (s *responsesWebsocketSession) normalizeRequest(payload []byte) ([]byte, er
 		return nil, fmt.Errorf("unsupported websocket request type %q", requestType)
 	}
 	if len(s.lastRequest) == 0 {
+		if strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String()) != "" {
+			return nil, errors.New("previous response is not available on this connection; replay the full conversation")
+		}
 		if requestType != responsesWebsocketRequestCreate {
 			return nil, errors.New("response.append received before response.create")
 		}
@@ -60,7 +70,7 @@ func (s *responsesWebsocketSession) normalizeRequest(payload []byte) ([]byte, er
 		return enforceResponsesWebsocketTranscriptLimit(normalized)
 	}
 
-	if previousID == "" && inputContainsCompletedTranscript(nextInput) {
+	if previousID == "" && requestType != responsesWebsocketRequestAppend {
 		normalized, err := normalizeReplacementResponsesWebsocketRequest(payload, s.lastRequest)
 		if err != nil {
 			return nil, err
@@ -114,8 +124,16 @@ func normalizeInitialResponsesWebsocketRequest(payload []byte) ([]byte, error) {
 	if modelName == "" {
 		return nil, errors.New("missing model in response.create request")
 	}
-	if !gjson.GetBytes(payload, "input").Exists() {
-		return nil, errors.New("missing input in response.create request")
+	input := gjson.GetBytes(payload, "input")
+	if !input.IsArray() && input.Type != gjson.String {
+		return nil, errors.New("response.create requires an array or string input")
+	}
+	if input.Type == gjson.String {
+		var err error
+		payload, err = sjson.SetBytes(payload, "input", []map[string]string{{"role": "user", "content": input.String()}})
+		if err != nil {
+			return nil, err
+		}
 	}
 	normalized, err := sjson.DeleteBytes(payload, "type")
 	if err != nil {
@@ -131,6 +149,26 @@ func normalizeInitialResponsesWebsocketRequest(payload []byte) ([]byte, error) {
 }
 
 func normalizeReplacementResponsesWebsocketRequest(payload []byte, lastRequest []byte) ([]byte, error) {
+	var current, previous map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &current); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(lastRequest, &previous); err != nil {
+		return nil, err
+	}
+	for key, value := range previous {
+		if key == "input" || key == "previous_response_id" || key == "type" || key == "stream_id" || key == "generate" {
+			continue
+		}
+		if _, exists := current[key]; !exists {
+			current[key] = value
+		}
+	}
+	var marshalErr error
+	payload, marshalErr = json.Marshal(current)
+	if marshalErr != nil {
+		return nil, marshalErr
+	}
 	normalized, err := sjson.DeleteBytes(payload, "type")
 	if err != nil {
 		return nil, fmt.Errorf("remove websocket event type: %w", err)
@@ -197,51 +235,6 @@ func mergeResponsesWebsocketInput(parts ...gjson.Result) ([]byte, error) {
 		return nil, fmt.Errorf("marshal websocket transcript: %w", err)
 	}
 	return merged, nil
-}
-
-func inputContainsCompletedTranscript(input gjson.Result) bool {
-	if !input.IsArray() {
-		return false
-	}
-	for _, item := range input.Array() {
-		switch strings.TrimSpace(item.Get("type").String()) {
-		case "function_call", "custom_tool_call":
-			return true
-		case "message":
-			if strings.TrimSpace(item.Get("role").String()) == "assistant" {
-				return true
-			}
-		}
-		if strings.TrimSpace(item.Get("role").String()) == "assistant" {
-			return true
-		}
-		if strings.TrimSpace(item.Get("role").String()) == "user" && strings.HasPrefix(
-			responsesWebsocketMessageText(item),
-			codexLocalCompactionSummaryPrefix+"\n",
-		) {
-			return true
-		}
-	}
-	return false
-}
-
-const codexLocalCompactionSummaryPrefix = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:"
-
-func responsesWebsocketMessageText(message gjson.Result) string {
-	content := message.Get("content")
-	if content.Type == gjson.String {
-		return content.String()
-	}
-	if !content.IsArray() {
-		return ""
-	}
-	var text strings.Builder
-	for _, part := range content.Array() {
-		if part.Get("type").String() == "input_text" || part.Get("type").String() == "text" {
-			text.WriteString(part.Get("text").String())
-		}
-	}
-	return text.String()
 }
 
 func inputSatisfiesResponsesWebsocketToolCalls(input gjson.Result, pending []string) bool {

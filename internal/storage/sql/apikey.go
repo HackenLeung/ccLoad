@@ -308,8 +308,8 @@ func (s *SQLStore) ImportChannelBatch(ctx context.Context, channels []*model.Cha
 		var channelUpsertByNameSQL string
 		if s.IsSQLite() {
 			channelUpsertWithIDSQL = `
-					INSERT INTO channels(id, name, url, priority, rpm_limit, max_concurrency, channel_type, protocol_transform_mode, enabled, scheduled_check_enabled, scheduled_check_model, created_at, updated_at)
-					VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					INSERT INTO channels(id, name, url, priority, rpm_limit, max_concurrency, channel_type, protocol_transform_mode, enabled, scheduled_check_enabled, scheduled_check_model, responses_transport, created_at, updated_at)
+					VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT(id) DO UPDATE SET
 						name = excluded.name,
 						url = excluded.url,
@@ -321,10 +321,11 @@ func (s *SQLStore) ImportChannelBatch(ctx context.Context, channels []*model.Cha
 						enabled = excluded.enabled,
 						scheduled_check_enabled = excluded.scheduled_check_enabled,
 						scheduled_check_model = excluded.scheduled_check_model,
+						responses_transport = excluded.responses_transport,
 						updated_at = excluded.updated_at`
 			channelUpsertByNameSQL = `
-					INSERT INTO channels(name, url, priority, rpm_limit, max_concurrency, channel_type, protocol_transform_mode, enabled, scheduled_check_enabled, scheduled_check_model, created_at, updated_at)
-					VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					INSERT INTO channels(name, url, priority, rpm_limit, max_concurrency, channel_type, protocol_transform_mode, enabled, scheduled_check_enabled, scheduled_check_model, responses_transport, created_at, updated_at)
+					VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT(name) DO UPDATE SET
 						url = excluded.url,
 						priority = excluded.priority,
@@ -335,11 +336,12 @@ func (s *SQLStore) ImportChannelBatch(ctx context.Context, channels []*model.Cha
 						enabled = excluded.enabled,
 						scheduled_check_enabled = excluded.scheduled_check_enabled,
 						scheduled_check_model = excluded.scheduled_check_model,
+						responses_transport = excluded.responses_transport,
 						updated_at = excluded.updated_at`
 		} else {
 			channelUpsertWithIDSQL = `
-					INSERT INTO channels(id, name, url, priority, rpm_limit, max_concurrency, channel_type, protocol_transform_mode, enabled, scheduled_check_enabled, scheduled_check_model, created_at, updated_at)
-					VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					INSERT INTO channels(id, name, url, priority, rpm_limit, max_concurrency, channel_type, protocol_transform_mode, enabled, scheduled_check_enabled, scheduled_check_model, responses_transport, created_at, updated_at)
+					VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 					ON DUPLICATE KEY UPDATE
 						name = VALUES(name),
 						url = VALUES(url),
@@ -351,10 +353,11 @@ func (s *SQLStore) ImportChannelBatch(ctx context.Context, channels []*model.Cha
 						enabled = VALUES(enabled),
 						scheduled_check_enabled = VALUES(scheduled_check_enabled),
 						scheduled_check_model = VALUES(scheduled_check_model),
+						responses_transport = VALUES(responses_transport),
 						updated_at = VALUES(updated_at)`
 			channelUpsertByNameSQL = `
-					INSERT INTO channels(name, url, priority, rpm_limit, max_concurrency, channel_type, protocol_transform_mode, enabled, scheduled_check_enabled, scheduled_check_model, created_at, updated_at)
-					VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					INSERT INTO channels(name, url, priority, rpm_limit, max_concurrency, channel_type, protocol_transform_mode, enabled, scheduled_check_enabled, scheduled_check_model, responses_transport, created_at, updated_at)
+					VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 					ON DUPLICATE KEY UPDATE
 						url = VALUES(url),
 						priority = VALUES(priority),
@@ -365,6 +368,7 @@ func (s *SQLStore) ImportChannelBatch(ctx context.Context, channels []*model.Cha
 						enabled = VALUES(enabled),
 						scheduled_check_enabled = VALUES(scheduled_check_enabled),
 						scheduled_check_model = VALUES(scheduled_check_model),
+						responses_transport = VALUES(responses_transport),
 						updated_at = VALUES(updated_at)`
 		}
 
@@ -412,14 +416,14 @@ func (s *SQLStore) ImportChannelBatch(ctx context.Context, channels []*model.Cha
 				channelID = config.ID
 				_, err := channelStmtWithID.ExecContext(ctx,
 					config.ID, config.Name, config.URL, config.Priority,
-					config.RPMLimit, config.MaxConcurrency, channelType, protocolTransformMode, boolToInt(config.Enabled), boolToInt(config.ScheduledCheckEnabled), config.ScheduledCheckModel, nowUnix, nowUnix)
+					config.RPMLimit, config.MaxConcurrency, channelType, protocolTransformMode, boolToInt(config.Enabled), boolToInt(config.ScheduledCheckEnabled), config.ScheduledCheckModel, config.GetResponsesTransport(), nowUnix, nowUnix)
 				if err != nil {
 					return fmt.Errorf("import channel %s: %w", config.Name, err)
 				}
 			} else {
 				_, err := channelStmtByName.ExecContext(ctx,
 					config.Name, config.URL, config.Priority,
-					config.RPMLimit, config.MaxConcurrency, channelType, protocolTransformMode, boolToInt(config.Enabled), boolToInt(config.ScheduledCheckEnabled), config.ScheduledCheckModel, nowUnix, nowUnix)
+					config.RPMLimit, config.MaxConcurrency, channelType, protocolTransformMode, boolToInt(config.Enabled), boolToInt(config.ScheduledCheckEnabled), config.ScheduledCheckModel, config.GetResponsesTransport(), nowUnix, nowUnix)
 				if err != nil {
 					return fmt.Errorf("import channel %s: %w", config.Name, err)
 				}

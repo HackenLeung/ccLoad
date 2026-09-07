@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,7 +55,7 @@ func checkResponsesWebsocketOrigin(r *http.Request) bool {
 }
 
 // HandleResponsesWebsocket terminates the downstream Responses WebSocket.
-// Upstream execution remains HTTP/SSE in the first implementation phase.
+// Each selected channel chooses its own upstream transport.
 func (s *Server) HandleResponsesWebsocket(c *gin.Context) {
 	if !websocket.IsWebSocketUpgrade(c.Request) {
 		c.JSON(http.StatusUpgradeRequired, gin.H{"error": "websocket upgrade required"})
@@ -84,14 +85,36 @@ func (s *Server) HandleResponsesWebsocket(c *gin.Context) {
 		return conn.SetReadDeadline(time.Now().Add(responsesWebsocketIdleTimeout))
 	})
 	messages := readResponsesWebsocketMessages(connectionCtx, cancelConnection, conn)
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-connectionCtx.Done():
+				return
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(responsesWebsocketWriteTimeout)); err != nil {
+					cancelConnection()
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
 	session := newResponsesWebsocketSession()
+	defer session.closeUpstream()
+	var queued []responsesWebsocketInboundMessage
 
 	for {
 		var message responsesWebsocketInboundMessage
-		select {
-		case <-connectionCtx.Done():
-			return
-		case message = <-messages:
+		if len(queued) > 0 {
+			message, queued = queued[0], queued[1:]
+		} else {
+			select {
+			case <-connectionCtx.Done():
+				return
+			case message = <-messages:
+			}
 		}
 		if message.messageType != websocket.TextMessage {
 			if errWrite := writeResponsesWebsocketError(conn, "unsupported_frame", "only text websocket messages are supported"); errWrite != nil {
@@ -116,18 +139,69 @@ func (s *Server) HandleResponsesWebsocket(c *gin.Context) {
 				}
 				continue
 			}
-			turnResult, errTurn := s.executeResponsesWebsocketHTTPTurn(connectionCtx, c, conn, requestBody, session.responseStreamID())
+			turnResult, next, errTurn := s.executeResponsesWebsocketTurnWithControls(connectionCtx, c, conn, requestBody, session, messages)
+			queued = append(queued, next...)
 			if errTurn != nil {
+				if connectionCtx.Err() != nil {
+					return
+				}
 				if errWrite := writeResponsesWebsocketError(conn, "upstream_error", errTurn.Error()); errWrite != nil {
+					return
+				}
+				if session.outcomeUnknown.Load() {
 					return
 				}
 				continue
 			}
 			session.commit(requestBody, turnResult)
+		case "response.cancel":
+			if errWrite := writeResponsesWebsocketError(conn, "no_active_response", "no response is currently running"); errWrite != nil {
+				return
+			}
 		default:
 			if errWrite := writeResponsesWebsocketError(conn, "unsupported_event", "unsupported websocket request type"); errWrite != nil {
 				return
 			}
+		}
+	}
+}
+
+func (s *Server) executeResponsesWebsocketTurnWithControls(ctx context.Context, c *gin.Context, conn *websocket.Conn, body []byte, session *responsesWebsocketSession, messages <-chan responsesWebsocketInboundMessage) (responsesWebsocketTurnResult, []responsesWebsocketInboundMessage, error) {
+	turnCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type completedTurn struct {
+		result responsesWebsocketTurnResult
+		err    error
+	}
+	done := make(chan completedTurn, 1)
+	go func() {
+		result, err := s.executeResponsesWebsocketTurn(turnCtx, c, conn, body, session)
+		done <- completedTurn{result, err}
+	}()
+	var queued []responsesWebsocketInboundMessage
+	streamID := session.responseStreamID()
+	for {
+		select {
+		case completed := <-done:
+			return completed.result, queued, completed.err
+		case <-ctx.Done():
+			cancel()
+			<-done
+			return responsesWebsocketTurnResult{}, nil, ctx.Err()
+		case message := <-messages:
+			if message.messageType == websocket.TextMessage && gjson.ValidBytes(message.payload) && gjson.GetBytes(message.payload, "type").String() == "response.cancel" {
+				id := gjson.GetBytes(message.payload, "stream_id").String()
+				if id == "" || id == streamID {
+					cancel()
+					continue
+				}
+			}
+			if len(queued) >= 8 {
+				cancel()
+				<-done
+				return responsesWebsocketTurnResult{}, nil, errors.New("too many queued WebSocket requests")
+			}
+			queued = append(queued, message)
 		}
 	}
 }
@@ -169,7 +243,7 @@ type responsesWebsocketTurnResult struct {
 	pendingToolCallIDs  []string
 }
 
-func (s *Server) executeResponsesWebsocketHTTPTurn(ctx context.Context, c *gin.Context, conn *websocket.Conn, requestBody []byte, streamID string) (responsesWebsocketTurnResult, error) {
+func (s *Server) executeResponsesWebsocketTurn(ctx context.Context, c *gin.Context, conn *websocket.Conn, requestBody []byte, session *responsesWebsocketSession) (responsesWebsocketTurnResult, error) {
 	modelName := strings.TrimSpace(gjson.GetBytes(requestBody, "model").String())
 	if modelName == "" {
 		return responsesWebsocketTurnResult{}, errors.New("missing model in normalized websocket request")
@@ -206,12 +280,32 @@ func (s *Server) executeResponsesWebsocketHTTPTurn(ctx context.Context, c *gin.C
 	if len(candidates) == 0 {
 		return responsesWebsocketTurnResult{}, errors.New("no available upstream")
 	}
+	session.orderCandidates(candidates)
+	if generate := gjson.GetBytes(requestBody, "generate"); generate.Exists() && !generate.Bool() {
+		id := "resp_ccload_" + rand.Text()
+		for _, eventType := range []string{"response.created", "response.completed"} {
+			if err := conn.SetWriteDeadline(time.Now().Add(responsesWebsocketWriteTimeout)); err != nil {
+				return responsesWebsocketTurnResult{}, err
+			}
+			if err := conn.WriteJSON(gin.H{"type": eventType, "stream_id": session.responseStreamID(), "response": gin.H{"id": id, "status": "completed", "output": []any{}}}); err != nil {
+				return responsesWebsocketTurnResult{}, err
+			}
+		}
+		return responsesWebsocketTurnResult{completedResponseID: id, completedOutput: []byte("[]")}, nil
+	}
+	requestBody, err = sjson.DeleteBytes(requestBody, "generate")
+	if err != nil {
+		return responsesWebsocketTurnResult{}, err
+	}
 
 	startTime := time.Now()
 	tokenID, _ := c.Get("token_id")
 	tokenIDInt64, _ := tokenID.(int64)
 	activeID := s.activeRequests.Register(startTime, modelName, c.ClientIP(), true)
 	defer s.activeRequests.Remove(activeID)
+	ctx, cancelRequest := context.WithCancelCause(ctx)
+	defer cancelRequest(nil)
+	s.activeRequests.BindRequestCancel(activeID, cancelRequest)
 
 	header := responsesWebsocketUpstreamHeaders(c.Request.Header)
 	header.Set("Content-Type", "application/json")
@@ -233,6 +327,8 @@ func (s *Server) executeResponsesWebsocketHTTPTurn(ctx context.Context, c *gin.C
 		thinkingEffort: extractThinkingEffortFromJSON(requestBody),
 	}
 	reqCtx.observer = &ForwardObserver{
+		OnTransportSelected: func(info string) { s.activeRequests.SetTransportInfo(activeID, info) },
+		responsesSession:    session,
 		OnBytesRead: func(n int64) {
 			s.activeRequests.AddBytes(activeID, n)
 		},
@@ -244,10 +340,11 @@ func (s *Server) executeResponsesWebsocketHTTPTurn(ctx context.Context, c *gin.C
 		},
 	}
 
-	bridgeWriter := newResponsesWebsocketBridgeWriter(conn, streamID)
+	bridgeWriter := newResponsesWebsocketBridgeWriter(conn, session.responseStreamID())
 	lastResult, succeeded := s.runProxyAttemptLoop(ctx, candidates, reqCtx, bridgeWriter)
 	if succeeded {
 		if !bridgeWriter.completed {
+			session.outcomeUnknown.Store(true)
 			return responsesWebsocketTurnResult{}, errors.New("upstream stream closed before response.completed")
 		}
 		return responsesWebsocketTurnResult{
@@ -346,7 +443,6 @@ func (w *responsesWebsocketBridgeWriter) Write(data []byte) (int, error) {
 		if err := w.conn.SetWriteDeadline(time.Now().Add(responsesWebsocketWriteTimeout)); err != nil {
 			return 0, err
 		}
-		_ = w.conn.SetReadDeadline(time.Now().Add(responsesWebsocketIdleTimeout))
 		if err := w.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 			return 0, err
 		}

@@ -303,6 +303,11 @@ function buildActiveRequestInfoContent(req, elapsedSeconds) {
     content = `<span class="debug-log-link has-upstream-detail" data-active-request-id="${activeRequestId}" title="${escapeHtml(t('logs.debugLogTitle'))}">${infoHtml}</span>`;
   }
 
+  if (req?.transport_info) {
+    const upstream = req.transport_info.includes('upstream=ws') ? 'WS' : 'HTTP/SSE';
+    content += ` <span class="logs-mono-text" title="${escapeHtml(req.transport_info)}">WS &rarr; ${upstream}</span>`;
+  }
+
   const buttons = [];
 
   // 只读子请求没有独立 attempt，本来就取不到 can_skip/attempt_id；显式判 read_only 与下方取消按钮保持一致

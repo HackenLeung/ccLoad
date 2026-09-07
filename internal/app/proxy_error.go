@@ -191,7 +191,7 @@ func (s *Server) handleNetworkError(
 		s.updateTokenStatsForProxy(reqCtx, cfg, false, duration, res, actualModel)
 	}
 
-	if !shouldRetry {
+	if !shouldRetry || (res != nil && res.NoRetry) {
 		failure.nextAction = cooldown.ActionReturnClient
 		return failure, cooldown.ActionReturnClient
 	}

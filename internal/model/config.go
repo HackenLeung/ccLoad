@@ -210,7 +210,8 @@ type Config struct {
 	CustomRequestRules *CustomRequestRules `json:"custom_request_rules,omitempty"`
 
 	// 渠道级代理（http/https/socks5/socks5h），空串=环境变量代理
-	ProxyURL string `json:"proxy_url,omitempty"`
+	ProxyURL           string `json:"proxy_url,omitempty"`
+	ResponsesTransport string `json:"responses_transport"`
 
 	CreatedAt JSONTime `json:"created_at"` // 使用JSONTime确保序列化格式一致（RFC3339）
 	UpdatedAt JSONTime `json:"updated_at"` // 使用JSONTime确保序列化格式一致（RFC3339）
@@ -253,6 +254,7 @@ func (c *Config) Clone() *Config {
 		CostMultiplier:        c.CostMultiplier,
 		CustomRequestRules:    c.CustomRequestRules,
 		ProxyURL:              c.ProxyURL,
+		ResponsesTransport:    c.ResponsesTransport,
 		CreatedAt:             c.CreatedAt,
 		UpdatedAt:             c.UpdatedAt,
 		KeyCount:              c.KeyCount,

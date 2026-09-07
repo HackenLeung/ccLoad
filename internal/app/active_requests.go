@@ -34,9 +34,10 @@ type ActiveRequest struct {
 	ChannelName         string  `json:"channel_name,omitempty"`
 	ChannelType         string  `json:"channel_type,omitempty"` // 渠道类型（用于前端筛选）
 	UpstreamProtocol    string  `json:"upstream_protocol,omitempty"`
-	APIKeyUsed          string  `json:"api_key_used,omitempty"`           // 脱敏后的key
-	TokenID             int64   `json:"token_id,omitempty"`               // 令牌ID（用于前端筛选，0表示无令牌）
-	BaseURL             string  `json:"base_url,omitempty"`               // 当前使用的上游URL
+	APIKeyUsed          string  `json:"api_key_used,omitempty"` // 脱敏后的key
+	TokenID             int64   `json:"token_id,omitempty"`     // 令牌ID（用于前端筛选，0表示无令牌）
+	BaseURL             string  `json:"base_url,omitempty"`     // 当前使用的上游URL
+	TransportInfo       string  `json:"transport_info,omitempty"`
 	BytesReceived       int64   `json:"bytes_received,omitempty"`         // 上游已返回的字节数（快照）
 	ClientFirstByteTime float64 `json:"client_first_byte_time,omitempty"` // 客户端侧首字节响应时间（秒），流式请求有效
 	CostMultiplier      float64 `json:"cost_multiplier"`                  // 渠道成本倍率
@@ -63,6 +64,7 @@ type activeRequest struct {
 	APIKeyUsed       string
 	TokenID          int64
 	BaseURL          string
+	TransportInfo    string
 
 	CostMultiplier float64 // 渠道成本倍率
 	ThinkingEffort string
@@ -234,6 +236,15 @@ func (m *activeRequestManager) SetBaseURL(id int64, baseURL string) {
 	m.mu.Lock()
 	if req, ok := m.requests[id]; ok {
 		req.BaseURL = baseURL
+	}
+	m.mu.Unlock()
+}
+
+// SetTransportInfo exposes the selected Responses transport on an active request.
+func (m *activeRequestManager) SetTransportInfo(id int64, info string) {
+	m.mu.Lock()
+	if req, ok := m.requests[id]; ok {
+		req.TransportInfo = info
 	}
 	m.mu.Unlock()
 }
@@ -412,6 +423,7 @@ func (m *activeRequestManager) List() []*ActiveRequest {
 			APIKeyUsed:        req.APIKeyUsed,
 			TokenID:           req.TokenID,
 			BaseURL:           req.BaseURL,
+			TransportInfo:     req.TransportInfo,
 			BytesReceived:     req.bytesCounter.Load(),
 			CostMultiplier:    req.CostMultiplier,
 			DebugLogAvailable: req.debugCapture != nil,

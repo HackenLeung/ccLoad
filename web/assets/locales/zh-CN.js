@@ -316,6 +316,10 @@ window.I18N_LOCALES['zh-CN'] = {
   'channels.costMultiplier': '成本倍率',
   'channels.costMultiplierPlaceholder': '默认1',
   'channels.proxyURL': '代理',
+  'channels.responsesTransport': 'Responses 传输模式',
+  'channels.responsesTransportHTTP': 'HTTP/SSE 兼容',
+  'channels.responsesTransportPreferred': '原生 WebSocket 优先',
+  'channels.responsesTransportOnly': '仅原生 WebSocket',
   'channels.proxyURLPlaceholder': 'http:// | socks5://',
 
   // 删除确认（扁平化键名）

@@ -734,6 +734,14 @@
           data-i18n-placeholder="channels.proxyURLPlaceholder"
           placeholder="http:// | socks5://">
       </div>
+      <div id="channelResponsesTransportWrapper" class="form-group">
+        <label class="form-label" for="channelResponsesTransport" data-i18n="channels.responsesTransport">Responses 传输模式</label>
+        <select id="channelResponsesTransport" class="form-input">
+          <option value="http" data-i18n="channels.responsesTransportHTTP">HTTP/SSE 兼容</option>
+          <option value="websocket_preferred" data-i18n="channels.responsesTransportPreferred">原生 WebSocket 优先</option>
+          <option value="websocket_only" data-i18n="channels.responsesTransportOnly">仅原生 WebSocket</option>
+        </select>
+      </div>
       <div class="custom-rules-tabs" role="tablist">
         <button type="button" class="custom-rules-tab-button active" data-custom-rules-tab="headers"
           role="tab" aria-selected="true">

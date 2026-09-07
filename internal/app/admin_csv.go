@@ -44,7 +44,7 @@ func (s *Server) HandleExportChannelsCSV(c *gin.Context) {
 	writer := csv.NewWriter(buf)
 	defer writer.Flush()
 
-	header := []string{"id", "name", "api_key", "url", "priority", "rpm_limit", "max_concurrency", "models", "model_redirects", "model_protocol_aliases", "channel_type", "protocol_transforms", "protocol_transform_mode", "key_strategy", "enabled", "scheduled_check_enabled", "scheduled_check_model"}
+	header := []string{"id", "name", "api_key", "url", "priority", "rpm_limit", "max_concurrency", "models", "model_redirects", "model_protocol_aliases", "channel_type", "protocol_transforms", "protocol_transform_mode", "key_strategy", "enabled", "scheduled_check_enabled", "scheduled_check_model", "responses_transport"}
 	if err := writer.Write(header); err != nil {
 		RespondError(c, http.StatusInternalServerError, err)
 		return
@@ -116,6 +116,7 @@ func (s *Server) HandleExportChannelsCSV(c *gin.Context) {
 			strconv.FormatBool(cfg.Enabled),
 			strconv.FormatBool(cfg.ScheduledCheckEnabled),
 			cfg.ScheduledCheckModel,
+			cfg.GetResponsesTransport(),
 		}
 		if err := writer.Write(record); err != nil {
 			RespondError(c, http.StatusInternalServerError, err)
@@ -359,6 +360,11 @@ func (s *Server) parseChannelImportRow(
 		return nil, fmt.Sprintf("第%d行 protocol_transforms 无效: %v", lineNo, err), true
 	}
 	protocolTransforms := normalizeProtocolTransforms(channelType, protocolTransformMode, rawProtocolTransforms)
+	responsesTransport := model.NormalizeResponsesTransport(fetch("responses_transport"))
+	transportConfig := &model.Config{ChannelType: channelType, ProtocolTransformMode: protocolTransformMode, ProtocolTransforms: protocolTransforms, ResponsesTransport: responsesTransport}
+	if err := validateResponsesTransport(transportConfig); err != nil {
+		return nil, fmt.Sprintf("第%d行 responses_transport 无效: %v", lineNo, err), true
+	}
 
 	models := parseImportModels(modelsRaw)
 	if len(models) == 0 {
@@ -486,6 +492,7 @@ func (s *Server) parseChannelImportRow(
 		ChannelType:           channelType,
 		ProtocolTransformMode: protocolTransformMode,
 		ProtocolTransforms:    protocolTransforms,
+		ResponsesTransport:    responsesTransport,
 		Enabled:               enabled,
 		ScheduledCheckEnabled: scheduledCheckEnabled,
 		ScheduledCheckModel:   scheduledCheckModel,

@@ -22,6 +22,7 @@ import (
 	"ccLoad/internal/util"
 
 	"github.com/bytedance/sonic"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -1478,8 +1479,26 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 	// 连接池等待或协议转换时间误显示成渠道已经收到请求的时间。
 	requestTrace := &upstreamRequestTrace{}
 	req = req.WithContext(requestTrace.withContext(req.Context()))
-	resp, err := s.doUpstreamRequest(cfg, req)
+	var wsTurn *responsesWSBody
+	transportInfo := ""
+	var resp *http.Response
+	if observer != nil && observer.responsesSession != nil {
+		if cfg.GetResponsesTransport() != model.ResponsesTransportHTTP && observer.BeforeResponseCommit != nil {
+			if err := observer.BeforeResponseCommit(); err != nil {
+				return nil, reqCtx.Duration().Seconds(), err
+			}
+		}
+		resp, wsTurn, transportInfo, err = s.doResponsesUpstreamRequest(cfg, req, observer.responsesSession)
+	} else {
+		resp, err = s.doUpstreamRequest(cfg, req)
+	}
 	requestSentAt := requestTrace.writtenAt()
+	if wsTurn != nil {
+		requestSentAt = wsTurn.sentAt
+	}
+	if observer != nil && observer.OnTransportSelected != nil && transportInfo != "" {
+		observer.OnTransportSelected(transportInfo)
+	}
 	if err != nil && (errors.Is(err, ErrChannelRPMExceeded) || errors.Is(err, ErrChannelConcurrencyExceeded)) {
 		return nil, reqCtx.Duration().Seconds(), err
 	}
@@ -1511,6 +1530,15 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 	if err != nil {
 		errRes, errDur, errErr := s.handleRequestError(reqCtx, cfg, err)
 		if errRes != nil {
+			errRes.TransportInfo = transportInfo
+			errRes.NoRetry = errors.Is(err, errResponsesWSOutcomeUnknown) || errors.Is(err, errResponsesWSReplayUnsafe)
+			if observer != nil && observer.responsesSession != nil && !requestSentAt.IsZero() {
+				errRes.NoRetry = true
+				observer.responsesSession.outcomeUnknown.Store(true)
+			}
+			if observer != nil && observer.responsesSession != nil && errors.Is(err, errResponsesWSOutcomeUnknown) {
+				observer.responsesSession.outcomeUnknown.Store(true)
+			}
 			errRes.RequestSentAt = requestSentAt
 			errRes.DebugData = dc.buildEntry(resp)
 		}
@@ -1545,6 +1573,16 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 
 	// 5. Debug捕获：构建完整的 debug 日志条目（响应体已通过 TeeReader 收集完毕）
 	if res != nil {
+		res.TransportInfo = transportInfo
+		res.TransportUnsupported = observer != nil && observer.responsesSession != nil && wsTurn == nil && cfg.GetResponsesTransport() == model.ResponsesTransportWebsocketOnly && responsesWSUnsupportedStatus(res.Status) && gjson.GetBytes(res.Body, "error.code").String() != "model_not_found"
+		if observer != nil && observer.responsesSession != nil && wsTurn == nil && (res.ResponseCommitted || (res.StreamDiagMsg != "" && res.SSEErrorEvent == nil)) && (err != nil || res.StreamDiagMsg != "") {
+			res.NoRetry = true
+			observer.responsesSession.outcomeUnknown.Store(true)
+		}
+		if wsTurn != nil && (!wsTurn.terminal.Load() || wsTurn.unsafeTerminal) {
+			res.NoRetry = true
+			observer.responsesSession.outcomeUnknown.Store(true)
+		}
 		res.RequestSentAt = requestSentAt
 		res.DebugData = dc.buildEntry(resp)
 	}
@@ -1585,7 +1623,7 @@ func (s *Server) handleCommittedAwareProxyError(
 	reqCtx *proxyRequestContext,
 	deferChannelCooldown bool,
 ) (*proxyResult, cooldown.Action) {
-	if !res.ResponseCommitted {
+	if !res.ResponseCommitted && !res.NoRetry {
 		return s.handleProxyErrorResponse(
 			ctx, cfg, keyIndex, actualModel, selectedKey, res, duration, reqCtx, deferChannelCooldown, false,
 		)

@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
@@ -107,10 +108,17 @@ func (s *Server) forwardAttempt(
 	}
 
 	forceReturnClient := false
+	if res != nil && res.TransportUnsupported {
+		log.Printf("[RESPONSES_TRANSPORT] channel=%d upstream=ws unavailable status=%d", cfg.ID, res.Status)
+		return &proxyResult{status: http.StatusServiceUnavailable, body: []byte("native WebSocket unavailable for this URL"), channelID: &cfg.ID, transportUnsupported: true, nextAction: cooldown.ActionRetryChannel}, cooldown.ActionRetryChannel, nil
+	}
 	retryStrategies := make([]string, 0, 2)
 	for {
 		if isManualChannelSkip(attemptCtx) {
 			return manualChannelSkipResult(cfg), cooldown.ActionRetryChannel, nil
+		}
+		if reqCtx.observer != nil && reqCtx.observer.responsesSession != nil {
+			break
 		}
 		retryBody, retryStrategy, ok := codexRetryBodyFor400(upstreamProtocol, cfg, plan, res)
 		if !ok || hasRetryStrategy(retryStrategies, retryStrategy) {
@@ -861,6 +869,18 @@ func (s *Server) attemptKeyAcrossURLs(
 	w http.ResponseWriter,
 ) (immediate *proxyResult, urlLastFailure *proxyResult, err error) {
 	sortedURLs := orderURLsWithSelector(selector, cfg.ID, urls)
+	if reqCtx.observer != nil && reqCtx.observer.responsesSession != nil {
+		upstream := reqCtx.observer.responsesSession.upstream
+		if upstream != nil && upstream.channel == cfg.ID && !upstream.closed.Load() {
+			for i, entry := range sortedURLs {
+				if buildUpstreamURL(entry.url, requestPath, reqCtx.rawQuery) == upstream.url && (selector == nil || (!selector.IsDisabled(cfg.ID, entry.url) && !selector.IsCooledDown(cfg.ID, entry.url))) {
+					copy(sortedURLs[1:i+1], sortedURLs[:i])
+					sortedURLs[0] = entry
+					break
+				}
+			}
+		}
+	}
 	urlsCount := len(urls)
 	for urlIdx, urlEntry := range sortedURLs {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -905,6 +925,9 @@ func (s *Server) attemptKeyAcrossURLs(
 
 		if result != nil {
 			urlLastFailure = result
+		}
+		if result != nil && result.transportUnsupported {
+			continue
 		}
 
 		// Key级错误：换URL无意义，跳出URL循环
@@ -1031,6 +1054,17 @@ func (s *Server) tryChannelWithKeys(ctx context.Context, cfg *model.Config, reqC
 
 		// 选择可用的API Key（直接传入apiKeys，避免重复查询）
 		keyIndex, selectedKey, selectErr := s.selectKeyWithFallback(cfg, apiKeys, triedKeys)
+		if attempt == 0 && reqCtx.observer != nil && reqCtx.observer.responsesSession != nil {
+			upstream := reqCtx.observer.responsesSession.upstream
+			if upstream != nil && upstream.channel == cfg.ID && !upstream.closed.Load() {
+				for _, key := range apiKeys {
+					if !key.Disabled && !key.IsCoolingDown(time.Now()) && sha256.Sum256([]byte(key.APIKey)) == upstream.keyHash {
+						keyIndex, selectedKey, selectErr = key.KeyIndex, key.APIKey, nil
+						break
+					}
+				}
+			}
+		}
 		if selectErr != nil {
 			return nil, selectErr
 		}

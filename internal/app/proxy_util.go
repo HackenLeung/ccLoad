@@ -110,7 +110,10 @@ type fwResult struct {
 	StreamDiagMsg string // 诊断消息（例如：流中断/不完整、上游响应体读取失败），合并到日志的 Message 字段
 
 	// 重试策略（例如 Codex 400 后剥离 reasoning/thinking 再成功）
-	RetryStrategy string
+	RetryStrategy        string
+	TransportInfo        string
+	NoRetry              bool // The upstream may have accepted a WebSocket generation request.
+	TransportUnsupported bool
 
 	// 上游响应字节数（2026-02新增）
 	// 用于499场景诊断：区分客户端在首字节前取消还是接收部分数据后取消
@@ -145,6 +148,8 @@ func logStartTimeForResult(attemptStartTime time.Time, res *fwResult) time.Time 
 
 // ForwardObserver 封装转发过程中的观测回调（遵循SRP，避免函数签名膨胀）
 type ForwardObserver struct {
+	OnTransportSelected  func(string)
+	responsesSession     *responsesWebsocketSession
 	OnBytesRead          func(int64)  // 字节读取回调（可选）
 	OnResponseBytes      func([]byte) // 原始上游响应字节（仅用于轻量风险观察）
 	OnFirstByteRead      func()       // 首字节读取回调（可选）
@@ -196,17 +201,18 @@ type proxyRequestContext struct {
 
 // proxyResult 代理请求结果
 type proxyResult struct {
-	status            int
-	header            http.Header
-	body              []byte
-	channelID         *int64
-	duration          float64
-	firstByteTime     float64
-	succeeded         bool
-	isClientCanceled  bool            // 客户端主动取消请求（context.Canceled）
-	manualChannelSkip bool            // 管理端主动跳过当前渠道，不计入失败或冷却
-	channelDisabled   bool            // 渠道在本次请求重试期间被管理员禁用
-	nextAction        cooldown.Action // 统一重试决策：RetryKey/RetryChannel/ReturnClient
+	status               int
+	header               http.Header
+	body                 []byte
+	channelID            *int64
+	duration             float64
+	firstByteTime        float64
+	succeeded            bool
+	isClientCanceled     bool // 客户端主动取消请求（context.Canceled）
+	manualChannelSkip    bool // 管理端主动跳过当前渠道，不计入失败或冷却
+	channelDisabled      bool // 渠道在本次请求重试期间被管理员禁用
+	transportUnsupported bool
+	nextAction           cooldown.Action // 统一重试决策：RetryKey/RetryChannel/ReturnClient
 }
 
 func isManualChannelSkip(ctx context.Context) bool {
@@ -1121,6 +1127,9 @@ func buildLogEntry(p logEntryParams) *model.LogEntry {
 		entry.Cost = computeRequestCost(costModel, res.ServiceTier, res) + res.ToolCostUSD
 	} else {
 		entry.Message = "unknown"
+	}
+	if p.Result != nil && p.Result.TransportInfo != "" {
+		entry.Message += " [" + p.Result.TransportInfo + "]"
 	}
 
 	if p.Result != nil {

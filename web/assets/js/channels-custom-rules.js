@@ -26,6 +26,7 @@
 
   let _state = { headers: [], body: [] };
   let _draft = null;
+  let _transportSnapshot = null;
 
   function t(key, fallback) {
     if (hasWindow && typeof window.t === 'function') {
@@ -229,6 +230,7 @@
   function openCustomRulesModal() {
     if (!hasDocument) return;
     _draft = cloneRules(getState());
+    _transportSnapshot = document.getElementById('channelResponsesTransport')?.value ?? null;
     renderRuleList('headers');
     renderRuleList('body');
     switchTab('headers');
@@ -249,6 +251,9 @@
 
   function closeCustomRulesModal() {
     if (!hasDocument) return;
+    const transport = document.getElementById('channelResponsesTransport');
+    if (transport && _transportSnapshot !== null) transport.value = _transportSnapshot;
+    _transportSnapshot = null;
     const modal = document.getElementById('customRulesModal');
     if (modal) modal.classList.remove('show');
     _draft = null;
@@ -440,6 +445,7 @@
       }
     }
     updateTabCounts(_state);
+    _transportSnapshot = null;
     closeCustomRulesModal();
   }
 

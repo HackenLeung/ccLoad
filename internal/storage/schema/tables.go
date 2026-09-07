@@ -20,6 +20,7 @@ func DefineChannelsTable() *TableBuilder {
 		Column("cost_multiplier DOUBLE NOT NULL DEFAULT 1").
 		Column("custom_request_rules TEXT").
 		Column("proxy_url VARCHAR(255) NOT NULL DEFAULT ''").
+		Column("responses_transport VARCHAR(32) NOT NULL DEFAULT 'http'").
 		Column("created_at BIGINT NOT NULL").
 		Column("updated_at BIGINT NOT NULL").
 		Index("idx_channels_enabled", "enabled").

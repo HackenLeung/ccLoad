@@ -316,6 +316,10 @@ window.I18N_LOCALES['en'] = {
   'channels.costMultiplier': 'Cost Multiplier',
   'channels.costMultiplierPlaceholder': 'Default 1',
   'channels.proxyURL': 'Proxy',
+  'channels.responsesTransport': 'Responses transport',
+  'channels.responsesTransportHTTP': 'HTTP/SSE compatibility',
+  'channels.responsesTransportPreferred': 'Prefer native WebSocket',
+  'channels.responsesTransportOnly': 'Native WebSocket only',
   'channels.proxyURLPlaceholder': 'http:// | socks5://',
 
   // Delete Confirmation (flattened keys)

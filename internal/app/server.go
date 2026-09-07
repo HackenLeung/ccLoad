@@ -53,6 +53,7 @@ type Server struct {
 	protocolRegistry              *protocol.Registry
 	client                        *http.Client          // HTTP客户端（全局默认）
 	proxyTransports               sync.Map              // proxyURL → *http.Transport（渠道级代理缓存）
+	responsesWSUnsupported        sync.Map              // responsesWSCapabilityKey -> expiry
 	skipTLSVerify                 bool                  // 透传给渠道级 Transport
 	activeRequests                *activeRequestManager // 进行中请求（内存状态，不持久化）
 	channelRisk                   *channelRiskObserver  // 被动风险观察（仅保存摘要，不持久化原文）

@@ -116,7 +116,7 @@ func TestAdminAPI_ExportChannelsCSV(t *testing.T) {
 		header[0] = strings.TrimPrefix(header[0], "\ufeff")
 	}
 
-	expectedHeaders := []string{"id", "name", "api_key", "url", "priority", "rpm_limit", "max_concurrency", "models", "model_redirects", "model_protocol_aliases", "channel_type", "protocol_transforms", "protocol_transform_mode", "key_strategy", "enabled", "scheduled_check_enabled", "scheduled_check_model"}
+	expectedHeaders := []string{"id", "name", "api_key", "url", "priority", "rpm_limit", "max_concurrency", "models", "model_redirects", "model_protocol_aliases", "channel_type", "protocol_transforms", "protocol_transform_mode", "key_strategy", "enabled", "scheduled_check_enabled", "scheduled_check_model", "responses_transport"}
 	if len(header) != len(expectedHeaders) {
 		t.Errorf("Header字段数量不匹配: 期望 %d, 实际: %d\nHeader: %v", len(expectedHeaders), len(header), header)
 	}

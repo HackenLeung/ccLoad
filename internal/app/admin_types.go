@@ -38,6 +38,7 @@ type ChannelRequest struct {
 	CostMultiplier        float64                    `json:"cost_multiplier"`  // 成本倍率（默认1，0=免费，>=0）
 	CustomRequestRules    *model.CustomRequestRules  `json:"custom_request_rules,omitempty"`
 	ProxyURL              string                     `json:"proxy_url,omitempty"` // 渠道级代理（http/https/socks5/socks5h）
+	ResponsesTransport    string                     `json:"responses_transport"`
 }
 
 // ChannelAPIKeyRequest describes one submitted API key and its admin-only note.
@@ -221,6 +222,10 @@ func (cr *ChannelRequest) Validate() error {
 		return err
 	}
 	cr.ProtocolTransforms = normalizeProtocolTransforms(cr.ChannelType, cr.ProtocolTransformMode, cr.ProtocolTransforms)
+	cr.ResponsesTransport = model.NormalizeResponsesTransport(cr.ResponsesTransport)
+	if err := validateResponsesTransport(&model.Config{ChannelType: cr.ChannelType, ProtocolTransformMode: cr.ProtocolTransformMode, ProtocolTransforms: cr.ProtocolTransforms, ResponsesTransport: cr.ResponsesTransport}); err != nil {
+		return err
+	}
 	cr.ProtocolCapabilities, err = normalizeProtocolCapabilities(
 		cr.ChannelType,
 		cr.ProtocolTransformMode,
@@ -351,6 +356,7 @@ func (cr *ChannelRequest) ToConfig() *model.Config {
 		CostMultiplier:        cr.CostMultiplier,
 		CustomRequestRules:    cr.CustomRequestRules,
 		ProxyURL:              cr.ProxyURL,
+		ResponsesTransport:    cr.ResponsesTransport,
 	}
 }
 
