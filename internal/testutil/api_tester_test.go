@@ -91,7 +91,7 @@ func TestOpenAITesterBuild_AppliesThinkingEffortAndWebSearchOptions(t *testing.T
 	}
 }
 
-func TestOpenAITesterBuild_MapsMaxThinkingEffortToXHigh(t *testing.T) {
+func TestOpenAITesterBuild_MapsMaxThinkingEffortToMax(t *testing.T) {
 	cfg := &model.Config{URL: "https://api.example.com"}
 	req := &TestChannelRequest{Model: "gpt-test", Content: "hello", ThinkingEffort: "max"}
 
@@ -104,8 +104,8 @@ func TestOpenAITesterBuild_MapsMaxThinkingEffortToXHigh(t *testing.T) {
 	if err := sonic.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("unmarshal body failed: %v; body=%s", err, body)
 	}
-	if got, _ := payload["reasoning_effort"].(string); got != "xhigh" {
-		t.Fatalf("reasoning_effort = %q, want xhigh; body=%s", got, body)
+	if got, _ := payload["reasoning_effort"].(string); got != "max" {
+		t.Fatalf("reasoning_effort = %q, want max; body=%s", got, body)
 	}
 }
 
@@ -755,25 +755,36 @@ func TestAnthropicTesterBuild_AppliesThinkingEffortAndBuiltinSearch(t *testing.T
 	}
 }
 
-func TestAnthropicTesterBuild_MapsXHighThinkingEffortToMax(t *testing.T) {
-	cfg := &model.Config{URL: "https://api.example.com"}
-	req := &TestChannelRequest{Model: "claude-test", Content: "hello", ThinkingEffort: "xhigh"}
+// xhigh 与 max 是 Anthropic output_config.effort 的两个独立档位，测试请求不得升档。
+func TestAnthropicTesterBuild_PreservesXHighAndMaxThinkingEffort(t *testing.T) {
+	for _, tc := range []struct {
+		effort string
+		want   string
+	}{
+		{effort: "xhigh", want: "xhigh"},
+		{effort: "max", want: "max"},
+	} {
+		t.Run(tc.effort, func(t *testing.T) {
+			cfg := &model.Config{URL: "https://api.example.com"}
+			req := &TestChannelRequest{Model: "claude-test", Content: "hello", ThinkingEffort: tc.effort}
 
-	_, _, body, err := (&AnthropicTester{}).Build(cfg, "sk-test", req)
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
+			_, _, body, err := (&AnthropicTester{}).Build(cfg, "sk-test", req)
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
 
-	var payload map[string]any
-	if err := sonic.Unmarshal(body, &payload); err != nil {
-		t.Fatalf("unmarshal body failed: %v; body=%s", err, body)
-	}
-	outputConfig, ok := payload["output_config"].(map[string]any)
-	if !ok {
-		t.Fatalf("output_config missing or invalid; body=%s", body)
-	}
-	if got, _ := outputConfig["effort"].(string); got != "max" {
-		t.Fatalf("output_config.effort = %q, want max; body=%s", got, body)
+			var payload map[string]any
+			if err := sonic.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("unmarshal body failed: %v; body=%s", err, body)
+			}
+			outputConfig, ok := payload["output_config"].(map[string]any)
+			if !ok {
+				t.Fatalf("output_config missing or invalid; body=%s", body)
+			}
+			if got, _ := outputConfig["effort"].(string); got != tc.want {
+				t.Fatalf("output_config.effort = %q, want %q; body=%s", got, tc.want, body)
+			}
+		})
 	}
 }
 

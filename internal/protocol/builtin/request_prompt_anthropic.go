@@ -242,6 +242,9 @@ func anthropicOutputEffortFromThinking(thinking *anthropicThinkingConfig) string
 	return ""
 }
 
+// normalizeAnthropicOutputEffort 把各协议的思考档位收敛到 Anthropic output_config.effort
+// 枚举（low/medium/high/xhigh/max）。xhigh 与 max 是两个独立档位，不可互相归并：
+// max 计费更高，把 xhigh 升档成 max 等于让用户按 xhigh 下单、按 max 付费。
 func normalizeAnthropicOutputEffort(effort string) string {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
 	case "minimal", "low":
@@ -250,7 +253,9 @@ func normalizeAnthropicOutputEffort(effort string) string {
 		return "medium"
 	case "high":
 		return "high"
-	case "max", "xhigh":
+	case "xhigh":
+		return "xhigh"
+	case "max":
 		return "max"
 	default:
 		return ""

@@ -160,11 +160,14 @@ func geminiUsesThinkingLevel(model string) bool {
 	return strings.Contains(model, "gemini-3")
 }
 
+// geminiThinkingLevelFromEffort 把 effort 映射成 Gemini thinkingLevel。
+// Gemini 顶档只有 high，故 xhigh/max 同归 high；两者必须显式列出，
+// 漏掉任一个都会落到 default 被降成 medium。
 func geminiThinkingLevelFromEffort(effort string) string {
 	switch normalizeAnthropicOutputEffort(effort) {
 	case "low":
 		return "low"
-	case "high", "max":
+	case "high", "xhigh", "max":
 		return "high"
 	default:
 		return "medium"
@@ -175,7 +178,7 @@ func anthropicEffortToBudget(effort string) int {
 	switch normalizeAnthropicOutputEffort(effort) {
 	case "low":
 		return 1024
-	case "high", "max":
+	case "high", "xhigh", "max":
 		return 16384
 	default:
 		return 4096

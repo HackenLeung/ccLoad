@@ -95,11 +95,35 @@ func TestRegistry_TranslateRequest_AnthropicToGemini3_UsesThinkingLevel(t *testi
 	}
 }
 
-func TestRegistry_TranslateRequest_OpenAIToAnthropic_MapsXHighToClaudeMax(t *testing.T) {
+// xhigh 与 max 在 OpenAI 和 Anthropic 两侧都是独立档位，跨协议翻译必须保持原档，
+// 不能把 xhigh 升档成计费更高的 max。
+func TestRegistry_TranslateRequest_OpenAIToAnthropic_PreservesXHigh(t *testing.T) {
 	reg := protocol.NewRegistry()
 	builtin.Register(reg)
 
 	raw := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"think hard"}],"reasoning_effort":"xhigh"}`)
+	got, err := reg.TranslateRequest(protocol.OpenAI, protocol.Anthropic, "claude-sonnet-4-6", raw, true)
+	if err != nil {
+		t.Fatalf("TranslateRequest failed: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(got, &body); err != nil {
+		t.Fatalf("unmarshal translated request failed: %v", err)
+	}
+	outputConfig, ok := body["output_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected output_config, got: %s", got)
+	}
+	if outputConfig["effort"] != "xhigh" {
+		t.Fatalf("output_config.effort=%v, want xhigh; body=%s", outputConfig["effort"], got)
+	}
+}
+
+func TestRegistry_TranslateRequest_OpenAIToAnthropic_PreservesMax(t *testing.T) {
+	reg := protocol.NewRegistry()
+	builtin.Register(reg)
+
+	raw := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"think hard"}],"reasoning_effort":"max"}`)
 	got, err := reg.TranslateRequest(protocol.OpenAI, protocol.Anthropic, "claude-sonnet-4-6", raw, true)
 	if err != nil {
 		t.Fatalf("TranslateRequest failed: %v", err)

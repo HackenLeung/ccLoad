@@ -483,7 +483,7 @@ func TestConvertAnthropicRequestToCodex_PreservesOutputConfigEffortWhenThinkingD
 	}
 }
 
-func TestConvertAnthropicRequestToCodex_MapsMaxOutputConfigEffortToXHigh(t *testing.T) {
+func TestConvertAnthropicRequestToCodex_MapsMaxOutputConfigEffortToMax(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-5-codex",
 		"messages":[{"role":"user","content":[{"type":"text","text":"think hard"}]}],
@@ -501,8 +501,85 @@ func TestConvertAnthropicRequestToCodex_MapsMaxOutputConfigEffortToXHigh(t *test
 	if req.Reasoning == nil {
 		t.Fatalf("expected reasoning config, got body %s", out)
 	}
+	if got, _ := req.Reasoning["effort"].(string); got != "max" {
+		t.Fatalf("reasoning.effort=%q, want max; body=%s", got, out)
+	}
+}
+
+// xhigh 低于 max 且两者都是合法档位，Anthropic→Codex 不得把 xhigh 升档成 max。
+func TestConvertAnthropicRequestToCodex_PreservesXHighOutputConfigEffort(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5-codex",
+		"messages":[{"role":"user","content":[{"type":"text","text":"think hard"}]}],
+		"thinking":{"type":"adaptive","display":"summarized"},
+		"output_config":{"effort":"xhigh"}
+	}`)
+	out, err := convertAnthropicRequestToCodex("gpt-5-codex", raw, false)
+	if err != nil {
+		t.Fatalf("convertAnthropicRequestToCodex failed: %v", err)
+	}
+	var req codexRequestPayload
+	if err := json.Unmarshal(out, &req); err != nil {
+		t.Fatalf("unmarshal codex request failed: %v", err)
+	}
+	if req.Reasoning == nil {
+		t.Fatalf("expected reasoning config, got body %s", out)
+	}
 	if got, _ := req.Reasoning["effort"].(string); got != "xhigh" {
 		t.Fatalf("reasoning.effort=%q, want xhigh; body=%s", got, out)
+	}
+}
+
+// Gemini 顶档只有 high，xhigh 必须归到 high 而不是掉进 default 被降成 medium。
+func TestConvertAnthropicRequestToGemini3_MapsXHighOutputConfigEffortToHigh(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5",
+		"messages":[{"role":"user","content":[{"type":"text","text":"think hard"}]}],
+		"thinking":{"type":"adaptive","display":"summarized"},
+		"output_config":{"effort":"xhigh"}
+	}`)
+	out, err := convertAnthropicRequestToGemini("gemini-3.5-flash", raw, true)
+	if err != nil {
+		t.Fatalf("convertAnthropicRequestToGemini failed: %v", err)
+	}
+	var req geminiRequestPayload
+	if err := json.Unmarshal(out, &req); err != nil {
+		t.Fatalf("unmarshal gemini request failed: %v", err)
+	}
+	if req.GenerationConfig == nil || req.GenerationConfig.ThinkingConfig == nil {
+		t.Fatalf("expected thinkingConfig, got body %s", out)
+	}
+	if got := req.GenerationConfig.ThinkingConfig.ThinkingLevel; got != "high" {
+		t.Fatalf("thinkingLevel=%q, want high; body=%s", got, out)
+	}
+}
+
+// 非 Gemini 3 走 thinkingBudget 分支，xhigh 应拿到与 high/max 同级的 16384，
+// 而不是 default 的 4096。
+func TestConvertAnthropicRequestToGemini_MapsXHighOutputConfigEffortToMaxBudget(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5",
+		"messages":[{"role":"user","content":[{"type":"text","text":"think hard"}]}],
+		"thinking":{"type":"adaptive","display":"summarized"},
+		"output_config":{"effort":"xhigh"}
+	}`)
+	out, err := convertAnthropicRequestToGemini("gemini-2.5-pro", raw, true)
+	if err != nil {
+		t.Fatalf("convertAnthropicRequestToGemini failed: %v", err)
+	}
+	var req geminiRequestPayload
+	if err := json.Unmarshal(out, &req); err != nil {
+		t.Fatalf("unmarshal gemini request failed: %v", err)
+	}
+	if req.GenerationConfig == nil || req.GenerationConfig.ThinkingConfig == nil {
+		t.Fatalf("expected thinkingConfig, got body %s", out)
+	}
+	budget := req.GenerationConfig.ThinkingConfig.ThinkingBudget
+	if budget == nil {
+		t.Fatalf("expected thinkingBudget for non-Gemini-3 model; body=%s", out)
+	}
+	if *budget != 16384 {
+		t.Fatalf("thinkingBudget=%d, want 16384; body=%s", *budget, out)
 	}
 }
 

@@ -361,13 +361,12 @@ func appendAnthropicSystemPrompt(obj map[string]any, prompt string) {
 }
 
 func normalizeTestThinkingEffort(effort string) string {
-	switch strings.ToLower(strings.TrimSpace(effort)) {
+	normalized := strings.ToLower(strings.TrimSpace(effort))
+	switch normalized {
 	case "":
 		return ""
-	case "none", "minimal", "low", "medium", "high":
-		return strings.ToLower(strings.TrimSpace(effort))
-	case "max", "xhigh":
-		return "xhigh"
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		return normalized
 	case "auto":
 		return "medium"
 	default:
@@ -381,7 +380,7 @@ func testThinkingBudget(effort string) int {
 		return 1024
 	case "medium":
 		return 4096
-	case "high", "xhigh":
+	case "high", "xhigh", "max":
 		return 16384
 	default:
 		return 0
@@ -396,6 +395,8 @@ func testCodexReasoningEffort(effort string) string {
 		return "high"
 	case "xhigh":
 		return "xhigh"
+	case "max":
+		return "max"
 	case "medium":
 		return "medium"
 	default:
@@ -412,6 +413,8 @@ func testAnthropicOutputEffort(effort string) string {
 	case "high":
 		return "high"
 	case "xhigh":
+		return "xhigh"
+	case "max":
 		return "max"
 	default:
 		return ""
@@ -428,7 +431,7 @@ func testGeminiThinkingLevel(effort string) string {
 		return "low"
 	case "medium":
 		return "medium"
-	case "high", "xhigh":
+	case "high", "xhigh", "max":
 		return "high"
 	default:
 		return ""

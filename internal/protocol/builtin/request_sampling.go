@@ -138,7 +138,9 @@ func openAIReasoningEffortToThinking(effort string) *anthropicThinkingConfig {
 		return &anthropicThinkingConfig{Type: "adaptive", Effort: "medium"}
 	case "high":
 		return &anthropicThinkingConfig{Type: "adaptive", Effort: "high"}
-	case "max", "xhigh":
+	case "max":
+		return &anthropicThinkingConfig{Type: "adaptive", Effort: "max"}
+	case "xhigh":
 		return &anthropicThinkingConfig{Type: "adaptive", Effort: "xhigh"}
 	default:
 		return &anthropicThinkingConfig{Type: "adaptive", Effort: "medium"}

@@ -243,14 +243,16 @@ func openAIWireRole(role string) string {
 }
 
 // normalizeOpenAIEffort 把 OpenAI reasoning_effort 枚举收敛到 Codex 接受的档位。
-// minimal 归入 low，auto 归入 medium。
+// minimal 归入 low，auto 归入 medium；xhigh 与 max 是两个独立档位，各自原样保留。
 func normalizeOpenAIEffort(effort string) string {
 	switch effort {
 	case "minimal", "low":
 		return "low"
 	case "high":
 		return "high"
-	case "max", "xhigh":
+	case "max":
+		return "max"
+	case "xhigh":
 		return "xhigh"
 	case "auto", "medium":
 		return "medium"

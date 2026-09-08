@@ -3442,7 +3442,8 @@ function getChatThinkingOptions() {
     { value: 'low', label: i18nText('modelTest.chat.thinkingLow', '低') },
     { value: 'medium', label: i18nText('modelTest.chat.thinkingMedium', '中') },
     { value: 'high', label: i18nText('modelTest.chat.thinkingHigh', '高') },
-    { value: 'xhigh', label: i18nText('modelTest.chat.thinkingXHighMax', '最高 (xhigh/max)') }
+    { value: 'xhigh', label: i18nText('modelTest.chat.thinkingXHigh', '极高 (xhigh)') },
+    { value: 'max', label: i18nText('modelTest.chat.thinkingMax', '最高 (max)') }
   ];
 }
 
