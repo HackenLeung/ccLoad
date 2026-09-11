@@ -434,6 +434,7 @@
   outline: none;
 }
 
+.model-alias-copy-btn,
 .model-alias-remove-btn {
   width: 24px;
   height: 24px;
@@ -442,6 +443,16 @@
   border-radius: 6px;
   background: var(--surface-bg-strong);
   color: var(--neutral-500);
+}
+
+.model-alias-copy-btn:hover {
+  border-color: var(--primary-400);
+  color: var(--primary-600);
+}
+
+.model-alias-copy-btn.copied {
+  border-color: #16a34a;
+  color: #16a34a;
 }
 
 .model-alias-add-btn {

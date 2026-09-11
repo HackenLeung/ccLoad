@@ -2042,6 +2042,32 @@ function renderProtocolAliases(rowElement, modelRow, modelIndex) {
         inputContainer.appendChild(input);
       }
 
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'model-alias-copy-btn';
+      copy.title = window.t('common.copy');
+      copy.setAttribute('aria-label', window.t('common.copy'));
+      copy.textContent = '⧉';
+      copy.addEventListener('click', async () => {
+        const input = inputContainer.querySelector('.protocol-alias-input');
+        const modelName = String(input?.value || '').trim();
+        if (!modelName) return;
+        try {
+          await window.copyToClipboard(modelName);
+          const originalText = copy.textContent;
+          copy.textContent = '✓';
+          copy.classList.add('copied');
+          setTimeout(() => {
+            copy.textContent = originalText;
+            copy.classList.remove('copied');
+          }, 1500);
+        } catch (error) {
+          console.error('Copy public model failed', error);
+          window.showError?.(window.t('channels.keyCopyFailed'));
+        }
+      });
+      inputRow.appendChild(copy);
+
       if (aliases.length > 1) {
         const remove = document.createElement('button');
         remove.type = 'button';
