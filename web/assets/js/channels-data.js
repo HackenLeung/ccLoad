@@ -17,13 +17,23 @@ function buildChannelsListParams(type = 'all') {
   return params;
 }
 
-async function loadChannels(type = 'all') {
+let channelsLoadSequence = 0;
+let channelOptionsLoadSequence = 0;
+let channelStatsLoadSequence = 0;
+let channelsLoadPending = false;
+let channelStatsLoadPending = false;
+
+async function loadChannels(type = 'all', background = false) {
+  if (background && channelsLoadPending) return;
+  const requestID = ++channelsLoadSequence;
+  channelsLoadPending = true;
   try {
     const params = buildChannelsListParams(type);
     const listBase = channelsReadURL('/admin/channels', '/dashboard/channels');
     params.set('range', channelStatsRange);
     const url = listBase + '?' + params.toString();
     const resp = await fetchAPIWithAuth(url);
+    if (requestID !== channelsLoadSequence) return;
     if (!resp.success) {
       throw new Error(resp.error || window.t('channels.loadChannelsFailed'));
     }
@@ -46,8 +56,11 @@ async function loadChannels(type = 'all') {
       updateChannelsPagination();
     }
   } catch (e) {
+    if (requestID !== channelsLoadSequence) return;
     console.error('Failed to load channels', e);
     if (window.showError) window.showError(window.t('channels.loadChannelsFailed'));
+  } finally {
+    if (requestID === channelsLoadSequence) channelsLoadPending = false;
   }
 }
 
@@ -61,6 +74,7 @@ async function reloadChannelsList(type = filters.channelType, status = filters.s
 
 // 加载渠道筛选下拉的全集（按 type/status 联动），与列表分页/搜索/模型筛选解耦
 async function loadChannelsFilterOptions(type = 'all', status = 'all') {
+  const requestID = ++channelOptionsLoadSequence;
   try {
     const params = new URLSearchParams();
     if (type && type !== 'all') params.set('type', type);
@@ -69,9 +83,11 @@ async function loadChannelsFilterOptions(type = 'all', status = 'all') {
     params.set('range', channelStatsRange);
     const url = optionsBase + '?' + params.toString();
     const data = await fetchDataWithAuth(url);
+    if (requestID !== channelOptionsLoadSequence) return;
     allAvailableChannelNames = Array.isArray(data && data.channel_names) ? data.channel_names : [];
     allAvailableModels = Array.isArray(data && data.models) ? data.models : [];
   } catch (e) {
+    if (requestID !== channelOptionsLoadSequence) return;
     console.error('Failed to load filter options', e);
     allAvailableChannelNames = [];
     allAvailableModels = [];
@@ -91,15 +107,22 @@ async function loadChannelStatsRange() {
   }
 }
 
-async function loadChannelStats(range = channelStatsRange) {
+async function loadChannelStats(range = channelStatsRange, background = false) {
+  if (background && channelStatsLoadPending) return;
+  const requestID = ++channelStatsLoadSequence;
+  channelStatsLoadPending = true;
   try {
     const params = new URLSearchParams({ range, limit: '500', offset: '0' });
     const statsBase = channelsReadURL('/admin/stats', '/dashboard/stats');
     const data = await fetchDataWithAuth(`${statsBase}?${params.toString()}`);
+    if (requestID !== channelStatsLoadSequence) return;
     channelStatsById = aggregateChannelStats((data && data.stats) || [], data && data.channel_health);
     filterChannels();
   } catch (err) {
+    if (requestID !== channelStatsLoadSequence) return;
     console.error('Failed to load channel stats', err);
+  } finally {
+    if (requestID === channelStatsLoadSequence) channelStatsLoadPending = false;
   }
 }
 

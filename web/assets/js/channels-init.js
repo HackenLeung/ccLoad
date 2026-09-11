@@ -397,8 +397,8 @@ window.initPageBootstrap({
     if (typeof window.createAutoRefresh === 'function') {
       window.createAutoRefresh({
         load: () => Promise.all([
-          loadChannels(filters.channelType || 'all'),
-          loadChannelStats()
+          loadChannels(filters.channelType || 'all', true),
+          loadChannelStats(channelStatsRange, true)
         ])
       }).init();
     }

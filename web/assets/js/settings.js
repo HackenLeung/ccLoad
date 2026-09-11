@@ -2,6 +2,26 @@
 const t = window.t;
 
 let originalSettings = {}; // 保存原始值用于比较
+let settingsMutationPending = false;
+
+function setSettingsMutationPending(pending) {
+  settingsMutationPending = pending;
+  document.querySelectorAll('#save-all-btn, .setting-reset-btn').forEach(button => {
+    button.disabled = pending;
+  });
+  document.getElementById('save-all-btn')?.setAttribute('aria-busy', String(pending));
+}
+
+// 请求返回时只更新已保存基准，保留请求期间产生的新编辑。
+function acceptSavedSetting(key, value, submittedValue) {
+  const control = getSettingControl(key);
+  if (!control || control.value === submittedValue) {
+    syncSettingState(key, value);
+    return;
+  }
+  originalSettings[key] = String(value);
+  markChanged(control.input);
+}
 
 function bindSettingsPageActions() {
   const saveAllBtn = document.getElementById('save-all-btn');
@@ -257,6 +277,7 @@ function syncSettingState(key, value) {
 }
 
 async function saveAllSettings() {
+  if (settingsMutationPending) return;
   // 收集所有变更
   const updates = {};
 
@@ -276,6 +297,7 @@ async function saveAllSettings() {
   }
 
   // 使用批量更新接口（单次请求，事务保护）
+  setSettingsMutationPending(true);
   try {
     const result = await fetchDataWithAuth('/admin/settings/batch', {
       method: 'POST',
@@ -284,31 +306,38 @@ async function saveAllSettings() {
     });
 
     for (const [key, value] of Object.entries(updates)) {
-      syncSettingState(key, value);
+      acceptSavedSetting(key, value, value);
     }
 
     showSuccess(result?.message || t('settings.msg.savedCount', { count: Object.keys(updates).length }));
   } catch (err) {
     console.error('保存异常:', err);
     showError(t('settings.msg.saveFailed') + ': ' + err.message);
+  } finally {
+    setSettingsMutationPending(false);
   }
 }
 
 async function resetSetting(key) {
+  if (settingsMutationPending) return;
   const confirmed = await window.showConfirmDialog({
     title: t('common.confirm'),
     message: t('settings.msg.confirmReset', { key }),
     danger: true
   });
-  if (!confirmed) return;
+  if (!confirmed || settingsMutationPending) return;
 
+  const submittedValue = getSettingControl(key)?.value;
+  setSettingsMutationPending(true);
   try {
     const result = await fetchDataWithAuth(`/admin/settings/${key}/reset`, { method: 'POST' });
-    syncSettingState(key, result?.value ?? '');
+    acceptSavedSetting(key, result?.value ?? '', submittedValue);
     showSuccess(result?.message || t('settings.msg.resetSuccess', { key }));
   } catch (err) {
     console.error('重置异常:', err);
     showError(t('settings.msg.resetFailed') + ': ' + err.message);
+  } finally {
+    setSettingsMutationPending(false);
   }
 }
 

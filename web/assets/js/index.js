@@ -17,37 +17,61 @@
     // 当前选中的时间范围
     let currentTimeRange = 'today';
     let currentCustomTimeRange = null;
+    let indexLoadSequence = 0;
+    let indexLoadPending = false;
+    let cumulativeRefreshPending = false;
 
     function buildSummaryURL(forceRefresh) {
       const query = typeof window.buildDateRangeQuery === 'function'
         ? window.buildDateRangeQuery(currentTimeRange, currentCustomTimeRange)
         : `range=${encodeURIComponent(currentTimeRange)}`;
-      // 累计统计走后端 1 小时缓存；用户主动加载/切换范围时强制取最新值。
+      // 累计统计不随日期筛选变化，仅专用刷新按钮绕过缓存。
       const suffix = forceRefresh ? '&refresh_cumulative=1' : '';
       return `/dashboard/summary?${query}${suffix}`;
     }
 
-    // 加载统计数据。forceRefresh=true 表示用户主动触发（首屏/切换范围），强制刷新累计值；
-    // 自动刷新不传，读后端 1 小时缓存，避免频繁全表聚合。
-    async function loadStats(forceRefresh = false) {
+    async function loadStats(forceRefresh = false, background = false) {
+      if (background && indexLoadPending) return;
+      if (forceRefresh && cumulativeRefreshPending) return;
+      const requestID = ++indexLoadSequence;
+      indexLoadPending = true;
+      const refreshButton = document.getElementById('refresh-cumulative');
+      if (forceRefresh) {
+        cumulativeRefreshPending = true;
+        if (refreshButton) refreshButton.disabled = true;
+        window.updateRefreshStatus('cumulative-refresh-status', 'loading');
+      }
       try {
+        window.updateRefreshStatus('index-refresh-status', 'loading');
         // 添加加载状态
         document.querySelectorAll('.metric-number').forEach(el => {
           el.classList.add('animate-pulse');
         });
 
         const data = await fetchDataWithAuth(buildSummaryURL(forceRefresh));
+        if (requestID !== indexLoadSequence) return;
         statsData = data || statsData;
         updateStatsDisplay();
+        window.updateRefreshStatus('index-refresh-status', 'success', Date.now());
+        window.updateRefreshStatus('cumulative-refresh-status', 'success', data?.cumulative_updated_at);
 
       } catch (error) {
+        if (requestID !== indexLoadSequence) return;
         console.error('Failed to load stats:', error);
-        showError('无法加载统计数据');
+        window.updateRefreshStatus('index-refresh-status', 'error');
+        if (forceRefresh) window.updateRefreshStatus('cumulative-refresh-status', 'error');
       } finally {
-        // 移除加载状态
-        document.querySelectorAll('.metric-number').forEach(el => {
-          el.classList.remove('animate-pulse');
-        });
+        if (forceRefresh) {
+          cumulativeRefreshPending = false;
+          if (refreshButton) refreshButton.disabled = false;
+        }
+        if (requestID === indexLoadSequence) {
+          indexLoadPending = false;
+          // 移除加载状态
+          document.querySelectorAll('.metric-number').forEach(el => {
+            el.classList.remove('animate-pulse');
+          });
+        }
       }
     }
 
@@ -159,16 +183,16 @@
         onChange: (range, customRange) => {
           currentTimeRange = range;
           if (range === 'custom') currentCustomTimeRange = customRange;
-          loadStats(true);
+          loadStats();
         }
       });
 
-      // 加载统计数据（首屏为用户主动动作，强制刷新累计值）
-      loadStats(true);
+      document.getElementById('refresh-cumulative')?.addEventListener('click', () => loadStats(true));
+      loadStats();
 
       // 自动刷新（system_settings.auto_refresh_interval_seconds，0=禁用）
       if (typeof window.createAutoRefresh === 'function') {
-        window.createAutoRefresh({ load: loadStats }).init();
+        window.createAutoRefresh({ load: () => loadStats(false, true) }).init();
       }
 
       // 添加页面动画

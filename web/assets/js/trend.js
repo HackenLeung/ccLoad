@@ -9,6 +9,10 @@
     window.currentAuthToken = ''; // 当前选中的令牌（空字符串表示全部令牌）
     window.currentChannelName = ''; // 当前选中的渠道名称
     let currentTrendCustomTimeRange = null;
+    let trendLoadSequence = 0;
+    let trendLoadPending = false;
+    let trendModelsLoadSequence = 0;
+    let displayedTrendQuery = null;
     window.chartInstance = null;
     window.channels = [];
     window.visibleChannels = new Set(); // 可见渠道集合
@@ -166,6 +170,7 @@
     // channelType 参数：渠道类型筛选，空字符串或 'all' 表示全部
     // range 参数：时间范围，可选，默认使用当前选择的时间范围
     async function loadModels(channelType, range) {
+      const requestID = ++trendModelsLoadSequence;
       try {
         const filters = {
           ...getTrendFilters(),
@@ -177,6 +182,7 @@
         const url = `/dashboard/models?${params.toString()}`;
 
         const resp = await fetchDataWithAuth(url) || {};
+        if (requestID !== trendModelsLoadSequence) return;
         const rawModels = Array.isArray(resp.models) ? resp.models : [];
         const rawChannels = Array.isArray(resp.channels) ? resp.channels : [];
 
@@ -209,13 +215,17 @@
           }
         }
       } catch (error) {
+        if (requestID !== trendModelsLoadSequence) return;
         console.error('加载模型列表失败:', error);
       }
     }
 
-    async function loadData() {
+    async function loadData(background = false) {
+      if (background && trendLoadPending) return;
+      const requestID = ++trendLoadSequence;
+      trendLoadPending = true;
+      let keepContent = false;
       try {
-        renderTrendLoading();
 
         // 从 DOM 元素读取当前选择的时间范围和模型
         const rangeSelect = document.getElementById('f_hours');
@@ -245,42 +255,24 @@
         const metricsParams = buildTrendRequestParams({
           bucket_min: bucketMin
         });
-        const metrics = await fetchAPIWithAuthRaw('/dashboard/metrics?' + metricsParams.toString());
+        const query = metricsParams.toString();
+        keepContent = window.trendData !== null && displayedTrendQuery === query;
+        if (!keepContent) renderTrendLoading();
+        window.updateRefreshStatus('trend-refresh-status', 'loading');
+        const metrics = await fetchAPIWithAuthRaw('/dashboard/metrics?' + query);
+        if (requestID !== trendLoadSequence) return;
 
         if (!metrics.payload.success) {
           throw new Error(metrics.payload.error || t('trend.fetchDataFailed'));
         }
 
         window.trendData = metrics.payload.data || [];
+        displayedTrendQuery = query;
 
         // 构建渠道数据缓存（一次遍历，供后续 hasChannelData 使用）
         buildChannelDataCache(window.trendData);
 
-        // 修复：智能初始化渠道显示状态（处理localStorage过时数据）
-        // 默认不显示任何渠道，只显示总数
-        if (window.visibleChannels.size === 0) {
-          // 首次访问：不默认显示任何渠道
-          console.log('初始化渠道显示状态（首次访问）- 默认仅显示总数');
-          // 不添加任何渠道到 visibleChannels，保持为空集合
-        } else {
-          // 修复：验证并清理localStorage中过时的渠道选择
-          console.log('验证现有渠道选择状态...', Array.from(window.visibleChannels));
-          const validChannels = new Set();
-
-          // 检查每个已保存渠道是否在当前数据中存在
-          window.visibleChannels.forEach(channelName => {
-            if (hasChannelData(channelName, window.trendData)) {
-              validChannels.add(channelName);
-            } else {
-              console.log(`清理过时渠道: ${channelName}（数据中不存在）`);
-            }
-          });
-
-          // 更新visibleChannels为验证后的集合
-          window.visibleChannels = validChannels;
-          persistChannelState();
-          console.log('更新后的可见渠道:', Array.from(window.visibleChannels));
-        }
+        // 无数据仅影响当前图表，不删除用户保存的渠道选择。
         
         // 添加调试信息显示
         const debugSince = metrics.res.headers.get('X-Debug-Since');
@@ -297,6 +289,7 @@
 
         updateChannelFilter();
         renderChart();
+        window.updateRefreshStatus('trend-refresh-status', 'success', Date.now());
 
         // 更新分桶提示
         const iv = document.getElementById('bucket-interval');
@@ -309,9 +302,12 @@
         }
 
       } catch (error) {
+        if (requestID !== trendLoadSequence) return;
         console.error('加载趋势数据失败:', error);
-        try { if (window.showError) window.showError(t('trend.loadDataFailed')); } catch(_){}
-        renderTrendError();
+        window.updateRefreshStatus('trend-refresh-status', 'error');
+        if (!keepContent) renderTrendError();
+      } finally {
+        if (requestID === trendLoadSequence) trendLoadPending = false;
       }
     }
 
@@ -635,7 +631,8 @@
 
       // 为每个可见渠道添加对应趋势线
       // 优化：使用 for 循环替代 forEach，预分配数组
-      const visibleChannelsArray = Array.from(window.visibleChannels);
+      const visibleChannelsArray = Array.from(window.visibleChannels)
+        .filter(name => hasChannelData(name, trendData));
       const visibleCount = visibleChannelsArray.length;
 
       for (let ci = 0; ci < visibleCount; ci++) {
@@ -1543,7 +1540,6 @@ function shouldShowZoom(points, hours, trendType) {
         window.initChannelTypeFilter('f_channel_type', window.currentChannelType, async (value) => {
           window.currentChannelType = value;
           persistState();
-          window.visibleChannels.clear();
           await loadModels(value);
           loadData();
         }),
@@ -1575,8 +1571,8 @@ function shouldShowZoom(points, hours, trendType) {
         }
       });
 
-      // 定期刷新数据（每5分钟）
-      setInterval(loadData, 5 * 60 * 1000);
+      // 与其他页面共享刷新间隔、隐藏页面暂停和请求互斥。
+      window.createAutoRefresh({ load: () => loadData(true) }).init();
       }
     });
 

@@ -3,6 +3,10 @@
     const STATS_TABLE_COLUMNS = 13; // 统计表列数
 
     let statsData = null;
+    let statsLoadSequence = 0;
+    let statsLoadPending = false;
+    let statsOptionsLoadSequence = 0;
+    let displayedStatsQuery = null;
     let rpmStats = null; // 全局RPM统计（峰值、平均、最近一分钟）
     let isToday = true;  // 是否为本日（本日才显示最近一分钟）
     let durationSeconds = 0; // 时间跨度（秒），用于计算RPM
@@ -110,13 +114,26 @@
       return appendStatsTimeRangeParams(params, getStatsFilters());
     }
 
-    async function loadStats() {
+    async function loadStats(background = false) {
+      if (background && statsLoadPending) return;
+      const requestID = ++statsLoadSequence;
+      statsLoadPending = true;
+      const params = buildStatsRequestParams();
+      const query = params.toString();
+      const keepContent = statsData !== null && displayedStatsQuery === query;
       try {
-        renderStatsLoading();
+        if (!keepContent) {
+          statsData = null;
+          Object.values(chartInstances).forEach(chart => chart.clear());
+          renderStatsLoading();
+        }
+        window.updateRefreshStatus('stats-refresh-status', 'loading');
 
-        const params = buildStatsRequestParams();
         // 后端返回格式: {"success":true,"data":{"stats":[...],"duration_seconds":...,"rpm_stats":{...},"is_today":...}}
-        statsData = (await fetchDataWithAuth('/dashboard/stats?' + params.toString())) || { stats: [] };
+        const data = await fetchDataWithAuth('/dashboard/stats?' + query);
+        if (requestID !== statsLoadSequence) return;
+        statsData = data || { stats: [] };
+        displayedStatsQuery = query;
         durationSeconds = statsData.duration_seconds || 1; // 防止除零
         rpmStats = statsData.rpm_stats || null;
         isToday = statsData.is_today !== false;
@@ -133,11 +150,15 @@
         if (currentView === 'chart') {
           renderCharts();
         }
+        window.updateRefreshStatus('stats-refresh-status', 'success', Date.now());
 
       } catch (error) {
+        if (requestID !== statsLoadSequence) return;
         console.error('Failed to load stats:', error);
-        if (window.showError) try { window.showError(t('stats.noData')); } catch(_){}
-        renderStatsError();
+        window.updateRefreshStatus('stats-refresh-status', 'error');
+        if (!keepContent) renderStatsError();
+      } finally {
+        if (requestID === statsLoadSequence) statsLoadPending = false;
       }
     }
 
@@ -657,6 +678,7 @@
     }
 
     async function loadStatsFilterOptions() {
+      const requestID = ++statsOptionsLoadSequence;
       try {
         const params = new URLSearchParams();
         appendStatsTimeRangeParams(params, getStatsFilters());
@@ -664,6 +686,7 @@
           params.set('channel_type', currentChannelType);
         }
         const data = await fetchDataWithAuth('/dashboard/stats/filter-options?' + params.toString());
+        if (requestID !== statsOptionsLoadSequence) return;
         if (data) {
           statsChannelNameOptions = data.channel_names || [];
           statsModelOptions = data.models || [];
@@ -675,6 +698,7 @@
           }
         }
       } catch (error) {
+        if (requestID !== statsOptionsLoadSequence) return;
         console.error('[Stats] 加载筛选选项失败:', error);
       }
     }
@@ -1195,7 +1219,7 @@ ${t('stats.tooltipCost')}: $${point.cost.toFixed(4)}`;
 
       // 自动刷新（system_settings.auto_refresh_interval_seconds，0=禁用）
       if (typeof window.createAutoRefresh === 'function') {
-        window.createAutoRefresh({ load: loadStats }).init();
+        window.createAutoRefresh({ load: () => loadStats(true) }).init();
       }
       }
     });

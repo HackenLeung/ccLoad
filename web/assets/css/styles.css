@@ -8378,3 +8378,21 @@ html[data-theme="dark"] .chat-message .chat-patch-number {
 .channels-readonly #importCsvBtn {
   display: none !important;
 }
+
+.refresh-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-top: 0.75rem;
+}
+
+.refresh-status {
+  color: var(--muted-fg);
+  font-size: 0.8125rem;
+  min-height: 1.25rem;
+}
+
+.refresh-status--error {
+  color: var(--error-500);
+}

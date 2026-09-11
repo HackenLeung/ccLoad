@@ -21,7 +21,7 @@ import (
 // - 智能 TTL：越近的数据 TTL 越短
 // - filter 哈希：支持复杂过滤器的缓存键生成
 // - 定期清理：后台 goroutine 清理过期条目，防止内存泄漏
-// - 容量限制：最多 1000 个条目，超过时强制清理
+// - 容量限制：最多 1000 个条目，满额后停止接纳新键
 //
 // 设计原则：
 // - KISS：简单的 sync.Map，避免过度工程
@@ -29,7 +29,8 @@ import (
 type StatsCache struct {
 	store      storage.Store
 	cache      sync.Map     // key: cacheKey, value: *cachedStats
-	entryCount atomic.Int64 // 当前缓存条目数（原子计数，避免锁）
+	writeMu    sync.Mutex   // 串行化插入与清理，读取不加锁
+	entryCount atomic.Int64 // 当前缓存条目数
 	stopCh     chan struct{}
 	stopWg     sync.WaitGroup
 }
@@ -38,8 +39,9 @@ const maxCacheEntries = 1000 // 最大缓存条目数
 
 // cachedStats 缓存的统计数据
 type cachedStats struct {
-	data   any       // 实际数据（[]model.StatsEntry 或 *model.RPMStats）
-	expiry time.Time // 过期时间
+	data      any       // 实际数据（[]model.StatsEntry 或 *model.RPMStats）
+	expiry    time.Time // 过期时间
+	updatedAt time.Time // 数据查询时间，缓存命中时保持不变
 }
 
 // NewStatsCache 创建统计缓存实例
@@ -60,7 +62,7 @@ func NewStatsCache(store storage.Store) *StatsCache {
 func (sc *StatsCache) cleanupWorker() {
 	defer sc.stopWg.Done()
 
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -75,6 +77,8 @@ func (sc *StatsCache) cleanupWorker() {
 
 // cleanupExpired 清理所有过期条目
 func (sc *StatsCache) cleanupExpired() {
+	sc.writeMu.Lock()
+	defer sc.writeMu.Unlock()
 	now := time.Now()
 	sc.cache.Range(func(key, value any) bool {
 		cs := value.(*cachedStats)
@@ -89,17 +93,20 @@ func (sc *StatsCache) cleanupExpired() {
 
 // storeCache 存储缓存条目（带容量检查）
 //
-// 使用 LoadOrStore 保证原子性：要么是新插入（计数+1），要么是更新（计数不变）
+// 满额时仍允许更新已有键，新键暂不缓存；定时清理释放容量。
+// 不在每次超限插入时扫描全表，避免高基数筛选放大 CPU 开销。
 func (sc *StatsCache) storeCache(key string, value *cachedStats) {
-	if _, loaded := sc.cache.LoadOrStore(key, value); loaded {
-		// key 已存在，LoadOrStore 不会插入，手动更新值
+	sc.writeMu.Lock()
+	defer sc.writeMu.Unlock()
+	if _, loaded := sc.cache.Load(key); loaded {
 		sc.cache.Store(key, value)
 		return
 	}
-	// 新插入成功，增加计数
-	if sc.entryCount.Add(1) > maxCacheEntries {
-		sc.cleanupExpired()
+	if sc.entryCount.Load() >= maxCacheEntries {
+		return
 	}
+	sc.cache.Store(key, value)
+	sc.entryCount.Add(1)
 }
 
 // Close 关闭缓存（停止清理 goroutine）
@@ -139,7 +146,10 @@ func (sc *StatsCache) GetStats(ctx context.Context, startTime, endTime time.Time
 // GetStatsLite 获取轻量统计数据（带缓存）
 func (sc *StatsCache) GetStatsLite(ctx context.Context, startTime, endTime time.Time, filter *model.LogFilter) ([]model.StatsEntry, error) {
 	key := buildCacheKey("stats_lite", startTime, endTime, filter)
+	return sc.getStatsLite(ctx, startTime, endTime, filter, key)
+}
 
+func (sc *StatsCache) getStatsLite(ctx context.Context, startTime, endTime time.Time, filter *model.LogFilter, key string) ([]model.StatsEntry, error) {
 	// 尝试缓存
 	if cached, ok := sc.cache.Load(key); ok {
 		cs := cached.(*cachedStats)
@@ -168,14 +178,14 @@ func (sc *StatsCache) GetStatsLite(ctx context.Context, startTime, endTime time.
 // 缓存键按 ttl 分桶（而非默认 30 秒），保证在同一 TTL 周期内稳定命中。
 // forceRefresh=true 时跳过缓存读取（仍写回），用于用户主动刷新页面等需要最新数据的场景。
 // 典型用途：首页“累计 Token/成本”这类全表聚合，代价高但对新鲜度要求低。
-func (sc *StatsCache) GetStatsLiteWithTTL(ctx context.Context, startTime, endTime time.Time, filter *model.LogFilter, ttl time.Duration, forceRefresh bool) ([]model.StatsEntry, error) {
+func (sc *StatsCache) GetStatsLiteWithTTL(ctx context.Context, startTime, endTime time.Time, filter *model.LogFilter, ttl time.Duration, forceRefresh bool) ([]model.StatsEntry, time.Time, error) {
 	key := buildCacheKeyWithBucket("stats_lite_ttl", startTime, endTime, filter, ttl)
 
 	if !forceRefresh {
 		if cached, ok := sc.cache.Load(key); ok {
 			cs := cached.(*cachedStats)
 			if time.Now().Before(cs.expiry) {
-				return cs.data.([]model.StatsEntry), nil
+				return cs.data.([]model.StatsEntry), cs.updatedAt, nil
 			}
 		}
 	}
@@ -183,15 +193,25 @@ func (sc *StatsCache) GetStatsLiteWithTTL(ctx context.Context, startTime, endTim
 	// 缓存未命中或强制刷新，查询数据库
 	result, err := sc.store.GetStatsLite(ctx, startTime, endTime, filter)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 
+	updatedAt := time.Now()
 	sc.storeCache(key, &cachedStats{
-		data:   result,
-		expiry: time.Now().Add(ttl),
+		data:      result,
+		expiry:    updatedAt.Add(ttl),
+		updatedAt: updatedAt,
 	})
 
-	return result, nil
+	return result, updatedAt, nil
+}
+
+// GetRecentMinuteStats 按 30 秒对齐滑动窗口的缓存键，实际查询仍覆盖完整最近一分钟。
+// 仅用于实时概览，不改变用户指定的自定义时间范围。
+func (sc *StatsCache) GetRecentMinuteStats(ctx context.Context, now time.Time, filter *model.LogFilter) ([]model.StatsEntry, error) {
+	endTime := now.Truncate(30 * time.Second)
+	key := buildCacheKey("stats_recent_minute", endTime.Add(-time.Minute), endTime, filter)
+	return sc.getStatsLite(ctx, now.Add(-time.Minute), now, filter, key)
 }
 
 // GetRPMStats 获取 RPM 统计（带缓存）

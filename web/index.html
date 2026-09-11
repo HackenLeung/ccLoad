@@ -49,6 +49,11 @@
           <div class="time-range-container">
             <div id="index-time-range" class="time-range-selector"></div>
           </div>
+          <div class="refresh-toolbar">
+            <span id="index-refresh-status" class="refresh-status" role="status" aria-live="polite"></span>
+            <button id="refresh-cumulative" type="button" class="btn btn-secondary btn-sm" data-i18n="index.refreshCumulative">刷新累计值</button>
+            <span class="refresh-status"><span data-i18n="index.cumulativeStatus">累计数据：</span><span id="cumulative-refresh-status" role="status" aria-live="polite"></span></span>
+          </div>
         </section>
 
         <!-- 全局用量与性能 -->

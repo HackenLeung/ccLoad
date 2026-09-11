@@ -377,6 +377,7 @@ window.WebAuth = window.WebAuth || {
   // 全站唯一轮询源：拉取完整 payload 后自己消费 count，同时推送 data 给订阅者（如 logs.js）
   const ACTIVE_POLL_MS = 2000;
   let _activeTimer = null;
+  let _activePollInFlight = false;
   let _activeWrap = null;        // .brand-icon-wrap 元素
   let _activeBadge = null;       // .brand-badge 元素
   let _faviconBase = null;       // 预加载的 favicon 底图 Image
@@ -606,6 +607,8 @@ window.WebAuth = window.WebAuth || {
   }
 
   async function pollActiveRequests() {
+    if (_activePollInFlight) return;
+    _activePollInFlight = true;
     try {
       const payload = await fetchAPIWithAuth('/admin/active-requests');
       const count = typeof payload.count === 'number' ? payload.count : 0;
@@ -617,6 +620,7 @@ window.WebAuth = window.WebAuth || {
         try { cb(data, count); } catch (_) { /* 订阅者异常不影响主逻辑 */ }
       }
     } catch (_) { /* 静默：未登录或网络异常不打断页面 */ }
+    finally { _activePollInFlight = false; }
   }
 
   function startActiveRequestsPolling() {
@@ -1625,6 +1629,23 @@ window.WebAuth = window.WebAuth || {
   const AUTO_REFRESH_CACHE_KEY = '__autoRefreshIntervalSec';
   const AUTO_REFRESH_CACHE_TTL_MS = 60 * 1000;
 
+  // 后台刷新保留已有内容，通过轻量状态文字提示新鲜度。
+  window.updateRefreshStatus = function (id, state, updatedAt) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (updatedAt) el.dataset.updatedAt = new Date(updatedAt).toISOString();
+    const timestamp = el.dataset.updatedAt;
+    const lastUpdated = timestamp
+      ? t('common.lastUpdated', { time: new Date(timestamp).toLocaleString() })
+      : '';
+    el.textContent = [
+      state === 'loading' ? t('common.updating') : '',
+      state === 'error' ? t('common.updateFailed') : '',
+      lastUpdated
+    ].filter(Boolean).join(' · ');
+    el.classList.toggle('refresh-status--error', state === 'error');
+  };
+
   async function fetchAutoRefreshIntervalSec() {
     if (window.isAPITokenRole()) return 0;
     try {
@@ -1664,6 +1685,7 @@ window.WebAuth = window.WebAuth || {
     let intervalId = null;
     let intervalMs = 0;
     let visibilityHandler = null;
+    let inFlight = false;
 
     function shouldSkip() {
       if (typeof document === 'undefined') return true;
@@ -1672,14 +1694,13 @@ window.WebAuth = window.WebAuth || {
       return false;
     }
 
-    function tick() {
-      if (shouldSkip()) return;
+    async function tick() {
+      if (shouldSkip() || inFlight) return;
+      inFlight = true;
       try {
-        const result = load();
-        if (result && typeof result.catch === 'function') {
-          result.catch(() => { /* 单次失败不影响后续轮询 */ });
-        }
-      } catch (_) { /* 同步异常吞掉 */ }
+        await load();
+      } catch (_) { /* 单次失败不影响后续轮询 */ }
+      finally { inFlight = false; }
     }
 
     function startTimer() {

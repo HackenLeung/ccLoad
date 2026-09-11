@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -124,6 +125,9 @@ func (s *Server) HandleStats(c *gin.Context) {
 	}
 	if isAPITokenWebRequest(c) {
 		stats = projectTokenStats(stats)
+	} else {
+		// 时间线是本次请求的数据，不能原地修改共享缓存条目。
+		stats = slices.Clone(stats)
 	}
 
 	// 计算时间跨度（秒），用于前端计算RPM和QPS
@@ -174,9 +178,8 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 	isToday := params.Range == "today" || params.Range == ""
 	todayStart := beginningOfDay(now)
 	allTimeStart := time.Unix(0, 0)
-	recentStart := now.Add(-time.Minute)
 	// 累计统计是全表聚合，代价高但对新鲜度要求低：默认走 1 小时缓存，
-	// 仅在用户主动刷新（切换时间范围/手动刷新页面）时强制查一次最新值。
+	// 仅在用户点击“刷新累计值”时强制查询，切换日期复用缓存。
 	const cumulativeTokensTTL = time.Hour
 	refreshCumulative := util.ParseBoolDefault(c.Query("refresh_cumulative"), false)
 	ctx := c.Request.Context()
@@ -189,19 +192,20 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 
 	// 并行查询所选区间、今日、累计和最近一分钟，首页只需一次请求。
 	var (
-		stats        []model.StatsEntry
-		todayStats   []model.StatsEntry
-		allTimeStats []model.StatsEntry
-		recentStats  []model.StatsEntry
-		rpmStats     *model.RPMStats
-		channelTypes map[int64]string
-		statsErr     error
-		todayErr     error
-		allTimeErr   error
-		recentErr    error
-		rpmErr       error
-		typesErr     error
-		wg           sync.WaitGroup
+		stats               []model.StatsEntry
+		todayStats          []model.StatsEntry
+		allTimeStats        []model.StatsEntry
+		cumulativeUpdatedAt time.Time
+		recentStats         []model.StatsEntry
+		rpmStats            *model.RPMStats
+		channelTypes        map[int64]string
+		statsErr            error
+		todayErr            error
+		allTimeErr          error
+		recentErr           error
+		rpmErr              error
+		typesErr            error
+		wg                  sync.WaitGroup
 	)
 
 	wg.Add(5)
@@ -223,12 +227,12 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 
 	go func() {
 		defer wg.Done()
-		allTimeStats, allTimeErr = s.statsCache.GetStatsLiteWithTTL(ctx, allTimeStart, now, logFilter, cumulativeTokensTTL, refreshCumulative)
+		allTimeStats, cumulativeUpdatedAt, allTimeErr = s.statsCache.GetStatsLiteWithTTL(ctx, allTimeStart, now, logFilter, cumulativeTokensTTL, refreshCumulative)
 	}()
 
 	go func() {
 		defer wg.Done()
-		recentStats, recentErr = s.statsCache.GetStatsLite(ctx, recentStart, now, logFilter)
+		recentStats, recentErr = s.statsCache.GetRecentMinuteStats(ctx, now, logFilter)
 	}()
 
 	// RPM统计
@@ -363,18 +367,19 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 	}
 
 	response := gin.H{
-		"total_requests":       totalSuccess + totalError,
-		"success_requests":     totalSuccess,
-		"error_requests":       totalError,
-		"range":                params.Range,
-		"duration_seconds":     durationSeconds,
-		"rpm_stats":            rpmStats,
-		"today_tokens":         todayTokens,
-		"cumulative_tokens":    cumulativeTokens,
-		"recent_tpm":           recentTPM,
-		"avg_response_seconds": averageResponseSeconds(stats),
-		"is_today":             isToday,
-		"by_type":              typeStats, // 按渠道类型分组的统计
+		"total_requests":        totalSuccess + totalError,
+		"success_requests":      totalSuccess,
+		"error_requests":        totalError,
+		"range":                 params.Range,
+		"duration_seconds":      durationSeconds,
+		"rpm_stats":             rpmStats,
+		"today_tokens":          todayTokens,
+		"cumulative_tokens":     cumulativeTokens,
+		"cumulative_updated_at": cumulativeUpdatedAt,
+		"recent_tpm":            recentTPM,
+		"avg_response_seconds":  averageResponseSeconds(stats),
+		"is_today":              isToday,
+		"by_type":               typeStats, // 按渠道类型分组的统计
 	}
 
 	RespondJSON(c, http.StatusOK, response)
