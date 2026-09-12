@@ -59,6 +59,10 @@ type Server struct {
 	channelRisk                   *channelRiskObserver  // 被动风险观察（仅保存摘要，不持久化原文）
 	scheduledChannelChecksRunning atomic.Bool
 
+	// codexEncryptedReasoningKey -> codexEncryptedReasoningMemo（按上游、会话及推理块隔离，
+	// 仅保存重试真正成功的策略；固定 TTL 到期后恢复原样发送）
+	codexEncryptedReasoningUnsupported sync.Map
+
 	// 异步统计（有界队列，避免每请求起goroutine）
 	tokenStatsCh        chan tokenStatsUpdate
 	tokenStatsDropCount atomic.Int64

@@ -900,6 +900,7 @@ func (s *Server) handleSuccessResponse(
 		}
 		streamComplete = parser.IsStreamComplete()
 	}
+	result.StreamComplete = streamComplete
 
 	// 生成流诊断消息（仅流请求）
 	if reqCtx.isStreaming {
@@ -1121,6 +1122,7 @@ func (s *Server) handleTranslatedStreamSuccessResponse(
 	result.ThinkingEffort = parser.GetThinkingEffort()
 	result.SSEErrorEvent = parser.GetLastError()
 	streamComplete := parser.IsStreamComplete() || translatedComplete
+	result.StreamComplete = streamComplete
 
 	if diagMsg := buildStreamDiagnostics(streamErr, readStats, streamComplete, channelType, resp.Header.Get("Content-Type")); diagMsg != "" {
 		result.StreamDiagMsg = diagMsg
