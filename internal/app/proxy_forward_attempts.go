@@ -160,7 +160,7 @@ func (s *Server) forwardAttempt(
 			return nil, cooldown.ActionRetryChannel, err
 		}
 		result, action := s.handleNetworkError(
-			ctx, cfg, keyIndex, actualModel, selectedKey, reqCtx.tokenID, reqCtx.clientIP,
+			ctx, cfg, keyIndex, actualModel, selectedKey,
 			duration, err, res, reqCtx, deferChannelCooldown,
 		)
 		return result, action, nil

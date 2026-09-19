@@ -113,8 +113,8 @@ func (s *Server) logProxyResult(
 		IsStreaming:      reqCtx.isStreaming,
 		APIKeyUsed:       selectedKey,
 		AuthTokenID:      reqCtx.tokenID,
-		ClientIP:         reqCtx.clientIP,
 		BaseURL:          reqCtx.baseURL,
+		Header:           reqCtx.header,
 		Result:           res,
 		ErrMsg:           errMsg,
 		StartTime:        logStartTimeForResult(reqCtx.attemptStartTime, res),
@@ -151,8 +151,6 @@ func (s *Server) handleNetworkError(
 	keyIndex int,
 	actualModel string, // [INFO] 重定向后的实际模型名称
 	selectedKey string,
-	_ int64, // authTokenID: API令牌ID（用于日志记录，2025-12新增，当前未使用）
-	_ string, // clientIP: 客户端IP（用于日志记录，2025-12新增，当前未使用）
 	duration float64,
 	err error,
 	res *fwResult, // [FIX] 流式响应中途取消时，res 包含已解析的 token 统计

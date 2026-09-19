@@ -28,7 +28,8 @@ type ActiveRequest struct {
 	ID                  int64   `json:"id"`
 	Model               string  `json:"model"`
 	ClientIP            string  `json:"client_ip"`
-	StartTime           int64   `json:"start_time"` // Unix毫秒
+	ClientName          string  `json:"client_name,omitempty"` // 客户端软件标识（由UA归类）
+	StartTime           int64   `json:"start_time"`            // Unix毫秒
 	Streaming           bool    `json:"is_streaming"`
 	ChannelID           int64   `json:"channel_id,omitempty"`
 	ChannelName         string  `json:"channel_name,omitempty"`
@@ -55,6 +56,7 @@ type activeRequest struct {
 	ID               int64
 	Model            string
 	ClientIP         string
+	ClientName       string
 	StartTime        int64 // Unix毫秒
 	Streaming        bool
 	ChannelID        int64
@@ -90,6 +92,15 @@ func (m *activeRequestManager) SetThinkingEffort(id int64, thinkingEffort string
 	m.mu.Lock()
 	if req, ok := m.requests[id]; ok {
 		req.ThinkingEffort = normalizeThinkingEffort(thinkingEffort)
+	}
+	m.mu.Unlock()
+}
+
+// SetClientName 记录调用方软件标识（由请求头归类，用于「进行中请求」列表展示）。
+func (m *activeRequestManager) SetClientName(id int64, clientName string) {
+	m.mu.Lock()
+	if req, ok := m.requests[id]; ok {
+		req.ClientName = clientName
 	}
 	m.mu.Unlock()
 }
@@ -414,6 +425,7 @@ func (m *activeRequestManager) List() []*ActiveRequest {
 			ID:                req.ID,
 			Model:             req.Model,
 			ClientIP:          req.ClientIP,
+			ClientName:        req.ClientName,
 			StartTime:         req.StartTime,
 			Streaming:         req.Streaming,
 			ChannelID:         req.ChannelID,

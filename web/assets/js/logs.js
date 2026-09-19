@@ -27,11 +27,12 @@ const LOGS_COL_STORAGE_KEY = 'ccload_logs_columns';
 
 const LOG_COLUMNS = [
   { key: 'time',        cls: 'logs-col-time',        i18n: 'logs.colTime' },
-  { key: 'ip',          cls: 'logs-col-ip',          i18n: 'logs.colIP' },
+  { key: 'client',      cls: 'logs-col-client',      i18n: 'logs.colClient' },
   { key: 'tokenDesc',   cls: 'logs-col-token-desc',  i18n: 'logs.colTokenDesc' },
   { key: 'apiKey',      cls: 'logs-col-api-key',     i18n: 'logs.colApiKey' },
   { key: 'channel',     cls: 'logs-col-channel',     i18n: 'logs.colChannel' },
   { key: 'upstreamProtocol', cls: 'logs-col-upstream-protocol', i18n: 'logs.colUpstreamProtocol' },
+  { key: 'responseModel', cls: 'logs-col-response-model', i18n: 'logs.colResponseModel' },
   { key: 'model',       cls: 'logs-col-model',       i18n: 'common.model' },
   { key: 'status',      cls: 'logs-col-status',      i18n: 'logs.statusCode' },
   { key: 'timing',      cls: 'logs-col-timing',      i18n: 'logs.colTiming' },
@@ -423,28 +424,6 @@ async function cancelActiveRequest(button) {
   }
 }
 
-// IP 地址掩码处理（隐藏最后两段）
-function maskIP(ip) {
-  if (!ip) return '';
-  // 短地址（如 ::1 localhost）无需掩码
-  if (ip.length <= 3) return ip;
-  // IPv4: 192.168.1.100 -> 192.168.*.*
-  if (ip.includes('.')) {
-    const parts = ip.split('.');
-    if (parts.length === 4) {
-      return `${parts[0]}.${parts[1]}.*.*`;
-    }
-  }
-  // IPv6: 简化处理，保留前两段
-  if (ip.includes(':')) {
-    const parts = ip.split(':');
-    if (parts.length >= 2) {
-      return `${parts[0]}:${parts[1]}::*`;
-    }
-  }
-  return ip;
-}
-
 function clearActiveRequestsRows() {
   document.querySelectorAll('tr.pending-row').forEach(el => el.remove());
 }
@@ -608,14 +587,61 @@ function buildUpstreamProtocolDisplay(upstreamProtocol) {
   return `<span class="logs-protocol-tag">${escapeHtml(labels[normalized] || normalized)}</span>`;
 }
 
+// clientLabelMaxLen 客户端标识列的显示宽度上限（字符数）。
+// 已知归类值最长 cherry-studio/anthropic-sdk 均为 13 字符，不会被截断；
+// 只有 other 回退显示 UA 产物名时才可能超长，此时截断并在 hover 里给出完整值。
+const CLIENT_LABEL_MAX_LEN = 17;
+
+// buildLogClientDisplay 渲染客户端软件列。
+// 已归类的直接显示标识（如 claude-code）；归为 other 的说明没有匹配到已知软件，
+// 此时 "other" 毫无信息量，退而显示 UA 里的产物名（第一个 "/" 之前的部分），
+// 如 "MyWeirdClient/1.2.3" -> "MyWeirdClient"、"Mozilla/5.0 (Windows...)" -> "Mozilla"。
+function buildLogClientDisplay(clientName, clientUA) {
+  const key = String(clientName || '').trim();
+  const ua = String(clientUA || '').trim();
+  if (!key) {
+    return '<span style="color: var(--neutral-500);">-</span>';
+  }
+  let label = key;
+  if (key === 'other' && ua) {
+    // 无 "/" 的 UA 原样保留，再由下方长度上限兜底
+    label = ua.split('/')[0].trim() || ua;
+  }
+  const display = label.length > CLIENT_LABEL_MAX_LEN
+    ? `${label.slice(0, CLIENT_LABEL_MAX_LEN)}…`
+    : label;
+  const title = ua
+    ? `${escapeHtml(key)}&#10;UA: ${escapeHtml(ua)}`
+    : escapeHtml(key);
+  return `<span class="logs-client-tag" title="${title}">${escapeHtml(display)}</span>`;
+}
+
+// buildResponseModelDisplay 渲染「上游自报模型」列。
+// 只在非空时显示；与对外模型名或实际转发模型不一致时加角标，
+// 因为那正是"上游偷偷换了模型"的信号——这也正是本列存在的意义。
+function buildResponseModelDisplay(responseModel, actualModel, requestModel) {
+  const reported = String(responseModel || '').trim();
+  if (!reported) return '';
+
+  const expected = String(actualModel || '').trim() || String(requestModel || '').trim();
+  const mismatched = expected !== '' && reported !== expected;
+
+  if (!mismatched) {
+    return `<span class="logs-resp-model">${escapeHtml(reported)}</span>`;
+  }
+  const title = `${t('logs.respModelMismatch')}&#10;${escapeHtml(expected)} → ${escapeHtml(reported)}`;
+  return `<span class="logs-resp-model logs-resp-model-mismatch" title="${title}">${escapeHtml(reported)}<sup class="resp-model-warn">!</sup></span>`;
+}
+
 function getLogMobileLabels() {
   return {
     time: escapeHtml(t('logs.colTime')),
-    ip: escapeHtml(t('logs.colIP')),
+    client: escapeHtml(t('logs.colClient')),
     tokenDesc: escapeHtml(t('logs.colTokenDesc')),
     apiKey: escapeHtml(t('logs.colApiKey')),
     channel: escapeHtml(t('logs.colChannel')),
     upstreamProtocol: escapeHtml(t('logs.colUpstreamProtocol')),
+    responseModel: escapeHtml(t('logs.colResponseModel')),
     model: escapeHtml(t('common.model')),
     status: escapeHtml(t('logs.statusCode')),
     timing: escapeHtml(t('logs.colTiming')),
@@ -869,6 +895,7 @@ function filterActiveRequests(requests) {
   const channelType = (document.getElementById('f_channel_type')?.value || '').trim();
   const tokenId = (document.getElementById('f_auth_token')?.value || '').trim();
   const logSourceFilter = filters.logSource;
+  const clientName = (document.getElementById('f_client_name')?.value || '').trim();
 
   return requests.filter(req => {
     if (channelName) {
@@ -878,6 +905,10 @@ function filterActiveRequests(requests) {
     if (model) {
       const reqModel = normalizeLogsFilterValue(req.model || '');
       if (modelExact ? reqModel !== model : !reqModel.includes(model)) return false;
+    }
+    // 客户端软件精确匹配（空表示全部）
+    if (clientName && (req.client_name || '') !== clientName) {
+      return false;
     }
     // 渠道类型精确匹配（'all' 表示全部，不过滤）
     if (channelType && channelType !== 'all') {
@@ -1028,7 +1059,7 @@ function renderActiveRequests(activeRequests) {
             <td colspan="${totalCols}">
               <span class="status-pending">进行中</span>
               <span style="margin-left: 8px;">${formatTime(req.start_time)}</span>
-              <span class="logs-mono-text" style="margin-left: 8px;" title="${escapeHtml(req.client_ip || '')}">${escapeHtml(maskIP(req.client_ip) || '-')}</span>
+              <span style="margin-left: 8px;">${buildLogClientDisplay(req.client_name, '')}</span>
               <span style="margin-left: 8px;">${modelDisplay}</span>
               <span style="margin-left: 8px;">${durationDisplay} ${streamFlag}</span>
               <span class="active-request-info-slot" style="margin-left: 8px;">${infoContent}</span>
@@ -1037,11 +1068,12 @@ function renderActiveRequests(activeRequests) {
       } else {
         row.innerHTML = `
             <td class="logs-col-time" data-mobile-label="${logMobileLabels.time}" style="white-space: nowrap;">${formatTime(req.start_time)}</td>
-            <td class="logs-col-ip logs-mono-text" data-mobile-label="${logMobileLabels.ip}" style="white-space: nowrap;" title="${escapeHtml(req.client_ip || '')}">${escapeHtml(maskIP(req.client_ip) || '-')}</td>
+            <td class="logs-col-client" data-mobile-label="${logMobileLabels.client}" style="white-space: nowrap;">${buildLogClientDisplay(req.client_name, '')}</td>
             <td class="${tokenDescCellClass}" data-mobile-label="${logMobileLabels.tokenDesc}" style="white-space: nowrap;">${tokenDescDisplay}</td>
             <td class="logs-col-api-key" data-mobile-label="${logMobileLabels.apiKey}" style="text-align: center; white-space: nowrap;">${keyDisplay}</td>
-            <td class="logs-col-channel" data-mobile-label="${logMobileLabels.channel}" style="text-align: left;">${channelDisplay}</td>
+            <td class="logs-col-channel" data-mobile-label="${logMobileLabels.channel}">${channelDisplay}</td>
             <td class="logs-col-upstream-protocol${upstreamProtocolDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.upstreamProtocol}">${upstreamProtocolDisplay}</td>
+            <td class="logs-col-response-model mobile-empty-cell" data-mobile-label="${logMobileLabels.responseModel}"></td>
             <td class="logs-col-model" data-mobile-label="${logMobileLabels.model}">${modelDisplay}</td>
             <td class="logs-col-status" data-mobile-label="${logMobileLabels.status}"><span class="status-pending">进行中</span></td>
             <td class="logs-col-timing" data-mobile-label="${logMobileLabels.timing}" style="text-align: right; white-space: nowrap;">${durationDisplay} ${streamFlag}</td>
@@ -1073,7 +1105,7 @@ function getTableColspan() {
   const table = document.getElementById('tbody')?.closest('table')
     || document.querySelector('.logs-table');
   const headerCells = table ? table.querySelectorAll('thead th') : [];
-  return headerCells.length || 18; // fallback到18列（日志页默认列数）
+  return headerCells.length || 19; // fallback到19列（日志页默认列数）
 }
 
 function formatCacheUtilRate(inputTokens, cacheReadTokens, cacheCreationTokens) {
@@ -1183,10 +1215,8 @@ function renderLogs(data) {
     const entry = data[i];
     // === 预处理数据：构建复杂HTML片段 ===
 
-    // 0. 客户端IP显示（掩码处理，hover显示完整IP）
-    const clientIPDisplay = entry.client_ip ?
-      `<span title="${escapeHtml(entry.client_ip)}">${escapeHtml(maskIP(entry.client_ip))}</span>` :
-      '<span style="color: var(--neutral-400);">-</span>';
+    // 0. 客户端软件（归类名 + hover 显示原始 UA）
+    const clientDisplay = buildLogClientDisplay(entry.client_name, entry.client_ua);
 
     // 0.5. API访问令牌描述
     const tokenDescDisplay = buildLogTokenDescDisplay(entry.auth_token_description);
@@ -1202,6 +1232,9 @@ function renderLogs(data) {
 
     // 3. 模型显示（支持重定向与思考等级角标）
     const modelDisplay = buildLogModelDisplay(entry.model, entry.actual_model, entry.thinking_effort, entry.reasoning_tokens);
+
+    // 3.5 上游自报模型（与请求模型不一致时加告警角标）
+    const responseModelDisplay = buildResponseModelDisplay(entry.response_model, entry.actual_model, entry.model);
 
     // 4. 响应时间显示(流式/非流式)
     const hasDuration = entry.duration !== undefined && entry.duration !== null;
@@ -1298,11 +1331,12 @@ function renderLogs(data) {
     // === 直接拼接行 HTML ===
     htmlParts[i] = `<tr class="mobile-card-row logs-table-row">
           <td class="logs-col-time" data-mobile-label="${logMobileLabels.time}" style="white-space: nowrap;">${formatTime(entry.time)}</td>
-          <td class="logs-col-ip logs-mono-text" data-mobile-label="${logMobileLabels.ip}" style="white-space: nowrap;">${clientIPDisplay}</td>
+          <td class="logs-col-client" data-mobile-label="${logMobileLabels.client}" style="white-space: nowrap;">${clientDisplay}</td>
           <td class="logs-col-token-desc" data-mobile-label="${logMobileLabels.tokenDesc}" style="white-space: nowrap;">${tokenDescDisplay}</td>
           <td class="logs-col-api-key" data-mobile-label="${logMobileLabels.apiKey}" style="text-align: center; white-space: nowrap;">${apiKeyDisplay}</td>
-          <td class="logs-col-channel" data-mobile-label="${logMobileLabels.channel}" style="text-align: left;">${configDisplay}</td>
+          <td class="logs-col-channel" data-mobile-label="${logMobileLabels.channel}">${configDisplay}</td>
           <td class="logs-col-upstream-protocol${upstreamProtocolDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.upstreamProtocol}">${upstreamProtocolDisplay}</td>
+          <td class="logs-col-response-model${responseModelDisplay ? '' : ' mobile-empty-cell'}" data-mobile-label="${logMobileLabels.responseModel}">${responseModelDisplay}</td>
           <td class="logs-col-model" data-mobile-label="${logMobileLabels.model}">${modelDisplay}</td>
           <td class="logs-col-status" data-mobile-label="${logMobileLabels.status}"><span class="${statusClass}">${statusCode}</span></td>
           <td class="logs-col-timing" data-mobile-label="${logMobileLabels.timing}" style="text-align: right; white-space: nowrap;">${responseTimingDisplay}</td>
@@ -1471,6 +1505,7 @@ function applyLogsFilterValues(filters) {
   window.applyFilterControlValues(filters, {
     range: 'f_hours',
     logSource: 'f_log_source',
+    clientName: 'f_client_name',
     status: 'f_status',
     authToken: 'f_auth_token'
   });
@@ -1686,11 +1721,12 @@ async function initFilters(restoredFilters, preloaded) {
   document.getElementById('btn_filter').addEventListener('click', applyFilter);
   document.getElementById('btn_clear_filters')?.addEventListener('click', resetLogsFilters);
   document.getElementById('f_log_source')?.addEventListener('change', applyFilter);
+  document.getElementById('f_client_name')?.addEventListener('change', applyFilter);
 
   window.bindFilterApplyInputs({
     apply: applyFilter,
     debounceInputIds: ['f_status'],
-    enterInputIds: ['f_hours', 'f_status', 'f_auth_token', 'f_channel_type', 'f_log_source']
+    enterInputIds: ['f_hours', 'f_status', 'f_auth_token', 'f_channel_type', 'f_log_source', 'f_client_name']
   });
 }
 
@@ -1899,6 +1935,15 @@ const LOGS_FILTER_FIELDS = [
       return Boolean(value) && value !== 'all';
     }
   },
+  {
+    key: 'clientName',
+    queryKeys: ['client_name'],
+    requestKey: 'client_name',
+    defaultValue: '',
+    includeInQuery(value) {
+      return Boolean(value);
+    }
+  },
   { key: 'status', queryKeys: ['status_code'], defaultValue: '' },
   { key: 'authToken', queryKeys: ['auth_token_id'], defaultValue: '' },
   {
@@ -1937,6 +1982,7 @@ function getLogsFilters() {
     channelName,
     channelNameExact: isExactLogsChannelNameFilter(channelName),
     logSource,
+    clientName: document.getElementById('f_client_name')?.value || '',
     channelType: document.getElementById('f_channel_type')?.value || 'all',
   };
 }

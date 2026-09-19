@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -22,12 +23,14 @@ func selectScheduledCheckModel(cfg *model.Config) (string, string) {
 	return "", "scheduled_check_model 不在渠道模型列表中"
 }
 
-func detectionLogFromResult(cfg *model.Config, logSource, requestModel, actualModel, apiKeyUsed, clientIP string, authTokenID int64, requestThinkingEffort string, result map[string]any) *model.LogEntry {
+func detectionLogFromResult(cfg *model.Config, logSource, requestModel, actualModel, apiKeyUsed string, header http.Header, authTokenID int64, requestThinkingEffort string, result map[string]any) *model.LogEntry {
+	clientName, clientUA := classifyClient(header)
 	entry := &model.LogEntry{
 		Time:           model.JSONTime{Time: time.Now()},
 		LogSource:      logSource,
 		Model:          requestModel,
-		ClientIP:       clientIP,
+		ClientName:     clientName,
+		ClientUA:       clientUA,
 		APIKeyUsed:     apiKeyUsed,
 		AuthTokenID:    authTokenID,
 		BaseURL:        getResultString(result, "base_url"),

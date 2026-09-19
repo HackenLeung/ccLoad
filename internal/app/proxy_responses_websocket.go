@@ -339,6 +339,9 @@ func (s *Server) executeResponsesWebsocketTurn(ctx context.Context, c *gin.Conte
 			s.activeRequests.SetDebugCapture(activeID, dc)
 		},
 	}
+	if clientName, _ := classifyClient(c.Request.Header); clientName != "" {
+		s.activeRequests.SetClientName(activeID, clientName)
+	}
 
 	bridgeWriter := newResponsesWebsocketBridgeWriter(conn, session.responseStreamID())
 	lastResult, succeeded := s.runProxyAttemptLoop(ctx, candidates, reqCtx, bridgeWriter)

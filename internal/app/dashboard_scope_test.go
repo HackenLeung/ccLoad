@@ -59,7 +59,8 @@ func TestDashboardLogsForceTokenScopeAndExposeSafeChannelFields(t *testing.T) {
 			AuthTokenDescription: "owner",
 			APIKeyUsed:           googleKey,
 			APIKeyHash:           "secret-hash",
-			ClientIP:             "10.0.0.1",
+			ClientName:           "claude-code",
+			ClientUA:             "claude-cli/2.0.0 (external, cli)",
 			BaseURL:              "https://secret-upstream.example",
 			Cost:                 1.25,
 			CostMultiplier:       0,
@@ -118,7 +119,7 @@ func TestDashboardLogsForceTokenScopeAndExposeSafeChannelFields(t *testing.T) {
 	if !strings.Contains(message, "rejected") {
 		t.Fatalf("safe log message removed non-sensitive diagnostics: %q", message)
 	}
-	for _, key := range []string{"api_key_used", "api_key_hash", "auth_token_id", "client_ip", "base_url"} {
+	for _, key := range []string{"api_key_used", "api_key_hash", "auth_token_id", "client_ua", "base_url"} {
 		if _, ok := entry[key]; ok {
 			t.Fatalf("safe log response exposed %q", key)
 		}

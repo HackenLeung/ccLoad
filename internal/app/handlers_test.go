@@ -344,6 +344,24 @@ func TestBuildLogFilter(t *testing.T) {
 			},
 		},
 		{
+			name:  "client_name",
+			query: "client_name=claude-code",
+			check: func(t *testing.T, lf model.LogFilter) {
+				if lf.ClientName != "claude-code" {
+					t.Errorf("ClientName=%q, want %q", lf.ClientName, "claude-code")
+				}
+			},
+		},
+		{
+			name:  "client_name_blank_ignored",
+			query: "client_name=%20%20%20",
+			check: func(t *testing.T, lf model.LogFilter) {
+				if lf.ClientName != "" {
+					t.Errorf("ClientName=%q, want empty", lf.ClientName)
+				}
+			},
+		},
+		{
 			name:  "default_log_source_proxy",
 			query: "",
 			check: func(t *testing.T, lf model.LogFilter) {

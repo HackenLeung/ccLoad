@@ -25,19 +25,22 @@ func scanLogEntry(scanner interface {
 	var timeMs int64
 	var apiKeyUsed sql.NullString
 	var apiKeyHash sql.NullString
-	var clientIP sql.NullString
 	var baseURL sql.NullString
 	var actualModel sql.NullString
 	var upstreamProtocol sql.NullString
 	var serviceTier sql.NullString
 	var thinkingEffort sql.NullString
+	var clientName sql.NullString
+	var clientUA sql.NullString
+	var responseModel sql.NullString
 	var inputTokens, outputTokens, reasoningTokens, cacheReadTokens, cacheCreationTokens, cache5mTokens, cache1hTokens sql.NullInt64
 	var cost sql.NullFloat64
 	var costMultiplier sql.NullFloat64
 
 	if err := scanner.Scan(&e.ID, &timeMs, &e.Model, &actualModel, &upstreamProtocol, &logSource, &e.ChannelID,
-		&e.StatusCode, &e.Message, &duration, &isStreamingInt, &firstByteTime, &apiKeyUsed, &apiKeyHash, &e.AuthTokenID, &clientIP, &baseURL, &serviceTier, &thinkingEffort,
-		&inputTokens, &outputTokens, &reasoningTokens, &cacheReadTokens, &cacheCreationTokens, &cache5mTokens, &cache1hTokens, &cost, &costMultiplier); err != nil {
+		&e.StatusCode, &e.Message, &duration, &isStreamingInt, &firstByteTime, &apiKeyUsed, &apiKeyHash, &e.AuthTokenID, &baseURL, &serviceTier, &thinkingEffort,
+		&inputTokens, &outputTokens, &reasoningTokens, &cacheReadTokens, &cacheCreationTokens, &cache5mTokens, &cache1hTokens, &cost, &costMultiplier,
+		&clientName, &clientUA, &responseModel); err != nil {
 		return nil, err
 	}
 
@@ -62,9 +65,6 @@ func scanLogEntry(scanner interface {
 	}
 	if apiKeyHash.Valid {
 		e.APIKeyHash = apiKeyHash.String
-	}
-	if clientIP.Valid {
-		e.ClientIP = clientIP.String
 	}
 	if baseURL.Valid {
 		e.BaseURL = baseURL.String
@@ -103,6 +103,15 @@ func scanLogEntry(scanner interface {
 		e.CostMultiplier = costMultiplier.Float64
 	} else {
 		e.CostMultiplier = 1
+	}
+	if clientName.Valid {
+		e.ClientName = clientName.String
+	}
+	if clientUA.Valid {
+		e.ClientUA = clientUA.String
+	}
+	if responseModel.Valid {
+		e.ResponseModel = responseModel.String
 	}
 
 	return &e, nil
@@ -179,12 +188,12 @@ func (s *SQLStore) AddLog(ctx context.Context, e *model.LogEntry) error {
 	return err
 }
 
-const logsInsertColumns = `INSERT INTO logs(time, minute_bucket, model, actual_model, upstream_protocol, log_source, channel_id, status_code, message, duration, is_streaming, first_byte_time, api_key_used, api_key_hash, auth_token_id, client_ip, base_url, service_tier, thinking_effort,
-			input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_5m_input_tokens, cache_1h_input_tokens, cost, cost_multiplier) VALUES `
+const logsInsertColumns = `INSERT INTO logs(time, minute_bucket, model, actual_model, upstream_protocol, log_source, channel_id, status_code, message, duration, is_streaming, first_byte_time, api_key_used, api_key_hash, auth_token_id, base_url, service_tier, thinking_effort,
+			input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_5m_input_tokens, cache_1h_input_tokens, cost, cost_multiplier, client_name, client_ua, response_model) VALUES `
 
-const logRowPlaceholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+const logRowPlaceholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-const logRowParams = 28
+const logRowParams = 30
 
 // BatchAddLogs 批量写入日志（单事务，多值 INSERT 提升刷盘吞吐）
 // 设计：
@@ -313,11 +322,28 @@ func logRowArgs(e *model.LogEntry) []any {
 		model.NormalizeStoredLogSource(e.LogSource),
 		e.ChannelID, e.StatusCode, e.Message, e.Duration,
 		e.IsStreaming, e.FirstByteTime, maskedKey, apiKeyHash,
-		e.AuthTokenID, e.ClientIP, e.BaseURL, e.ServiceTier, e.ThinkingEffort,
+		e.AuthTokenID, e.BaseURL, e.ServiceTier, e.ThinkingEffort,
 		e.InputTokens, e.OutputTokens, e.ReasoningTokens, e.CacheReadInputTokens, e.CacheCreationInputTokens,
 		e.Cache5mInputTokens, e.Cache1hInputTokens, e.Cost,
 		normalizeCostMultiplier(e.CostMultiplier),
+		truncateClientField(e.ClientName, clientNameMaxLen),
+		truncateClientField(e.ClientUA, clientUAMaxLen),
+		truncateClientField(e.ResponseModel, responseModelMaxLen),
 	}
+}
+
+// 列宽上限（与 schema 中 VARCHAR 长度对齐），防止超长 UA 触发 MySQL strict mode 写入失败。
+const (
+	clientNameMaxLen    = 64
+	clientUAMaxLen      = 191
+	responseModelMaxLen = 191
+)
+
+func truncateClientField(value string, maxLen int) string {
+	if len(value) <= maxLen {
+		return value
+	}
+	return value[:maxLen]
 }
 
 // ListLogs 查询日志列表
@@ -325,8 +351,8 @@ func (s *SQLStore) ListLogs(ctx context.Context, since time.Time, limit, offset 
 	// 使用查询构建器构建复杂查询
 	// 消除 N+1：渠道过滤/名称解析用一次批量查询完成
 	baseQuery := `
-			SELECT id, time, model, actual_model, upstream_protocol, log_source, channel_id, status_code, message, duration, is_streaming, first_byte_time, api_key_used, api_key_hash, auth_token_id, client_ip, base_url, service_tier, thinking_effort,
-				input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_5m_input_tokens, cache_1h_input_tokens, cost, cost_multiplier
+			SELECT id, time, model, actual_model, upstream_protocol, log_source, channel_id, status_code, message, duration, is_streaming, first_byte_time, api_key_used, api_key_hash, auth_token_id, base_url, service_tier, thinking_effort,
+				input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_5m_input_tokens, cache_1h_input_tokens, cost, cost_multiplier, client_name, client_ua, response_model
 			FROM logs`
 
 	// time字段现在是BIGINT毫秒时间戳，需要转换为Unix毫秒进行比较
@@ -407,8 +433,8 @@ func (s *SQLStore) CountLogs(ctx context.Context, since time.Time, filter *model
 // ListLogsRange 查询指定时间范围内的日志（支持精确日期范围如"昨日"）
 func (s *SQLStore) ListLogsRange(ctx context.Context, since, until time.Time, limit, offset int, filter *model.LogFilter) ([]*model.LogEntry, error) {
 	baseQuery := `
-		SELECT id, time, model, actual_model, upstream_protocol, log_source, channel_id, status_code, message, duration, is_streaming, first_byte_time, api_key_used, api_key_hash, auth_token_id, client_ip, base_url, service_tier, thinking_effort,
-			input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_5m_input_tokens, cache_1h_input_tokens, cost, cost_multiplier
+		SELECT id, time, model, actual_model, upstream_protocol, log_source, channel_id, status_code, message, duration, is_streaming, first_byte_time, api_key_used, api_key_hash, auth_token_id, base_url, service_tier, thinking_effort,
+			input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_5m_input_tokens, cache_1h_input_tokens, cost, cost_multiplier, client_name, client_ua, response_model
 		FROM logs`
 
 	sinceMs := since.UnixMilli()
@@ -576,8 +602,8 @@ func (s *SQLStore) ListLogsRangeWithCount(ctx context.Context, since, until time
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		qb := NewQueryBuilder(`SELECT id, time, model, actual_model, upstream_protocol, log_source, channel_id, status_code, message, duration, is_streaming, first_byte_time, api_key_used, api_key_hash, auth_token_id, client_ip, base_url, service_tier, thinking_effort,
-			input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_5m_input_tokens, cache_1h_input_tokens, cost, cost_multiplier
+		qb := NewQueryBuilder(`SELECT id, time, model, actual_model, upstream_protocol, log_source, channel_id, status_code, message, duration, is_streaming, first_byte_time, api_key_used, api_key_hash, auth_token_id, base_url, service_tier, thinking_effort,
+			input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_5m_input_tokens, cache_1h_input_tokens, cost, cost_multiplier, client_name, client_ua, response_model
 			FROM logs`).
 			Where("time >= ?", sinceMs).
 			Where("time <= ?", untilMs)

@@ -296,6 +296,7 @@ func BindAndValidate(c *gin.Context, obj RequestValidator) error {
 // - channel_name_like: 模糊匹配渠道名称
 // - model: 精确匹配模型名称
 // - model_like: 模糊匹配模型名称
+// - client_name: 精确匹配客户端软件标识（claude-code/codex-cli/...）
 func BuildLogFilter(c *gin.Context) model.LogFilter {
 	var lf model.LogFilter
 
@@ -343,6 +344,11 @@ func BuildLogFilter(c *gin.Context) model.LogFilter {
 		if id, err := strconv.ParseInt(tidStr, 10, 64); err == nil && id > 0 {
 			lf.AuthTokenID = &id
 		}
+	}
+
+	// 客户端软件过滤（claude-code/codex-cli/... 由后端 classifyClient 归类）
+	if cn := strings.TrimSpace(c.Query("client_name")); cn != "" {
+		lf.ClientName = cn
 	}
 
 	switch strings.TrimSpace(c.Query("log_source")) {

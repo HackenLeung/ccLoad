@@ -118,6 +118,24 @@
               `, 'filter-control--compact')}`,
         groupClass
       ),
+      clientName: buildFilterGroup(
+        `${buildFilterLabel('f_client_name', 'logs.colClient', '客户端')}
+        ${buildSelect('f_client_name', `
+                <option value="" data-i18n="logs.clientAll">全部客户端</option>
+                <option value="claude-code">claude-code</option>
+                <option value="codex-cli">codex-cli</option>
+                <option value="gemini-cli">gemini-cli</option>
+                <option value="anthropic-sdk">anthropic-sdk</option>
+                <option value="openai-sdk">openai-sdk</option>
+                <option value="gemini-sdk">gemini-sdk</option>
+                <option value="cursor">cursor</option>
+                <option value="windsurf">windsurf</option>
+                <option value="vscode">vscode</option>
+                <option value="cherry-studio">cherry-studio</option>
+                <option value="other">other</option>
+              `, 'filter-control--compact')}`,
+        groupClass
+      ),
       statsInfo,
       hideZeroSuccess,
       filterButton,
@@ -149,7 +167,7 @@
       authTokenControlClass: 'logs-filter-control--token',
       infoClass: 'filter-info logs-filter-info',
       actionsClass: 'logs-filter-actions',
-      items: ['channelType', 'timeRange', 'channelNameCombobox', 'modelCombobox', 'logSource', 'status', 'authToken', 'logsSummary']
+      items: ['channelType', 'timeRange', 'channelNameCombobox', 'modelCombobox', 'logSource', 'clientName', 'status', 'authToken', 'logsSummary']
     },
     trend: {
       barClass: 'filter-bar mt-2',

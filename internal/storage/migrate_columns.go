@@ -87,6 +87,38 @@ func ensureColumn(ctx context.Context, db *sql.DB, dialect Dialect, table, col, 
 	return ensureSQLiteColumns(ctx, db, table, []sqliteColumnDef{{name: col, definition: sqliteDef}})
 }
 
+// dropColumn 跨方言幂等删除单列。
+// 设计：logs 表历史遗留列（如 client_ip）需要清理，但必须可重复执行——
+// 全新库由 schema 直接建表、本就不含该列，探测不到就跳过。
+// 注意：SQLite DROP COLUMN 要求该列未被索引/主键/唯一约束引用，client_ip 满足条件。
+func dropColumn(ctx context.Context, db *sql.DB, dialect Dialect, table, col string) error {
+	exists := false
+	if dialect == DialectMySQL {
+		var count int
+		if err := db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?",
+			table, col,
+		).Scan(&count); err != nil {
+			return fmt.Errorf("check %s.%s: %w", table, col, err)
+		}
+		exists = count > 0
+	} else {
+		cols, err := sqliteExistingColumns(ctx, db, table)
+		if err != nil {
+			return err
+		}
+		exists = cols[col]
+	}
+	if !exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", table, col)); err != nil {
+		return fmt.Errorf("drop %s.%s: %w", table, col, err)
+	}
+	log.Printf("[MIGRATE] 已从 %s 删除列 %s", table, col)
+	return nil
+}
+
 func ensureChannelModelsVisionColumns(ctx context.Context, db *sql.DB, dialect Dialect) error {
 	if dialect == DialectMySQL {
 		return ensureMySQLColumns(ctx, db, "channel_models", []mysqlColumnDef{
@@ -140,9 +172,6 @@ func ensureLogsNewColumns(ctx context.Context, db *sql.DB, dialect Dialect) erro
 		if err := ensureLogsAuthTokenIDMySQL(ctx, db); err != nil {
 			return err
 		}
-		if err := ensureLogsClientIPMySQL(ctx, db); err != nil {
-			return err
-		}
 		if err := ensureLogsCacheFieldsMySQL(ctx, db); err != nil {
 			return err
 		}
@@ -164,7 +193,10 @@ func ensureLogsNewColumns(ctx context.Context, db *sql.DB, dialect Dialect) erro
 		if err := ensureLogsLogSourceMySQL(ctx, db); err != nil {
 			return err
 		}
-		return ensureLogsUpstreamProtocolMySQL(ctx, db)
+		if err := ensureLogsUpstreamProtocolMySQL(ctx, db); err != nil {
+			return err
+		}
+		return ensureLogsClientFieldsMySQL(ctx, db)
 	}
 	// SQLite: 使用PRAGMA table_info检查列
 	return ensureLogsColumnsSQLite(ctx, db)
@@ -176,7 +208,6 @@ func ensureLogsColumnsSQLite(ctx context.Context, db *sql.DB) error {
 	if err := ensureSQLiteColumns(ctx, db, "logs", []sqliteColumnDef{
 		{name: "minute_bucket", definition: "INTEGER NOT NULL DEFAULT 0"}, // time/60000，用于RPM类聚合
 		{name: "auth_token_id", definition: "INTEGER NOT NULL DEFAULT 0"},
-		{name: "client_ip", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "cache_5m_input_tokens", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "cache_1h_input_tokens", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "actual_model", definition: "TEXT NOT NULL DEFAULT ''"}, // 实际转发的模型
@@ -187,7 +218,15 @@ func ensureLogsColumnsSQLite(ctx context.Context, db *sql.DB) error {
 		{name: "service_tier", definition: "TEXT NOT NULL DEFAULT ''"}, // OpenAI service_tier: priority/flex
 		{name: "thinking_effort", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "reasoning_tokens", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "client_name", definition: "TEXT NOT NULL DEFAULT ''"},    // 客户端软件标识（由UA归类）
+		{name: "client_ua", definition: "TEXT NOT NULL DEFAULT ''"},      // 客户端原始User-Agent（截断存储）
+		{name: "response_model", definition: "TEXT NOT NULL DEFAULT ''"}, // 上游响应自报的模型名
 	}); err != nil {
+		return err
+	}
+
+	// 清理历史遗留列：client_ip 只写不查，由 client_name/client_ua 取代
+	if err := dropColumn(ctx, db, DialectSQLite, "logs", "client_ip"); err != nil {
 		return err
 	}
 
@@ -235,11 +274,17 @@ func ensureLogsAuthTokenIDMySQL(ctx context.Context, db *sql.DB) error {
 	})
 }
 
-// ensureLogsClientIPMySQL 确保logs表有client_ip字段(MySQL增量迁移,2025-12新增)
-func ensureLogsClientIPMySQL(ctx context.Context, db *sql.DB) error {
-	return ensureMySQLColumns(ctx, db, "logs", []mysqlColumnDef{
-		{name: "client_ip", definition: "VARCHAR(45) NOT NULL DEFAULT '' COMMENT '客户端IP地址(新增2025-12)'"},
-	})
+// ensureLogsClientFieldsMySQL 确保logs表有客户端标识字段(2026-09新增)。
+// 同时清理历史遗留的 client_ip 列：该列只写不查，宽度被 client_name/client_ua 取代。
+func ensureLogsClientFieldsMySQL(ctx context.Context, db *sql.DB) error {
+	if err := ensureMySQLColumns(ctx, db, "logs", []mysqlColumnDef{
+		{name: "client_name", definition: "VARCHAR(64) NOT NULL DEFAULT '' COMMENT '客户端软件标识(由UA归类,如 claude-code/codex-cli)(新增2026-09)'"},
+		{name: "client_ua", definition: "VARCHAR(191) NOT NULL DEFAULT '' COMMENT '客户端原始User-Agent(截断存储)(新增2026-09)'"},
+		{name: "response_model", definition: "VARCHAR(191) NOT NULL DEFAULT '' COMMENT '上游响应自报的模型名(区别于 actual_model)(新增2026-09)'"},
+	}); err != nil {
+		return err
+	}
+	return dropColumn(ctx, db, DialectMySQL, "logs", "client_ip")
 }
 
 func ensureLogsAPIKeyHashMySQL(ctx context.Context, db *sql.DB) error {

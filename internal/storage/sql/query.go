@@ -78,6 +78,9 @@ func (wb *WhereBuilder) ApplyLogFilter(filter *model.LogFilter) *WhereBuilder {
 	if filter.AuthTokenID != nil {
 		wb.AddCondition("auth_token_id = ?", *filter.AuthTokenID)
 	}
+	if filter.ClientName != "" {
+		wb.AddCondition("client_name = ?", filter.ClientName)
+	}
 	switch filter.LogSource {
 	case model.LogSourceAll:
 	case model.LogSourceDetection:

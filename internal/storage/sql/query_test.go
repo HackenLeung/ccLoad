@@ -66,14 +66,22 @@ func TestWhereBuilder_ApplyLogFilter(t *testing.T) {
 			expectArgsLen: 2,
 		},
 		{
+			name: "client_name filter",
+			filter: &model.LogFilter{
+				ClientName: "claude-code",
+			},
+			expectArgsLen: 2,
+		},
+		{
 			name: "all filters combined",
 			filter: &model.LogFilter{
 				ChannelID:   &channelID,
 				Model:       "gpt-4o",
 				StatusCode:  &statusCode,
 				AuthTokenID: &authTokenID,
+				ClientName:  "codex-cli",
 			},
-			expectArgsLen: 5,
+			expectArgsLen: 6,
 		},
 		{
 			name: "scheduled_check source",

@@ -462,6 +462,9 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 			s.activeRequests.SetDebugCapture(activeID, dc)
 		},
 	}
+	if clientName, _ := classifyClient(c.Request.Header); clientName != "" {
+		s.activeRequests.SetClientName(activeID, clientName)
+	}
 
 	// 轮次循环：一轮候选全败后，若所有候选都只是在冷却且很快恢复，等到那一刻重新选路再打一轮。
 	// 上游按分钟窗口限流时（“1分钟内最多5次”），这比直接给客户端报错要有用得多。
@@ -572,6 +575,7 @@ func (s *Server) writeCandidateRejection(
 			"error": "no allowed upstream channel for this token",
 		})
 	default:
+		clientName, clientUA := classifyClient(c.Request.Header)
 		s.AddLogAsync(&model.LogEntry{
 			Time:           model.JSONTime{Time: time.Now()},
 			Model:          originalModel,
@@ -580,7 +584,8 @@ func (s *Server) writeCandidateRejection(
 			StatusCode:     503,
 			Message:        "no available upstream (all cooled or none)",
 			IsStreaming:    isStreaming,
-			ClientIP:       c.ClientIP(),
+			ClientName:     clientName,
+			ClientUA:       clientUA,
 			ThinkingEffort: thinkingEffort,
 		})
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no available upstream (all cooled or none)"})
@@ -590,7 +595,7 @@ func (s *Server) writeCandidateRejection(
 // rejectNonProxyableGet 就地拒绝打到推理端点的 GET 请求（详见 errGetNotProxyable）。
 //
 // 不选路、不转发、不冷却、不计健康度；仍写一条 ChannelID=0 的日志，
-// 便于在日志页按 IP/令牌定位是哪个客户端在发这类请求
+// 便于在日志页按客户端软件/令牌定位是哪个客户端在发这类请求
 // （channel_id=0 的记录被 GetChannelSuccessRates/GetDistinctModels 的
 // `channel_id > 0` 条件排除，不会污染健康度与模型下拉框）。
 //
@@ -600,6 +605,7 @@ func (s *Server) rejectNonProxyableGet(c *gin.Context) {
 	tokenID, _ := c.Get("token_id")
 	tokenIDInt64, _ := tokenID.(int64)
 	target := truncateErr(fmt.Sprintf("%s %s", c.Request.Method, c.Request.URL.Path))
+	clientName, clientUA := classifyClient(c.Request.Header)
 
 	s.AddLogAsync(&model.LogEntry{
 		Time:        model.JSONTime{Time: time.Now()},
@@ -607,7 +613,8 @@ func (s *Server) rejectNonProxyableGet(c *gin.Context) {
 		AuthTokenID: tokenIDInt64,
 		StatusCode:  http.StatusMethodNotAllowed,
 		Message:     fmt.Sprintf("local reject: %s (inference endpoint accepts POST only)", target),
-		ClientIP:    c.ClientIP(),
+		ClientName:  clientName,
+		ClientUA:    clientUA,
 	})
 
 	c.Header("Allow", "POST")
@@ -733,6 +740,7 @@ func (s *Server) writeFinalProxyResponse(
 	skipLog := lastResult != nil && (lastResult.isClientCanceled || finalStatus == http.StatusBadRequest)
 	skipLog = skipLog || candidateCount <= 1
 	if !skipLog {
+		clientName, clientUA := classifyClient(reqCtx.header)
 		s.AddLogAsync(&model.LogEntry{
 			Time:        model.JSONTime{Time: reqCtx.startTime},
 			Model:       originalModel,
@@ -741,7 +749,8 @@ func (s *Server) writeFinalProxyResponse(
 			Message:     msg,
 			Duration:    time.Since(reqCtx.startTime).Seconds(),
 			IsStreaming: isStreaming,
-			ClientIP:    reqCtx.clientIP,
+			ClientName:  clientName,
+			ClientUA:    clientUA,
 		})
 	}
 

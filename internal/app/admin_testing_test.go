@@ -1453,6 +1453,7 @@ func TestHandleChannelTest_WritesManualTestLog(t *testing.T) {
 		"channel_type": "anthropic",
 	}))
 	c.Request.RemoteAddr = "198.51.100.10:12345"
+	c.Request.Header.Set("User-Agent", "claude-cli/2.0.0 (external, cli)")
 	c.Params = gin.Params{{Key: "id", Value: channelID}}
 
 	srv.HandleChannelTest(c)
@@ -1475,8 +1476,11 @@ func TestHandleChannelTest_WritesManualTestLog(t *testing.T) {
 	if entry.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("StatusCode=%d, want %d", entry.StatusCode, http.StatusUnauthorized)
 	}
-	if entry.ClientIP != "198.51.100.10" {
-		t.Fatalf("ClientIP=%q, want %q", entry.ClientIP, "198.51.100.10")
+	if entry.ClientName != ClientNameClaudeCode {
+		t.Fatalf("ClientName=%q, want %q", entry.ClientName, ClientNameClaudeCode)
+	}
+	if entry.ClientUA != "claude-cli/2.0.0 (external, cli)" {
+		t.Fatalf("ClientUA=%q, want %q", entry.ClientUA, "claude-cli/2.0.0 (external, cli)")
 	}
 	if entry.AuthTokenID != 0 {
 		t.Fatalf("AuthTokenID=%d, want 0", entry.AuthTokenID)

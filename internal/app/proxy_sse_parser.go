@@ -29,6 +29,7 @@ type usageAccumulator struct {
 	ToolCostUSD              float64
 	ServiceTier              string // OpenAI service_tier: "priority"/"flex"/"default"
 	ThinkingEffort           string
+	ResponseModel            string // 上游响应自报的模型名（取最后一个非空值）
 	usageVersion             int
 	imageGenerationToolModel string
 	toolUsageSeen            bool
@@ -106,9 +107,46 @@ type usageParser interface {
 	GetToolCostUSD() float64                                       // 返回 Responses 工具调用的额外费用
 	GetThinkingEffort() string
 	GetReasoningTokens() int
-	GetLastError() []byte   // [INFO] 返回SSE流中检测到的最后一个error事件（用于1308等错误的延迟处理）
-	IsStreamComplete() bool // [INFO] 返回是否检测到流结束标志（[DONE]/message_stop）
-	HasStreamOutput() bool  // 返回是否已经看到非心跳的可见响应内容
+	GetResponseModel() string // 返回上游响应自报的模型名（空表示上游未声明）
+	GetLastError() []byte     // [INFO] 返回SSE流中检测到的最后一个error事件（用于1308等错误的延迟处理）
+	IsStreamComplete() bool   // [INFO] 返回是否检测到流结束标志（[DONE]/message_stop）
+	HasStreamOutput() bool    // 返回是否已经看到非心跳的可见响应内容
+}
+
+// GetResponseModel 由 sseUsageParser/jsonUsageParser 通过嵌入共享。
+func (u *usageAccumulator) GetResponseModel() string {
+	return u.ResponseModel
+}
+
+// extractResponseModel 从上游响应载荷中提取自报模型名。
+// 覆盖四种协议的自报位置：
+//   - OpenAI Chat/Responses: 顶层 model / response.model
+//   - Anthropic: message_start.message.model（嵌套在 message 内）
+//   - Gemini: 顶层 modelVersion
+//
+// 只取非空值，且后续值覆盖先前值——流式场景下 message_start 先给出模型，
+// 若末次事件重复声明则以最后一次为准。
+func extractResponseModel(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	for _, key := range []string{"model", "modelVersion"} {
+		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	for _, nested := range []string{"message", "response"} {
+		obj, ok := payload[nested].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"model", "modelVersion"} {
+			if value, ok := obj[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
 }
 
 // GetCacheBreakdown 由 sseUsageParser/jsonUsageParser 通过嵌入共享。
@@ -208,6 +246,9 @@ func (p *sseUsageParser) scanUsageFragments(data []byte) {
 	}
 	if p.scanner.ThinkingEffort != "" {
 		p.ThinkingEffort = p.scanner.ThinkingEffort
+	}
+	if p.scanner.ResponseModel != "" {
+		p.ResponseModel = p.scanner.ResponseModel
 	}
 	if p.scanner.ToolCostUSD > 0 {
 		p.ToolCostUSD = p.scanner.ToolCostUSD
@@ -513,6 +554,10 @@ func (p *sseUsageParser) parseEvent(eventType, data string) error {
 	}
 	if effort := extractThinkingEffortFromPayload(event); effort != "" {
 		p.ThinkingEffort = effort
+	}
+	// 上游自报模型：流式场景下 message_start / response.created 均会携带
+	if model := extractResponseModel(event); model != "" {
+		p.ResponseModel = model
 	}
 
 	usage := extractUsage(event)

@@ -135,6 +135,11 @@ type fwResult struct {
 	// ThinkingEffort 记录请求或上游响应声明的思考等级；上游响应非空时覆盖请求值。
 	ThinkingEffort string
 
+	// ResponseModel 上游响应自报的模型名（2026-09新增）。
+	// 与 actual_model 语义不同：actual_model 是「我们请求上游用的模型」（仅重定向时非空），
+	// ResponseModel 是「上游自己声称提供的模型」，两者不一致时才是需要关注的信息。
+	ResponseModel string
+
 	// Debug日志数据（debug开启时填充，传递到日志写入管道）
 	DebugData *model.DebugLogEntry
 }
@@ -1023,7 +1028,6 @@ type logEntryParams struct {
 	IsStreaming      bool
 	APIKeyUsed       string
 	AuthTokenID      int64
-	ClientIP         string
 	BaseURL          string // 请求使用的上游URL
 	Result           *fwResult
 	ErrMsg           string
@@ -1032,6 +1036,7 @@ type logEntryParams struct {
 	CostMultiplier   float64              // 渠道成本倍率快照（0=免费，<0 视为 1）
 	ThinkingEffort   string
 	LogSource        string
+	Header           http.Header // 客户端请求头（用于归类调用方软件）
 }
 
 // buildLogEntry 构建日志条目（消除重复代码，遵循DRY原则）
@@ -1041,6 +1046,7 @@ func buildLogEntry(p logEntryParams) *model.LogEntry {
 		logTime = time.Now() // 兜底：未传入开始时间时使用当前时间
 	}
 	logSource := model.NormalizeStoredLogSource(p.LogSource)
+	clientName, clientUA := classifyClient(p.Header)
 	entry := &model.LogEntry{
 		Time:             model.JSONTime{Time: logTime},
 		Model:            p.RequestModel,
@@ -1052,7 +1058,8 @@ func buildLogEntry(p logEntryParams) *model.LogEntry {
 		IsStreaming:      p.IsStreaming,
 		APIKeyUsed:       p.APIKeyUsed,
 		AuthTokenID:      p.AuthTokenID,
-		ClientIP:         p.ClientIP,
+		ClientName:       clientName,
+		ClientUA:         clientUA,
 		BaseURL:          p.BaseURL,
 	}
 	entry.ThinkingEffort = normalizeThinkingEffort(p.ThinkingEffort)
@@ -1119,6 +1126,7 @@ func buildLogEntry(p logEntryParams) *model.LogEntry {
 		entry.Cache5mInputTokens = res.Cache5mInputTokens
 		entry.Cache1hInputTokens = res.Cache1hInputTokens
 		entry.ServiceTier = res.ServiceTier
+		entry.ResponseModel = res.ResponseModel
 
 		// 使用实际转发的模型计算成本（重定向时价格可能不同）；
 		// 始终调用以支持按次计费图像模型（tokens=0 时返回固定成本）。

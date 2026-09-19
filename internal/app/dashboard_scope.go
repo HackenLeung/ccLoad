@@ -103,7 +103,7 @@ func sanitizeTokenLogMessage(entry *model.LogEntry, channelAPIKeys []string) str
 		entry.APIKeyUsed,
 		entry.APIKeyHash,
 		entry.ChannelName,
-		entry.ClientIP,
+		entry.ClientUA,
 	}
 	sensitiveValues = append(sensitiveValues, channelAPIKeys...)
 	for _, sensitive := range sensitiveValues {

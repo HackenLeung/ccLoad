@@ -231,7 +231,7 @@ func TestMySQL(t *testing.T) {
 		defer store.Close()
 
 		// 验证 logs 表的新列存在
-		expectedColumns := []string{"auth_token_id", "client_ip", "minute_bucket", "cache_read_input_tokens", "actual_model", "log_source", "upstream_protocol"}
+		expectedColumns := []string{"auth_token_id", "client_name", "client_ua", "response_model", "minute_bucket", "cache_read_input_tokens", "actual_model", "log_source", "upstream_protocol"}
 		for _, col := range expectedColumns {
 			var columnName string
 			err := env.db.QueryRow(
@@ -242,6 +242,18 @@ func TestMySQL(t *testing.T) {
 				t.Fatalf("列 logs.%s 不存在: %v", col, err)
 			}
 			t.Logf("列 logs.%s 存在", col)
+		}
+
+		// 历史遗留列 client_ip 必须已被清理
+		var legacyCount int
+		if err := env.db.QueryRow(
+			"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'logs' AND COLUMN_NAME = 'client_ip'",
+			testMySQLDB,
+		).Scan(&legacyCount); err != nil {
+			t.Fatalf("检查 logs.client_ip 失败: %v", err)
+		}
+		if legacyCount != 0 {
+			t.Fatalf("遗留列 logs.client_ip 应已删除，实际仍存在")
 		}
 
 		// 验证 auth_tokens 表的新列

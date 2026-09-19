@@ -978,10 +978,14 @@ func TestEnsureLogsNewColumns_SQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqliteExistingColumns: %v", err)
 	}
-	for _, col := range []string{"minute_bucket", "auth_token_id", "client_ip", "actual_model", "log_source", "upstream_protocol"} {
+	for _, col := range []string{"minute_bucket", "auth_token_id", "client_name", "client_ua", "response_model", "actual_model", "log_source", "upstream_protocol"} {
 		if !cols[col] {
 			t.Errorf("column %s not found in logs", col)
 		}
+	}
+	// client_ip 已被 client_name/client_ua 取代，迁移后必须不复存在
+	if cols["client_ip"] {
+		t.Error("legacy column client_ip should be dropped from logs")
 	}
 }
 

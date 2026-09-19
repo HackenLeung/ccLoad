@@ -50,6 +50,12 @@ func (p *jsonUsageParser) scanJSONUsage(data []byte) {
 					p.startJSONValueCapture(b)
 					continue
 				}
+			case "model", "modelVersion":
+				// 上游自报模型：只捕获字符串值，对象值（如 Anthropic 的 message.model 嵌套）留给整体解析
+				if b == '"' {
+					p.startJSONValueCapture(b)
+					continue
+				}
 			}
 			p.clearJSONPendingKey()
 		}
@@ -181,6 +187,11 @@ func (p *jsonUsageParser) finishJSONValueCapture() {
 			if err := json.Unmarshal(p.scanCaptureBuf, &tier); err == nil && tier != "" {
 				p.ServiceTier = tier
 			}
+		case "model", "modelVersion":
+			var modelName string
+			if err := json.Unmarshal(p.scanCaptureBuf, &modelName); err == nil && modelName != "" {
+				p.ResponseModel = modelName
+			}
 		}
 	}
 	p.scanCaptureKey = ""
@@ -246,6 +257,10 @@ func (p *jsonUsageParser) GetUsage() (inputTokens, outputTokens, cacheRead, cach
 	p.applyToolUsageFromPayload(payload)
 	if effort := extractThinkingEffortFromPayload(payload); effort != "" {
 		p.ThinkingEffort = effort
+	}
+	// 上游自报模型（Anthropic 的 message.model 需从整体载荷里取）
+	if model := extractResponseModel(payload); model != "" {
+		p.ResponseModel = model
 	}
 
 	// 提取 service_tier（OpenAI Chat/Responses API 顶层字段）

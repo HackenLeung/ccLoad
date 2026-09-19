@@ -143,7 +143,7 @@ func (s *Server) runScheduledChannelChecks(ctx context.Context) error {
 		}
 		requestedModel := req.Model
 		result := s.executeChannelTest(ctx, cfg, keyIndex, apiKey, req)
-		s.persistDetectionLog(ctx, detectionLogFromResult(cfg, model.LogSourceScheduledCheck, requestedModel, req.Model, apiKey, "", 0, req.ThinkingEffort, result))
+		s.persistDetectionLog(ctx, detectionLogFromResult(cfg, model.LogSourceScheduledCheck, requestedModel, req.Model, apiKey, nil, 0, req.ThinkingEffort, result))
 		logScheduledChannelCheckResult(cfg, keyIndex, req.Model, result)
 	}
 

@@ -217,7 +217,6 @@ func DefineLogsTable() *TableBuilder {
 		Column("api_key_used VARCHAR(191) NOT NULL DEFAULT ''").
 		Column("api_key_hash VARCHAR(64) NOT NULL DEFAULT ''"). // API Key SHA256（用于精确定位 key_index）
 		Column("auth_token_id BIGINT NOT NULL DEFAULT 0").      // 客户端使用的API令牌ID（新增2025-12）
-		Column("client_ip VARCHAR(45) NOT NULL DEFAULT ''").    // 客户端IP地址（新增2025-12）
 		Column("base_url VARCHAR(500) NOT NULL DEFAULT ''").    // 请求使用的上游URL（多URL场景）
 		Column("service_tier VARCHAR(20) NOT NULL DEFAULT ''"). // OpenAI service_tier: priority/flex
 		Column("thinking_effort VARCHAR(32) NOT NULL DEFAULT ''").
@@ -230,6 +229,9 @@ func DefineLogsTable() *TableBuilder {
 		Column("cache_1h_input_tokens INT NOT NULL DEFAULT 0").       // 1小时缓存写入Token数（新增2025-12）
 		Column("cost DOUBLE NOT NULL DEFAULT 0.0").
 		Column("cost_multiplier DOUBLE NOT NULL DEFAULT 1").
+		Column("client_name VARCHAR(64) NOT NULL DEFAULT ''").     // 客户端软件标识（由UA/特征头归类，如 claude-code/codex-cli）
+		Column("client_ua VARCHAR(191) NOT NULL DEFAULT ''").      // 客户端原始User-Agent（截断存储，用于校准归类规则）
+		Column("response_model VARCHAR(191) NOT NULL DEFAULT ''"). // 上游响应自报的模型名（区别于 actual_model）
 		Index("idx_logs_time_model", "time, model").
 		Index("idx_logs_time_status", "time, status_code").
 		Index("idx_logs_time_channel_model", "time, channel_id, model").
@@ -239,6 +241,7 @@ func DefineLogsTable() *TableBuilder {
 		Index("idx_logs_channel_model_time_id", "channel_id, model, time, id").
 		Index("idx_logs_time_auth_token", "time, auth_token_id").  // 按时间+令牌查询
 		Index("idx_logs_time_actual_model", "time, actual_model"). // 按时间+实际模型查询
+		Index("idx_logs_client_name_time", "client_name, time").   // 按客户端软件筛选
 		Index("idx_logs_source_time", "log_source, time").
 		Index("idx_logs_source_minute", "log_source, minute_bucket")
 }

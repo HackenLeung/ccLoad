@@ -195,6 +195,9 @@ func (s *Server) callVisionModel(
 	if s.activeRequests != nil {
 		activeID := s.activeRequests.RegisterSub(time.Now(), visionModel, parent.clientIP, model.LogSourceVisionAssist, false)
 		s.activeRequests.SetSubrequestChannel(activeID, cfg.ID, cfg.Name, cfg.GetChannelType(), cfg.ResolveUpstreamProtocol(string(protocol.OpenAI)), cfg.CostMultiplier)
+		if clientName, _ := classifyClient(parent.header); clientName != "" {
+			s.activeRequests.SetClientName(activeID, clientName)
+		}
 		defer s.activeRequests.Remove(activeID)
 	}
 	recorder := httptest.NewRecorder()

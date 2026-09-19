@@ -149,8 +149,13 @@
       background: transparent;
       font: inherit;
       cursor: pointer;
-      display: inline;
+      display: inline-block;
       min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: bottom;
       text-align: left;
     }
 
@@ -369,6 +374,25 @@
 
       .logs-table .logs-col-cost .log-cost {
         min-width: max-content;
+      }
+
+      /* 渠道/模型列内容与表头对齐居中 */
+      .logs-table .logs-col-channel,
+      .logs-table .logs-col-model {
+        text-align: center;
+      }
+
+      /* 渠道单元格内部是 flex 容器，text-align 不生效，需改主轴对齐。
+         左右留等宽内边距，既保证视觉居中，又给右上角倍率角标留出空间。 */
+      .logs-table .logs-col-channel .log-channel-cell {
+        justify-content: center;
+        padding: 0 18px;
+      }
+
+      /* 渠道列给定宽度区间，避免长名撑宽整表 */
+      .logs-table .logs-col-channel {
+        min-width: 90px;
+        max-width: 170px;
       }
     }
 
@@ -830,52 +854,56 @@
         order: 4;
       }
 
-      .logs-table .logs-col-model {
+      .logs-table .logs-col-response-model {
         order: 5;
       }
 
-      .logs-table .logs-col-api-key {
+      .logs-table .logs-col-model {
         order: 6;
       }
 
-      .logs-table .logs-col-token-desc {
+      .logs-table .logs-col-api-key {
         order: 7;
       }
 
-      .logs-table .logs-col-ip {
+      .logs-table .logs-col-token-desc {
         order: 8;
       }
 
-      .logs-table .logs-col-timing {
+      .logs-table .logs-col-client {
         order: 9;
       }
 
-      .logs-table .logs-col-speed {
+      .logs-table .logs-col-timing {
         order: 10;
       }
 
-      .logs-table .logs-col-input {
+      .logs-table .logs-col-speed {
         order: 11;
       }
 
-      .logs-table .logs-col-output {
+      .logs-table .logs-col-input {
         order: 12;
       }
 
-      .logs-table .logs-col-cache-read {
+      .logs-table .logs-col-output {
         order: 13;
       }
 
-      .logs-table .logs-col-cache-write {
+      .logs-table .logs-col-cache-read {
         order: 14;
       }
 
-      .logs-table .logs-col-cache-util {
+      .logs-table .logs-col-cache-write {
         order: 15;
       }
 
-      .logs-table .logs-col-context {
+      .logs-table .logs-col-cache-util {
         order: 16;
+      }
+
+      .logs-table .logs-col-context {
+        order: 17;
       }
 
       /* 卡片布局里 flex item 会被内容压窄，给填充条留出可读宽度 */
@@ -884,7 +912,7 @@
       }
 
       .logs-table .logs-col-cost {
-        order: 17;
+        order: 18;
       }
 
       .logs-table .logs-col-message {
@@ -897,10 +925,11 @@
       .logs-table .logs-col-status,
       .logs-table .logs-col-channel,
       .logs-table .logs-col-upstream-protocol,
+      .logs-table .logs-col-response-model,
       .logs-table .logs-col-model,
       .logs-table .logs-col-api-key,
       .logs-table .logs-col-token-desc,
-      .logs-table .logs-col-ip,
+      .logs-table .logs-col-client,
       .logs-table .logs-col-timing,
       .logs-table .logs-col-speed,
       .logs-table .logs-col-input,
@@ -922,10 +951,11 @@
       .logs-table .logs-col-status::before,
       .logs-table .logs-col-channel::before,
       .logs-table .logs-col-upstream-protocol::before,
+      .logs-table .logs-col-response-model::before,
       .logs-table .logs-col-model::before,
       .logs-table .logs-col-api-key::before,
       .logs-table .logs-col-token-desc::before,
-      .logs-table .logs-col-ip::before,
+      .logs-table .logs-col-client::before,
       .logs-table .logs-col-timing::before,
       .logs-table .logs-col-speed::before,
       .logs-table .logs-col-input::before,
@@ -1073,15 +1103,6 @@
       max-width: 110px;
     }
 
-    .logs-table th:nth-child(2),
-    .logs-table td:nth-child(2) {
-      width: 110px;
-      /* IP: xxx.xxx.*.* */
-      min-width: 110px;
-      max-width: 110px;
-      text-align: center;
-    }
-
     .logs-table .logs-col-status {
       width: 60px;
       /* 状态码: 200/403/500 */
@@ -1122,6 +1143,51 @@
       font-weight: 600;
     }
 
+    /* 客户端软件列：归类标识 / UA 产物名，留足宽度避免频繁截断 */
+    .logs-table .logs-col-client {
+      min-width: 140px;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .logs-client-tag {
+      color: var(--neutral-900);
+      font-size: 0.85em;
+      font-weight: 600;
+      cursor: help;
+    }
+
+    /* 上游自报模型列：取值有限，无需占宽 */
+    .logs-table .logs-col-response-model {
+      min-width: 100px;
+      max-width: 150px;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .logs-resp-model {
+      display: inline-block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: bottom;
+      color: var(--neutral-900);
+      font-size: 0.85em;
+    }
+
+    /* 与请求模型不一致：上游可能偷换了模型，必须显眼 */
+    .logs-resp-model.logs-resp-model-mismatch {
+      color: var(--warning-600);
+      font-weight: 600;
+      cursor: help;
+    }
+
+    .logs-resp-model .resp-model-warn {
+      color: var(--warning-600);
+      font-size: 0.75em;
+      font-weight: 700;
+    }
+
     .logs-table .logs-col-model {
       position: relative;
     }
@@ -1153,7 +1219,7 @@
 
     .model-text {
       display: inline-block;
-      max-width: 200px;
+      max-width: 160px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
