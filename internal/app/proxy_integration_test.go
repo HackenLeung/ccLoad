@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -2438,6 +2439,90 @@ func TestProxy_CodexInvalidEncryptedContentRetriesWithoutEncryptedInputItems(t *
 	}
 	if !bytes.Contains(bodies[1], []byte(`"type":"message"`)) {
 		t.Fatalf("retry request should keep non-encrypted input items, got %s", bodies[1])
+	}
+}
+
+// 同一会话重复发送已拒收的推理块时，第一个请求重试成功后记住策略，
+// 后续同一 Key/URL 的请求只需一次上游调用。
+func TestProxy_CodexInvalidEncryptedContentMemoSkipsWastedFirstAttempt(t *testing.T) {
+	t.Parallel()
+
+	const invalidEncryptedContentBody = `{"error":{"message":"The encrypted content could not be verified.","code":"invalid_encrypted_content"}}`
+
+	var attempts atomic.Int32
+	var bodies [][]byte
+	var mu sync.Mutex
+
+	env := setupProxyTestEnv(t, []testChannel{
+		{name: "codex-memo", channelType: "codex", models: "gpt-5-codex", apiKey: "sk-codex"},
+	}, map[int]string{0: "https://codex-upstream.example.com"})
+
+	env.server.client = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, body)
+			mu.Unlock()
+			attempts.Add(1)
+			// 只要请求还带加密块就拒收，模拟中转站池化多账号的稳定失败。
+			if bytes.Contains(body, []byte(`"encrypted_content"`)) {
+				return &http.Response{
+					StatusCode: http.StatusBadRequest,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewReader([]byte(invalidEncryptedContentBody))),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(bytes.NewReader([]byte(
+					`{"id":"resp_1","object":"response","status":"completed","model":"gpt-5-codex","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`,
+				))),
+			}, nil
+		}),
+	}
+
+	payload := func() map[string]any {
+		return map[string]any{
+			"model":            "gpt-5-codex",
+			"prompt_cache_key": "memo-session",
+			"input": []map[string]any{
+				{"type": "reasoning", "summary": []any{}, "encrypted_content": "blob"},
+				{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "hi"}}},
+			},
+		}
+	}
+
+	// 第一轮：首发带加密块被拒 → 重试剥离 → 成功，共 2 次上游调用。
+	if w := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses", payload(), nil); w.Code != http.StatusOK {
+		t.Fatalf("first request: got %d: %s", w.Code, w.Body.String())
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("first request upstream calls=%d, want 2 (reject + stripped retry)", got)
+	}
+
+	// 第二轮：记忆已武装，首发就该是剥好的，只打 1 次。
+	if w := doProxyRequest(t, env.engine, http.MethodPost, "/v1/responses", payload(), nil); w.Code != http.StatusOK {
+		t.Fatalf("second request: got %d: %s", w.Code, w.Body.String())
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("total upstream calls=%d, want 3 (memo removed the wasted first attempt)", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 3 {
+		t.Fatalf("captured bodies=%d, want 3", len(bodies))
+	}
+	if !bytes.Contains(bodies[0], []byte(`"encrypted_content"`)) {
+		t.Fatalf("first attempt should carry the encrypted blob, got %s", bodies[0])
+	}
+	if bytes.Contains(bodies[2], []byte(`"encrypted_content"`)) {
+		t.Fatalf("memo request still carried the encrypted blob, got %s", bodies[2])
+	}
+	// 预剥离必须与重试产出同一字节，否则两种前缀轮流出现，prompt cache 照样不命中。
+	if !bytes.Equal(bodies[1], bodies[2]) {
+		t.Fatalf("memo body differs from retry body:\nretry=%s\n memo=%s", bodies[1], bodies[2])
 	}
 }
 

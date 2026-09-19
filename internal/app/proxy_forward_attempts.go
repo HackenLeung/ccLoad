@@ -64,6 +64,16 @@ func (s *Server) forwardAttempt(
 		}, cooldown.ActionRetryChannel, nil
 	}
 
+	memoKey, canMemo := codexEncryptedReasoningMemoKey(cfg, selectedKey, baseURL, reqCtx, plan)
+	memoStrategy := ""
+	if canMemo {
+		strategy := s.codexEncryptedReasoningStrategy(memoKey)
+		if stripped := applyCodexEncryptedReasoningMemo(strategy, plan.TranslatedBody); !bytes.Equal(stripped, plan.TranslatedBody) {
+			plan.TranslatedBody = stripped
+			memoStrategy = strategy
+		}
+	}
+
 	attemptCtx, cancelAttempt := context.WithCancelCause(ctx)
 	attemptID := int64(0)
 	if reqCtx.activeReqID > 0 && s.activeRequests != nil {
@@ -148,6 +158,11 @@ func (s *Server) forwardAttempt(
 	if isManualChannelSkip(attemptCtx) {
 		return manualChannelSkipResult(cfg), cooldown.ActionRetryChannel, nil
 	}
+	// 命中只标注实际使用的策略，不延后下一次原样试送。
+	if memoStrategy != "" && len(retryStrategies) == 0 &&
+		err == nil && res != nil && res.Status >= 200 && res.Status < 300 {
+		res.RetryStrategy = memoStrategy + "(memo)"
+	}
 
 	// 处理网络错误或异常响应（如空响应）
 	// [INFO] 修复：handleResponse可能返回err即使StatusCode=200（例如Content-Length=0）
@@ -174,6 +189,10 @@ func (s *Server) forwardAttempt(
 			return result, action, nil
 		}
 
+		// HTTP 2xx 仍可能是 SSE 错误或流中断，必须通过上面的完整性检查再记录。
+		if canMemo && (!reqCtx.isStreaming || res.StreamComplete) {
+			s.rememberCodexEncryptedReasoningStrategy(memoKey, retryStrategies)
+		}
 		result, action := s.handleProxySuccess(ctx, cfg, keyIndex, actualModel, selectedKey, res, duration, reqCtx)
 		return result, action, nil
 	}
@@ -365,7 +384,7 @@ func codexBodyWithoutEncryptedInputItems(body []byte) ([]byte, bool) {
 	}
 
 	root["input"] = filtered
-	retryBody, err := sonic.Marshal(root)
+	retryBody, err := stableSonicCfg.Marshal(root)
 	if err != nil {
 		return nil, false
 	}
@@ -407,7 +426,7 @@ func codexBodyWithoutThinking(body []byte) ([]byte, bool) {
 		return nil, false
 	}
 
-	retryBody, err := sonic.Marshal(root)
+	retryBody, err := stableSonicCfg.Marshal(root)
 	if err != nil {
 		return nil, false
 	}
@@ -541,7 +560,7 @@ func codexBodyWithoutDisabledToolCapabilities(body []byte, functionTools, toolSe
 	if !changed {
 		return nil, false
 	}
-	out, err := sonic.Marshal(root)
+	out, err := stableSonicCfg.Marshal(root)
 	return out, err == nil
 }
 
@@ -554,7 +573,7 @@ func codexBodyWithoutPromptCache(body []byte) ([]byte, bool) {
 		return nil, false
 	}
 	delete(root, "prompt_cache_key")
-	out, err := sonic.Marshal(root)
+	out, err := stableSonicCfg.Marshal(root)
 	return out, err == nil
 }
 
@@ -639,7 +658,7 @@ func codexBodyWithoutHostedWebSearch(body []byte) ([]byte, bool) {
 	if !changed {
 		return nil, false
 	}
-	out, err := sonic.Marshal(root)
+	out, err := stableSonicCfg.Marshal(root)
 	if err != nil {
 		return nil, false
 	}
@@ -703,7 +722,7 @@ func normalizeCodexToolSearchInputItems(body []byte) ([]byte, bool) {
 	}
 
 	root["input"] = filtered
-	normalized, err := sonic.Marshal(root)
+	normalized, err := stableSonicCfg.Marshal(root)
 	if err != nil {
 		return nil, false
 	}
@@ -747,7 +766,7 @@ func codexBodyWithoutInputItems(body []byte, shouldDrop func(string) bool) ([]by
 	}
 
 	root["input"] = filtered
-	retryBody, err := sonic.Marshal(root)
+	retryBody, err := stableSonicCfg.Marshal(root)
 	if err != nil {
 		return nil, false
 	}
@@ -765,7 +784,7 @@ func codexBodyWithoutEncryptedContent(body []byte) ([]byte, bool) {
 		return nil, false
 	}
 
-	retryBody, err := sonic.Marshal(root)
+	retryBody, err := stableSonicCfg.Marshal(root)
 	if err != nil {
 		return nil, false
 	}

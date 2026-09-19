@@ -140,7 +140,7 @@ func applyBodyRules(contentType string, body []byte, rules []model.CustomBodyRul
 	if !changed {
 		return body
 	}
-	marshaled, err := sonic.Marshal(root)
+	marshaled, err := stableSonicCfg.Marshal(root)
 	if err != nil {
 		slog.Warn("custom_request_rules: re-marshal body failed, falling back to original",
 			"error", err.Error())

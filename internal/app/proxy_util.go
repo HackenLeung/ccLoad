@@ -107,7 +107,8 @@ type fwResult struct {
 	ToolCostUSD              float64
 
 	// 转发诊断信息（2025-12新增）
-	StreamDiagMsg string // 诊断消息（例如：流中断/不完整、上游响应体读取失败），合并到日志的 Message 字段
+	StreamDiagMsg  string // 诊断消息（例如：流中断/不完整、上游响应体读取失败），合并到日志的 Message 字段
+	StreamComplete bool   // 解析器检测到完成事件；能力记忆不能仅凭正常 EOF 判定成功
 
 	// 重试策略（例如 Codex 400 后剥离 reasoning/thinking 再成功）
 	RetryStrategy        string
@@ -521,7 +522,7 @@ func normalizeAnyrouterAdaptiveThinking(cfg *model.Config, requestPath string, b
 		obj["thinking"] = map[string]string{"type": "adaptive"}
 		setAnthropicOutputEffort(obj, "high")
 	}
-	newBody, err := sonic.Marshal(obj)
+	newBody, err := stableSonicCfg.Marshal(obj)
 	if err != nil {
 		return body
 	}
@@ -782,7 +783,7 @@ func (s *Server) prepareRequestBody(cfg *model.Config, reqCtx *proxyRequestConte
 				return actualModel, bodyToSend
 			}
 			reqData["model"] = modelRaw
-			if modifiedBody, err := sonic.Marshal(reqData); err == nil {
+			if modifiedBody, err := stableSonicCfg.Marshal(reqData); err == nil {
 				bodyToSend = modifiedBody
 			}
 		}
@@ -868,7 +869,7 @@ func stripAnthropicBillingHeaders(body []byte) []byte {
 		reqData["system"] = filteredSystemRaw
 	}
 
-	result, err := sonic.Marshal(reqData)
+	result, err := stableSonicCfg.Marshal(reqData)
 	if err != nil {
 		return body
 	}
