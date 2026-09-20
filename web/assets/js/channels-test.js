@@ -685,7 +685,6 @@ if (typeof module !== 'undefined' && module.exports) {
           : null
       },
       fetchDataWithAuth: async () => typeof fetchResult === 'function' ? fetchResult() : fetchResult,
-      syncChannelEditorTableSizing: () => {},
       markChannelFormDirty: () => {},
       alert: () => {}
     });

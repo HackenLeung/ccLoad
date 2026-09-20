@@ -741,13 +741,6 @@
     }
 
     .channel-editor-body {
-      --channel-editor-section-header-height: 36px;
-      --channel-editor-table-row-height: 36px;
-      --channel-editor-table-header-height: 38px;
-      --channel-editor-key-visible-rows: 2;
-      --channel-editor-key-max-visible-rows: 8;
-      --channel-editor-model-visible-rows: 3;
-      --channel-editor-model-max-visible-rows: 12;
       display: flex;
       flex-direction: column;
       gap: 4px;
@@ -757,39 +750,20 @@
       overflow-y: auto;
     }
 
-    #channelModal .inline-table-container {
-      --channel-editor-table-visible-rows: 2;
-      --channel-editor-table-visible-height: calc(var(--channel-editor-table-header-height) + (var(--channel-editor-table-visible-rows) * var(--channel-editor-table-row-height)));
+    /* 表格随内容自然展开，滚动只交给 .channel-editor-body（弹窗内仅保留这一条滚动条） */
+    #channelModal .inline-table-container,
+    #channelModal .inline-table-container.tall,
+    #channelModal .inline-table-container:has(.inline-url-table) {
+      flex: 0 0 auto;
+      height: auto;
       min-height: 0;
-      max-height: var(--channel-editor-table-visible-height);
-      overflow-y: auto;
-      overflow-x: hidden;
-      scrollbar-width: thin;
-      scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
+      max-height: none;
+      overflow: visible;
     }
 
-    #channelModal .inline-table-container::-webkit-scrollbar {
-      width: 6px;
-      height: 6px;
-    }
-
-    #channelModal .inline-table-container::-webkit-scrollbar-track {
-      background: transparent;
-    }
-
-    #channelModal .inline-table-container::-webkit-scrollbar-thumb {
-      background: rgba(100, 116, 139, 0.35);
-      border-radius: 999px;
-    }
-
-    #channelModal .inline-table-container::-webkit-scrollbar-thumb:hover {
-      background: rgba(100, 116, 139, 0.55);
-    }
-
-    #channelModal .inline-table-container::-webkit-scrollbar-button {
-      display: none;
-      width: 0;
-      height: 0;
+    /* 表格已不是滚动容器，表头不能再吸附，否则会浮在编辑区内容上方 */
+    #channelModal .inline-table thead {
+      position: static;
     }
 
     .channel-editor-group {
@@ -804,20 +778,6 @@
       flex: 0 0 auto;
     }
 
-    #channelModal .channel-editor-group--keys .inline-table-container {
-      --channel-editor-table-visible-rows: var(--channel-editor-key-visible-rows);
-      flex: 0 0 auto;
-      height: var(--channel-editor-table-visible-height);
-      min-height: var(--channel-editor-table-visible-height);
-      max-height: calc(var(--channel-editor-table-header-height) + (var(--channel-editor-key-max-visible-rows) * var(--channel-editor-table-row-height)));
-    }
-
-    #channelModal .channel-editor-group--urls .inline-table-container {
-      --channel-editor-table-visible-rows: 2;
-      height: var(--channel-editor-table-visible-height);
-      min-height: var(--channel-editor-table-visible-height);
-    }
-
     #channelModal .channel-editor-group--urls > div {
       display: flex;
       flex-direction: column;
@@ -827,16 +787,7 @@
     #channelModal .channel-editor-group--models {
       display: flex;
       flex-direction: column;
-      flex: 1 1 auto;
-      min-height: calc(var(--channel-editor-section-header-height) + var(--channel-editor-table-header-height) + (2 * var(--channel-editor-table-row-height)));
-    }
-
-    #channelModal .channel-editor-group--models .inline-table-container {
-      --channel-editor-table-visible-rows: var(--channel-editor-model-visible-rows);
-      flex: 1 1 auto;
-      min-height: calc(var(--channel-editor-table-header-height) + (var(--channel-editor-model-visible-rows) * var(--channel-editor-table-row-height)));
-      max-height: calc(var(--channel-editor-table-header-height) + (var(--channel-editor-model-max-visible-rows) * var(--channel-editor-table-row-height)));
-      overflow-y: auto;
+      flex: 0 0 auto;
     }
 
     .channel-editor-group--primary {
@@ -4284,16 +4235,6 @@
       #channelModal .channel-editor-modal {
         overflow-x: hidden;
         overflow-y: auto;
-      }
-
-      #channelModal .inline-table-container,
-      #channelModal .inline-table-container.tall,
-      #channelModal .channel-editor-group--keys .inline-table-container,
-      #channelModal .channel-editor-group--models .inline-table-container {
-        max-height: none;
-        min-height: 0;
-        height: auto;
-        overflow: visible;
       }
 
       #channelForm.channel-editor-form {
