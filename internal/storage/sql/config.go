@@ -533,6 +533,9 @@ func (s *SQLStore) DeleteConfig(ctx context.Context, id int64) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM logs WHERE channel_id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel logs: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM cumulative_usage WHERE channel_id = ?`, id); err != nil {
+			return fmt.Errorf("delete channel cumulative usage: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM channels WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("delete channel: %w", err)
 		}

@@ -5,9 +5,13 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
+	"time"
 
+	"ccLoad/internal/model"
 	"ccLoad/internal/storage/schema"
+	sqlstore "ccLoad/internal/storage/sql"
 
 	_ "modernc.org/sqlite"
 )
@@ -63,6 +67,125 @@ func TestMigrate_SQLite_FullFlow(t *testing.T) {
 	}
 	if val != "7" {
 		t.Errorf("log_retention_days=%q, want %q", val, "7")
+	}
+}
+
+func TestMigrateSQLite_BackfillsCumulativeUsageOnce(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	if err := migrate(ctx, db, DialectSQLite); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO logs (
+		time, model, channel_id, status_code, message, input_tokens, output_tokens, cost, cost_multiplier
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, 1, "legacy-model", 77, 200, "legacy", 10, 20, 0.5, 3); err != nil {
+		t.Fatalf("insert legacy log: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, cumulativeUsageMigrationVersion); err != nil {
+		t.Fatalf("delete cumulative migration marker: %v", err)
+	}
+	if err := backfillCumulativeUsage(ctx, db, DialectSQLite); err != nil {
+		t.Fatalf("backfill cumulative usage: %v", err)
+	}
+	if err := backfillCumulativeUsage(ctx, db, DialectSQLite); err != nil {
+		t.Fatalf("repeat cumulative backfill: %v", err)
+	}
+	var totalRequests, inputTokens int64
+	var cost, effectiveCost float64
+	if err := db.QueryRowContext(ctx, `SELECT SUM(total_requests), SUM(input_tokens), SUM(cost), SUM(effective_cost)
+		FROM cumulative_usage WHERE channel_id = ?`, 77).Scan(&totalRequests, &inputTokens, &cost, &effectiveCost); err != nil {
+		t.Fatalf("query cumulative usage: %v", err)
+	}
+	if totalRequests != 1 || inputTokens != 10 || cost != 0.5 || effectiveCost != 1.5 {
+		t.Fatalf("unexpected cumulative backfill: requests=%d input=%d cost=%v effective=%v", totalRequests, inputTokens, cost, effectiveCost)
+	}
+}
+
+// TestMigrateSQLite_BackfillTruncationMatchesRuntimeWriter 回归防护：
+// 回填 SQL 与运行时 upsert 必须对 client_name 做同样的截断。
+//
+// 两个 client_name 前 ClientNameMaxLen 字节相同但后缀不同时：
+//   - 若 SQL 侧不截断，GROUP BY 会把它们分成两行，而 Go 侧两者算出的维度 key 完全相同，
+//     纯 INSERT 会在第二行撞主键，回填直接失败；
+//   - 若截断一致，两行会归并为一个维度，并与运行时写入落在同一行。
+func TestMigrateSQLite_BackfillTruncationMatchesRuntimeWriter(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	if err := migrate(ctx, db, DialectSQLite); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+
+	// 前 64 字节相同、后缀不同的两个客户端标识。
+	prefix := strings.Repeat("c", model.ClientNameMaxLen)
+	firstClientName := prefix + "-suffix-alpha"
+	secondClientName := prefix + "-suffix-beta"
+	for i, clientName := range []string{firstClientName, secondClientName} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO logs (
+			time, model, channel_id, status_code, message, input_tokens, client_name, log_source
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			1, "legacy-model", 88, 200, "legacy", 5, clientName, "proxy"); err != nil {
+			t.Fatalf("insert legacy log %d: %v", i, err)
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, cumulativeUsageMigrationVersion); err != nil {
+		t.Fatalf("delete cumulative migration marker: %v", err)
+	}
+	if err := backfillCumulativeUsage(ctx, db, DialectSQLite); err != nil {
+		t.Fatalf("backfill cumulative usage: %v", err)
+	}
+
+	// 两条日志应归并为一个维度，client_name 截断到列宽。
+	storedName := prefix
+	wantKey := model.CumulativeUsageDimensionKey(88, "legacy-model", 200, 0, storedName, model.LogSourceProxy)
+	var rows, totalRequests, inputTokens int64
+	var key, clientName string
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*), SUM(total_requests), SUM(input_tokens) FROM cumulative_usage WHERE channel_id = ?`, 88,
+	).Scan(&rows, &totalRequests, &inputTokens); err != nil {
+		t.Fatalf("query backfilled rows: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("expected both logs to merge into one dimension, got %d rows", rows)
+	}
+	if totalRequests != 2 || inputTokens != 10 {
+		t.Fatalf("unexpected backfilled totals: requests=%d input=%d", totalRequests, inputTokens)
+	}
+	if err := db.QueryRowContext(ctx,
+		`SELECT dimension_key, client_name FROM cumulative_usage WHERE channel_id = ?`, 88,
+	).Scan(&key, &clientName); err != nil {
+		t.Fatalf("query backfilled row: %v", err)
+	}
+	if clientName != storedName {
+		t.Fatalf("backfill must truncate client_name to %d bytes: got %d bytes", model.ClientNameMaxLen, len(clientName))
+	}
+	if key != wantKey {
+		t.Fatal("backfill produced a different dimension key than the runtime writer would")
+	}
+
+	// 运行时写入同一条日志，必须累加到同一行（而不是新增一行）。
+	store := sqlstore.NewSQLStore(db, "sqlite")
+	if err := store.AddLog(ctx, &model.LogEntry{
+		Time:        model.JSONTime{Time: time.Now()},
+		Model:       "legacy-model",
+		ChannelID:   88,
+		StatusCode:  200,
+		InputTokens: 7,
+		ClientName:  firstClientName,
+	}); err != nil {
+		t.Fatalf("add runtime log: %v", err)
+	}
+
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*), SUM(total_requests), SUM(input_tokens) FROM cumulative_usage WHERE channel_id = ?`, 88,
+	).Scan(&rows, &totalRequests, &inputTokens); err != nil {
+		t.Fatalf("query merged cumulative row: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("backfill and runtime writer must share one dimension row, got %d", rows)
+	}
+	if totalRequests != 3 || inputTokens != 17 {
+		t.Fatalf("unexpected merged totals: requests=%d input=%d", totalRequests, inputTokens)
 	}
 }
 

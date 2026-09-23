@@ -660,6 +660,10 @@ func (h *HybridStore) GetStatsLite(ctx context.Context, startTime, endTime time.
 	return h.sqlite.GetStatsLite(ctx, startTime, endTime, filter)
 }
 
+func (h *HybridStore) GetCumulativeStats(ctx context.Context, filter *model.LogFilter) ([]model.StatsEntry, error) {
+	return h.sqlite.GetCumulativeStats(ctx, filter)
+}
+
 func (h *HybridStore) GetRPMStats(ctx context.Context, startTime, endTime time.Time, filter *model.LogFilter, isToday bool) (*model.RPMStats, error) {
 	return h.sqlite.GetRPMStats(ctx, startTime, endTime, filter, isToday)
 }

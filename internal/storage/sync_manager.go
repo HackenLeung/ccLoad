@@ -78,7 +78,23 @@ func (sm *SyncManager) RestoreOnStartup(ctx context.Context, logDays int) error 
 		}
 	}
 
+	if err := sm.restoreCumulativeUsage(ctx); err != nil {
+		return fmt.Errorf("恢复永久累计统计失败: %w", err)
+	}
+
 	log.Printf("[INFO] 数据恢复完成，总耗时: %v", time.Since(start))
+	return nil
+}
+
+func (sm *SyncManager) restoreCumulativeUsage(ctx context.Context) error {
+	rows, err := sm.mysql.ListCumulativeUsage(ctx)
+	if err != nil {
+		return err
+	}
+	if err := sm.sqlite.ReplaceCumulativeUsage(ctx, rows); err != nil {
+		return err
+	}
+	log.Printf("[INFO] 永久累计统计恢复完成，共 %d 个维度", len(rows))
 	return nil
 }
 

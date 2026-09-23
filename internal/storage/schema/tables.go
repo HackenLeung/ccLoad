@@ -261,3 +261,26 @@ func DefineDebugLogsTable() *TableBuilder {
 		Column("resp_body LONGBLOB").
 		Index("idx_debug_logs_created_at", "created_at")
 }
+
+// DefineCumulativeUsageTable 定义永久累计统计表：按维度（渠道/模型/状态码/令牌/客户端/来源）
+// 累积计数与费用，独立于 logs 保留期，日志清理后累计值不丢失。
+// dimension_key 为维度哈希（见 model.CumulativeUsageDimensionKey），作为主键用于幂等 upsert。
+func DefineCumulativeUsageTable() *TableBuilder {
+	return NewTable("cumulative_usage").
+		Column("dimension_key VARCHAR(64) PRIMARY KEY").
+		Column("channel_id BIGINT NOT NULL").
+		Column("model VARCHAR(191) NOT NULL DEFAULT ''").
+		Column("status_code INT NOT NULL").
+		Column("auth_token_id BIGINT NOT NULL DEFAULT 0").
+		Column("client_name VARCHAR(64) NOT NULL DEFAULT ''").
+		Column("log_source VARCHAR(32) NOT NULL DEFAULT 'proxy'").
+		Column("total_requests BIGINT NOT NULL DEFAULT 0").
+		Column("success_requests BIGINT NOT NULL DEFAULT 0").
+		Column("error_requests BIGINT NOT NULL DEFAULT 0").
+		Column("input_tokens BIGINT NOT NULL DEFAULT 0").
+		Column("output_tokens BIGINT NOT NULL DEFAULT 0").
+		Column("cache_read_tokens BIGINT NOT NULL DEFAULT 0").
+		Column("cache_creation_tokens BIGINT NOT NULL DEFAULT 0").
+		Column("cost DOUBLE NOT NULL DEFAULT 0").
+		Column("effective_cost DOUBLE NOT NULL DEFAULT 0")
+}

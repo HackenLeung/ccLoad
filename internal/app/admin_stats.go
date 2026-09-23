@@ -177,8 +177,7 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 	// 判断是否为本日（本日才计算最近一分钟）
 	isToday := params.Range == "today" || params.Range == ""
 	todayStart := beginningOfDay(now)
-	allTimeStart := time.Unix(0, 0)
-	// 累计统计是全表聚合，代价高但对新鲜度要求低：默认走 1 小时缓存，
+	// 永久累计读取独立汇总表，代价低，对新鲜度要求不高：默认走 1 小时缓存，
 	// 仅在用户点击“刷新累计值”时强制查询，切换日期复用缓存。
 	const cumulativeTokensTTL = time.Hour
 	refreshCumulative := util.ParseBoolDefault(c.Query("refresh_cumulative"), false)
@@ -227,7 +226,7 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 
 	go func() {
 		defer wg.Done()
-		allTimeStats, cumulativeUpdatedAt, allTimeErr = s.statsCache.GetStatsLiteWithTTL(ctx, allTimeStart, now, logFilter, cumulativeTokensTTL, refreshCumulative)
+		allTimeStats, cumulativeUpdatedAt, allTimeErr = s.statsCache.GetCumulativeStatsWithTTL(ctx, logFilter, cumulativeTokensTTL, refreshCumulative)
 	}()
 
 	go func() {

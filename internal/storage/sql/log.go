@@ -180,12 +180,24 @@ func (s *SQLStore) AddLog(ctx context.Context, e *model.LogEntry) error {
 		if err := insertLogsWithDebug(ctx, tx, []*model.LogEntry{e}); err != nil {
 			return err
 		}
+		if err := upsertCumulativeUsage(ctx, tx, s.IsSQLite(), []*model.LogEntry{e}); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 
-	// 复用 logRowArgs 统一构造参数（脱敏、时间标准化等逻辑集中维护）
-	_, err := s.db.ExecContext(ctx, logsInsertColumns+logRowPlaceholders, logRowArgs(e)...)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, logsInsertColumns+logRowPlaceholders, logRowArgs(e)...); err != nil {
+		return err
+	}
+	if err := upsertCumulativeUsage(ctx, tx, s.IsSQLite(), []*model.LogEntry{e}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 const logsInsertColumns = `INSERT INTO logs(time, minute_bucket, model, actual_model, upstream_protocol, log_source, channel_id, status_code, message, duration, is_streaming, first_byte_time, api_key_used, api_key_hash, auth_token_id, base_url, service_tier, thinking_effort,
@@ -233,6 +245,9 @@ func (s *SQLStore) BatchAddLogs(ctx context.Context, logs []*model.LogEntry) err
 		if err := insertLogsWithDebug(ctx, tx, withDebug); err != nil {
 			return err
 		}
+	}
+	if err := upsertCumulativeUsage(ctx, tx, s.IsSQLite(), logs); err != nil {
+		return err
 	}
 
 	return tx.Commit()
@@ -326,25 +341,18 @@ func logRowArgs(e *model.LogEntry) []any {
 		e.InputTokens, e.OutputTokens, e.ReasoningTokens, e.CacheReadInputTokens, e.CacheCreationInputTokens,
 		e.Cache5mInputTokens, e.Cache1hInputTokens, e.Cost,
 		normalizeCostMultiplier(e.CostMultiplier),
-		truncateClientField(e.ClientName, clientNameMaxLen),
-		truncateClientField(e.ClientUA, clientUAMaxLen),
-		truncateClientField(e.ResponseModel, responseModelMaxLen),
+		model.TruncateColumnValue(e.ClientName, model.ClientNameMaxLen),
+		model.TruncateColumnValue(e.ClientUA, clientUAMaxLen),
+		model.TruncateColumnValue(e.ResponseModel, responseModelMaxLen),
 	}
 }
 
-// 列宽上限（与 schema 中 VARCHAR 长度对齐），防止超长 UA 触发 MySQL strict mode 写入失败。
+// 列宽上限（与 schema 中 VARCHAR 长度对齐），防止超长字段触发 MySQL strict mode 写入失败。
+// client_name 的上限见 model.ClientNameMaxLen：日志落库与累计统计维度 key 必须使用同一个值。
 const (
-	clientNameMaxLen    = 64
 	clientUAMaxLen      = 191
 	responseModelMaxLen = 191
 )
-
-func truncateClientField(value string, maxLen int) string {
-	if len(value) <= maxLen {
-		return value
-	}
-	return value[:maxLen]
-}
 
 // ListLogs 查询日志列表
 func (s *SQLStore) ListLogs(ctx context.Context, since time.Time, limit, offset int, filter *model.LogFilter) ([]*model.LogEntry, error) {

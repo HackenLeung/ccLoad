@@ -92,6 +92,58 @@ func TestSyncManager_RestoreOnStartup_WithData(t *testing.T) {
 	}
 }
 
+func TestSyncManager_RestoresCumulativeUsageWithoutDoubleCounting(t *testing.T) {
+	mysql := createTestStoreForSync(t, "mysql_cumulative")
+	sqlite := createTestStoreForSync(t, "sqlite_cumulative")
+	defer func() {
+		_ = mysql.Close()
+		_ = sqlite.Close()
+	}()
+	ctx := context.Background()
+
+	channel := &model.Config{Name: "cumulative-sync", URL: "https://example.com", Enabled: true, ChannelType: "openai"}
+	mysqlChannel, err := mysql.CreateConfig(ctx, channel)
+	if err != nil {
+		t.Fatalf("create MySQL channel: %v", err)
+	}
+	sqliteChannel, err := sqlite.CreateConfig(ctx, channel)
+	if err != nil {
+		t.Fatalf("create SQLite channel: %v", err)
+	}
+	if sqliteChannel.ID != mysqlChannel.ID {
+		t.Fatalf("test stores generated different channel IDs: MySQL=%d SQLite=%d", mysqlChannel.ID, sqliteChannel.ID)
+	}
+	entry := &model.LogEntry{
+		Time:        model.JSONTime{Time: time.Now()},
+		Model:       "m1",
+		ChannelID:   mysqlChannel.ID,
+		StatusCode:  200,
+		InputTokens: 9,
+	}
+	if err := mysql.AddLog(ctx, entry); err != nil {
+		t.Fatalf("add MySQL log: %v", err)
+	}
+	staleLocalEntry := *entry
+	staleLocalEntry.InputTokens = 900
+	if err := sqlite.AddLog(ctx, &staleLocalEntry); err != nil {
+		t.Fatalf("add stale SQLite log: %v", err)
+	}
+
+	sm := NewSyncManager(mysql, sqlite)
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := sm.RestoreOnStartup(ctx, 0); err != nil {
+			t.Fatalf("RestoreOnStartup attempt %d: %v", attempt+1, err)
+		}
+	}
+	stats, err := sqlite.GetCumulativeStats(ctx, nil)
+	if err != nil {
+		t.Fatalf("get restored cumulative stats: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Total != 1 || stats[0].TotalInputTokens == nil || *stats[0].TotalInputTokens != 9 {
+		t.Fatalf("unexpected restored cumulative stats: %+v", stats)
+	}
+}
+
 func TestSyncManager_RestoreOnStartup_RestoresProtocolTransforms(t *testing.T) {
 	mysql := createTestStoreForSync(t, "mysql_protocol_transforms")
 	sqlite := createTestStoreForSync(t, "sqlite_protocol_transforms")

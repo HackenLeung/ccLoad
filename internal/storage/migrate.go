@@ -13,6 +13,7 @@ const (
 	channelModelsRedirectMigrationVersion = "v1_channel_models_redirect"
 	channelModelsOrderRepairVersion       = "v2_channel_models_created_at_order"
 	channelModelAliasesMigrationVersion   = "v3_channel_model_protocol_aliases"
+	cumulativeUsageMigrationVersion       = "v4_cumulative_usage_backfill"
 )
 
 // Dialect 数据库方言
@@ -60,6 +61,7 @@ func migrate(ctx context.Context, db *sql.DB, dialect Dialect) error {
 		schema.DefineWebSessionsTable,
 		schema.DefineLogsTable,
 		schema.DefineDebugLogsTable,
+		schema.DefineCumulativeUsageTable,
 	}
 
 	// 一次性预查全库索引，避免每张表单独 SELECT 网络往返
@@ -237,6 +239,10 @@ func migrate(ctx context.Context, db *sql.DB, dialect Dialect) error {
 	// 初始化默认配置
 	if err := initDefaultSettings(ctx, db, dialect); err != nil {
 		return err
+	}
+
+	if err := backfillCumulativeUsage(ctx, db, dialect); err != nil {
+		return fmt.Errorf("backfill cumulative usage: %w", err)
 	}
 
 	// 清理已移除的配置项（Fail-fast：确保Web管理界面不再暴露危险开关）

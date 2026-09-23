@@ -174,12 +174,13 @@ func (sc *StatsCache) getStatsLite(ctx context.Context, startTime, endTime time.
 	return result, nil
 }
 
-// GetStatsLiteWithTTL 与 GetStatsLite 类似，但使用自定义 TTL，并支持强制刷新。
-// 缓存键按 ttl 分桶（而非默认 30 秒），保证在同一 TTL 周期内稳定命中。
-// forceRefresh=true 时跳过缓存读取（仍写回），用于用户主动刷新页面等需要最新数据的场景。
-// 典型用途：首页“累计 Token/成本”这类全表聚合，代价高但对新鲜度要求低。
-func (sc *StatsCache) GetStatsLiteWithTTL(ctx context.Context, startTime, endTime time.Time, filter *model.LogFilter, ttl time.Duration, forceRefresh bool) ([]model.StatsEntry, time.Time, error) {
-	key := buildCacheKeyWithBucket("stats_lite_ttl", startTime, endTime, filter, ttl)
+// GetCumulativeStatsWithTTL 读取永久累计统计，使用自定义 TTL 并支持强制刷新。
+//
+// 累计统计没有时间维度（由 cumulative_usage 汇总表提供全量累计），
+// 因此缓存键只由 filter 决定，TTL 仅控制过期时间、不参与分桶。
+// forceRefresh=true 时跳过缓存读取（仍写回），用于用户主动刷新累计值的场景。
+func (sc *StatsCache) GetCumulativeStatsWithTTL(ctx context.Context, filter *model.LogFilter, ttl time.Duration, forceRefresh bool) ([]model.StatsEntry, time.Time, error) {
+	key := "cumulative_stats:" + hashFilter(filter)
 
 	if !forceRefresh {
 		if cached, ok := sc.cache.Load(key); ok {
@@ -190,19 +191,13 @@ func (sc *StatsCache) GetStatsLiteWithTTL(ctx context.Context, startTime, endTim
 		}
 	}
 
-	// 缓存未命中或强制刷新，查询数据库
-	result, err := sc.store.GetStatsLite(ctx, startTime, endTime, filter)
+	result, err := sc.store.GetCumulativeStats(ctx, filter)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 
 	updatedAt := time.Now()
-	sc.storeCache(key, &cachedStats{
-		data:      result,
-		expiry:    updatedAt.Add(ttl),
-		updatedAt: updatedAt,
-	})
-
+	sc.storeCache(key, &cachedStats{data: result, expiry: updatedAt.Add(ttl), updatedAt: updatedAt})
 	return result, updatedAt, nil
 }
 
@@ -261,20 +256,6 @@ func cacheKeyEndUnix(endTime time.Time) int64 {
 		return endTime.Unix()
 	}
 	return (endTime.Unix() / bucketSeconds) * bucketSeconds
-}
-
-// buildCacheKeyWithBucket 按显式 ttl 对 endTime 分桶生成缓存键。
-// 与 buildCacheKey 不同，这里不走 calculateTTL 的 30 秒上限，而是直接用调用方指定的 ttl 分桶，
-// 使高 TTL（如 1 小时）的实时范围查询能在整个周期内稳定命中同一个 key。
-func buildCacheKeyWithBucket(typ string, startTime, endTime time.Time, filter *model.LogFilter, ttl time.Duration) string {
-	filterHash := hashFilter(filter)
-	endUnix := endTime.Unix()
-	if ttl > 0 {
-		if bucketSeconds := int64(ttl / time.Second); bucketSeconds > 0 {
-			endUnix = (endUnix / bucketSeconds) * bucketSeconds
-		}
-	}
-	return fmt.Sprintf("%s:%d:%d:%s", typ, startTime.Unix(), endUnix, filterHash)
 }
 
 // hashFilter 对 filter 进行哈希

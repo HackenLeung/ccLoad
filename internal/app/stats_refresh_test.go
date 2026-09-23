@@ -17,9 +17,10 @@ import (
 
 type refreshStatsStore struct {
 	storage.Store
-	stats  []model.StatsEntry
-	mu     sync.Mutex
-	ranges [][2]time.Time
+	stats           []model.StatsEntry
+	mu              sync.Mutex
+	ranges          [][2]time.Time
+	cumulativeCalls []*model.LogFilter
 }
 
 func (s *refreshStatsStore) GetStats(context.Context, time.Time, time.Time, *model.LogFilter, bool) ([]model.StatsEntry, error) {
@@ -39,6 +40,13 @@ func (s *refreshStatsStore) GetStatsLite(_ context.Context, start, end time.Time
 	defer s.mu.Unlock()
 	s.ranges = append(s.ranges, [2]time.Time{start, end})
 	return []model.StatsEntry{{Total: len(s.ranges)}}, nil
+}
+
+func (s *refreshStatsStore) GetCumulativeStats(_ context.Context, filter *model.LogFilter) ([]model.StatsEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cumulativeCalls = append(s.cumulativeCalls, filter)
+	return []model.StatsEntry{{Total: len(s.cumulativeCalls)}}, nil
 }
 
 func TestHandleStats_ConcurrentResponsesDoNotMutateCache(t *testing.T) {
@@ -99,18 +107,30 @@ func TestStatsCache_CumulativeTimestampAndExplicitRefresh(t *testing.T) {
 	cache := NewStatsCache(store)
 	defer cache.Close()
 	ctx := context.Background()
-	now := time.Now().Truncate(time.Hour).Add(time.Minute)
-	first, updatedAt, err := cache.GetStatsLiteWithTTL(ctx, time.Unix(0, 0), now, nil, time.Hour, false)
+
+	first, updatedAt, err := cache.GetCumulativeStatsWithTTL(ctx, nil, time.Hour, false)
 	if err != nil || updatedAt.IsZero() {
 		t.Fatalf("first query: updatedAt=%v err=%v", updatedAt, err)
 	}
-	cached, cachedAt, err := cache.GetStatsLiteWithTTL(ctx, time.Unix(0, 0), now.Add(time.Minute), nil, time.Hour, false)
-	if err != nil || !cachedAt.Equal(updatedAt) || cached[0].Total != first[0].Total || len(store.ranges) != 1 {
+	if len(store.ranges) != 0 {
+		t.Fatalf("cumulative query must not touch the ranged stats path: %v", store.ranges)
+	}
+
+	// 命中缓存：时间戳保持、不再查库。
+	cached, cachedAt, err := cache.GetCumulativeStatsWithTTL(ctx, nil, time.Hour, false)
+	if err != nil || !cachedAt.Equal(updatedAt) || cached[0].Total != first[0].Total {
 		t.Fatalf("cache hit must preserve timestamp and skip database: %v", err)
 	}
-	fresh, refreshedAt, err := cache.GetStatsLiteWithTTL(ctx, time.Unix(0, 0), now, nil, time.Hour, true)
-	if err != nil || refreshedAt.Before(updatedAt) || fresh[0].Total != 2 {
+	if len(store.cumulativeCalls) != 1 {
+		t.Fatalf("expected exactly one cumulative query, got %d", len(store.cumulativeCalls))
+	}
+
+	// 强制刷新：重新查库并更新时间戳。
+	if _, refreshedAt, err := cache.GetCumulativeStatsWithTTL(ctx, nil, time.Hour, true); err != nil || !refreshedAt.Equal(updatedAt) && refreshedAt.Before(updatedAt) {
 		t.Fatalf("explicit refresh must query again: %v", err)
+	}
+	if len(store.cumulativeCalls) != 2 {
+		t.Fatalf("explicit refresh must issue a second query, got %d", len(store.cumulativeCalls))
 	}
 }
 

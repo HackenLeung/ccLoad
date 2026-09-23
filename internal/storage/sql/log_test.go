@@ -3,6 +3,7 @@ package sql_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,81 @@ func TestLog_AddAndList(t *testing.T) {
 	}
 	if len(logs) > 0 && logs[0].UpstreamProtocol != "openai" {
 		t.Errorf("upstream_protocol: got %q, want %q", logs[0].UpstreamProtocol, "openai")
+	}
+}
+
+func TestLog_CumulativeUsageSurvivesLogCleanup(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t, "cumulative_usage_cleanup.db")
+	ctx := context.Background()
+	channelID := createTestChannel(t, ctx, store, "cumulative-cleanup-channel")
+	createdAt := time.Now().Add(-48 * time.Hour)
+	if err := store.AddLog(ctx, &model.LogEntry{
+		Time:           newJSONTime(createdAt),
+		Model:          "gpt-4",
+		ChannelID:      channelID,
+		StatusCode:     200,
+		InputTokens:    12,
+		OutputTokens:   34,
+		Cost:           0.25,
+		CostMultiplier: 2,
+	}); err != nil {
+		t.Fatalf("add log: %v", err)
+	}
+
+	if err := store.CleanupLogsBefore(ctx, time.Now().Add(-24*time.Hour)); err != nil {
+		t.Fatalf("cleanup logs: %v", err)
+	}
+	count, err := store.CountLogs(ctx, time.Now().Add(-72*time.Hour), nil)
+	if err != nil {
+		t.Fatalf("count logs: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected logs to be cleaned up, got %d", count)
+	}
+
+	stats, err := store.GetCumulativeStats(ctx, nil)
+	if err != nil {
+		t.Fatalf("get cumulative stats: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Total != 1 || stats[0].Success != 1 {
+		t.Fatalf("unexpected cumulative request totals: %+v", stats)
+	}
+	if stats[0].TotalInputTokens == nil || *stats[0].TotalInputTokens != 12 || stats[0].TotalOutputTokens == nil || *stats[0].TotalOutputTokens != 34 {
+		t.Fatalf("unexpected cumulative tokens: %+v", stats[0])
+	}
+	if stats[0].TotalCost == nil || *stats[0].TotalCost != 0.25 || stats[0].EffectiveCost == nil || *stats[0].EffectiveCost != 0.5 {
+		t.Fatalf("unexpected cumulative costs: %+v", stats[0])
+	}
+}
+
+func TestLog_CumulativeUsageUsesStoredClientName(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t, "cumulative_usage_client_name.db")
+	ctx := context.Background()
+	channelID := createTestChannel(t, ctx, store, "cumulative-client-name-channel")
+	const clientNameLimit = 64
+	clientName := strings.Repeat("a", clientNameLimit+10)
+	if err := store.AddLog(ctx, &model.LogEntry{
+		Time:       newJSONTime(time.Now()),
+		Model:      "gpt-4",
+		ChannelID:  channelID,
+		StatusCode: 200,
+		ClientName: clientName,
+	}); err != nil {
+		t.Fatalf("add log: %v", err)
+	}
+
+	storedClientName := clientName[:clientNameLimit]
+	filter := &model.LogFilter{ClientName: storedClientName}
+	stats, err := store.GetCumulativeStats(ctx, filter)
+	if err != nil {
+		t.Fatalf("get cumulative stats: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Total != 1 {
+		t.Fatalf("cumulative stats should match stored client name %q: %+v", storedClientName, stats)
 	}
 }
 
