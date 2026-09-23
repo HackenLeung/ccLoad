@@ -58,24 +58,6 @@ let selectedURLIndices = new Set(); // 选中的 URL 索引集合
 let urlStatsMap = {}; // URL实时状态：{ url: { latency_ms, cooled_down, cooldown_remain_ms } }
 let channelFormDirty = false; // 表单是否有未保存的更改
 
-// 虚拟滚动实现：优化大量Key时的渲染性能
-const VIRTUAL_SCROLL_CONFIG = {
-  ROW_HEIGHT: 40,           // 每行高度（像素）
-  BUFFER_SIZE: 5,           // 上下缓冲区行数（减少滚动时的闪烁）
-  ENABLE_THRESHOLD: 50,     // 启用虚拟滚动的阈值（Key数量）
-  CONTAINER_HEIGHT: 250     // 容器高度兜底值（像素）
-};
-
-let virtualScrollState = {
-  enabled: false,
-  scrollTop: 0,
-  visibleStart: 0,
-  visibleEnd: 0,
-  rafId: null,
-  resizeObserver: null,
-  filteredIndices: [] // 存储筛选后的索引列表（支持状态筛选）
-};
-
 function humanizeMS(ms) {
   let s = Math.ceil(ms / 1000);
   const h = Math.floor(s / 3600);
