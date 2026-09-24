@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"ccLoad/internal/protocol"
@@ -101,110 +102,33 @@ func (s *Server) HandleResponsesWebsocket(c *gin.Context) {
 			}
 		}
 	}()
-	session := newResponsesWebsocketSession()
-	defer session.closeUpstream()
-	var queued []responsesWebsocketInboundMessage
-
-	for {
-		var message responsesWebsocketInboundMessage
-		if len(queued) > 0 {
-			message, queued = queued[0], queued[1:]
-		} else {
-			select {
-			case <-connectionCtx.Done():
-				return
-			case message = <-messages:
-			}
-		}
-		if message.messageType != websocket.TextMessage {
-			if errWrite := writeResponsesWebsocketError(conn, "unsupported_frame", "only text websocket messages are supported"); errWrite != nil {
-				return
-			}
-			continue
-		}
-		if !gjson.ValidBytes(message.payload) {
-			if errWrite := writeResponsesWebsocketError(conn, "invalid_request", "invalid websocket request JSON"); errWrite != nil {
-				return
-			}
-			continue
-		}
-
-		eventType := strings.TrimSpace(gjson.GetBytes(message.payload, "type").String())
-		switch eventType {
-		case responsesWebsocketRequestCreate, responsesWebsocketRequestAppend:
-			requestBody, errNormalize := session.normalizeRequest(message.payload)
-			if errNormalize != nil {
-				if errWrite := writeResponsesWebsocketError(conn, "invalid_request", errNormalize.Error()); errWrite != nil {
-					return
-				}
-				continue
-			}
-			turnResult, next, errTurn := s.executeResponsesWebsocketTurnWithControls(connectionCtx, c, conn, requestBody, session, messages)
-			queued = append(queued, next...)
-			if errTurn != nil {
-				if connectionCtx.Err() != nil {
-					return
-				}
-				if errWrite := writeResponsesWebsocketError(conn, "upstream_error", errTurn.Error()); errWrite != nil {
-					return
-				}
-				if session.outcomeUnknown.Load() {
-					return
-				}
-				continue
-			}
-			session.commit(requestBody, turnResult)
-		case "response.cancel":
-			if errWrite := writeResponsesWebsocketError(conn, "no_active_response", "no response is currently running"); errWrite != nil {
-				return
-			}
-		default:
-			if errWrite := writeResponsesWebsocketError(conn, "unsupported_event", "unsupported websocket request type"); errWrite != nil {
-				return
-			}
-		}
-	}
+	s.runResponsesWebsocketScheduler(connectionCtx, cancelConnection, c, &responsesWebsocketWriter{conn: conn}, messages)
 }
 
-func (s *Server) executeResponsesWebsocketTurnWithControls(ctx context.Context, c *gin.Context, conn *websocket.Conn, body []byte, session *responsesWebsocketSession, messages <-chan responsesWebsocketInboundMessage) (responsesWebsocketTurnResult, []responsesWebsocketInboundMessage, error) {
-	turnCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	type completedTurn struct {
-		result responsesWebsocketTurnResult
-		err    error
-	}
-	done := make(chan completedTurn, 1)
-	go func() {
-		result, err := s.executeResponsesWebsocketTurn(turnCtx, c, conn, body, session)
-		done <- completedTurn{result, err}
-	}()
-	var queued []responsesWebsocketInboundMessage
-	streamID := session.responseStreamID()
-	for {
-		select {
-		case completed := <-done:
-			return completed.result, queued, completed.err
-		case <-ctx.Done():
-			cancel()
-			<-done
-			return responsesWebsocketTurnResult{}, nil, ctx.Err()
-		case message := <-messages:
-			if message.messageType == websocket.TextMessage && gjson.ValidBytes(message.payload) && gjson.GetBytes(message.payload, "type").String() == "response.cancel" {
-				id := gjson.GetBytes(message.payload, "stream_id").String()
-				if id == "" || id == streamID {
-					cancel()
-					continue
-				}
-			}
-			if len(queued) >= 8 {
-				cancel()
-				<-done
-				return responsesWebsocketTurnResult{}, nil, errors.New("too many queued WebSocket requests")
-			}
-			queued = append(queued, message)
-		}
-	}
+// Serialize the deadline and frame together; Gorilla permits only one data writer.
+type responsesWebsocketWriter struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
 }
+
+func (w *responsesWebsocketWriter) WriteMessage(kind int, data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.conn.SetWriteDeadline(time.Now().Add(responsesWebsocketWriteTimeout)); err != nil {
+		return err
+	}
+	return w.conn.WriteMessage(kind, data)
+}
+func (w *responsesWebsocketWriter) WriteJSON(value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return w.WriteMessage(websocket.TextMessage, data)
+}
+
+// Each frame applies its own deadline while holding the writer lock.
+func (*responsesWebsocketWriter) SetWriteDeadline(time.Time) error { return nil }
 
 type responsesWebsocketInboundMessage struct {
 	messageType int
@@ -243,7 +167,7 @@ type responsesWebsocketTurnResult struct {
 	pendingToolCallIDs  []string
 }
 
-func (s *Server) executeResponsesWebsocketTurn(ctx context.Context, c *gin.Context, conn *websocket.Conn, requestBody []byte, session *responsesWebsocketSession) (responsesWebsocketTurnResult, error) {
+func (s *Server) executeResponsesWebsocketTurn(ctx context.Context, c *gin.Context, conn *responsesWebsocketWriter, requestBody []byte, session *responsesWebsocketSession) (responsesWebsocketTurnResult, error) {
 	modelName := strings.TrimSpace(gjson.GetBytes(requestBody, "model").String())
 	if modelName == "" {
 		return responsesWebsocketTurnResult{}, errors.New("missing model in normalized websocket request")
@@ -277,6 +201,7 @@ func (s *Server) executeResponsesWebsocketTurn(ctx context.Context, c *gin.Conte
 			candidates = filtered
 		}
 	}
+	candidates = filterProtocolCapabilityCandidates(candidates, protocol.Codex, requestBody)
 	if len(candidates) == 0 {
 		return responsesWebsocketTurnResult{}, errors.New("no available upstream")
 	}
@@ -345,6 +270,9 @@ func (s *Server) executeResponsesWebsocketTurn(ctx context.Context, c *gin.Conte
 
 	bridgeWriter := newResponsesWebsocketBridgeWriter(conn, session.responseStreamID())
 	lastResult, succeeded := s.runProxyAttemptLoop(ctx, candidates, reqCtx, bridgeWriter)
+	if bridgeWriter.terminal && !bridgeWriter.completed {
+		return responsesWebsocketTurnResult{}, nil
+	}
 	if succeeded {
 		if !bridgeWriter.completed {
 			session.outcomeUnknown.Store(true)
@@ -376,19 +304,21 @@ func responsesWebsocketUpstreamHeaders(source http.Header) http.Header {
 }
 
 type responsesWebsocketBridgeWriter struct {
-	conn                 *websocket.Conn
+	conn                 *responsesWebsocketWriter
 	streamID             string
 	header               http.Header
 	status               int
 	pending              bytes.Buffer
+	terminal             bool
 	completed            bool
 	completedOutput      []byte
 	completedResponseID  string
 	outputItemsByIndex   map[int64][]byte
 	outputItemsUnindexed [][]byte
+	outputBytes          int
 }
 
-func newResponsesWebsocketBridgeWriter(conn *websocket.Conn, streamID string) *responsesWebsocketBridgeWriter {
+func newResponsesWebsocketBridgeWriter(conn *responsesWebsocketWriter, streamID string) *responsesWebsocketBridgeWriter {
 	return &responsesWebsocketBridgeWriter{
 		conn:               conn,
 		streamID:           strings.TrimSpace(streamID),
@@ -432,8 +362,14 @@ func (w *responsesWebsocketBridgeWriter) Write(data []byte) (int, error) {
 			return 0, err
 		}
 		eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
-		w.collectOutputItem(eventType, payload)
-		if eventType == "response.completed" || eventType == "response.done" {
+		if err := w.collectOutputItem(eventType, payload); err != nil {
+			return 0, err
+		}
+		if eventType == "response.failed" || eventType == "error" {
+			w.terminal = true
+		}
+		if eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete" {
+			w.terminal = true
 			w.completed = true
 			output := gjson.GetBytes(payload, "response.output")
 			if output.Exists() && output.IsArray() && len(output.Array()) > 0 {
@@ -455,8 +391,8 @@ func (w *responsesWebsocketBridgeWriter) Write(data []byte) (int, error) {
 
 func addResponsesWebsocketStreamID(payload []byte, streamID string) ([]byte, error) {
 	streamID = strings.TrimSpace(streamID)
-	if streamID == "" || strings.TrimSpace(gjson.GetBytes(payload, "stream_id").String()) != "" {
-		return payload, nil
+	if streamID == "" {
+		return sjson.DeleteBytes(payload, "stream_id")
 	}
 	normalized, err := sjson.SetBytes(payload, "stream_id", streamID)
 	if err != nil {
@@ -474,21 +410,30 @@ func (w *responsesWebsocketBridgeWriter) SetWriteDeadline(deadline time.Time) er
 	return w.conn.SetWriteDeadline(deadline)
 }
 
-func (w *responsesWebsocketBridgeWriter) collectOutputItem(eventType string, payload []byte) {
+func (w *responsesWebsocketBridgeWriter) collectOutputItem(eventType string, payload []byte) error {
 	if eventType != "response.output_item.done" {
-		return
+		return nil
 	}
 	item := gjson.GetBytes(payload, "item")
 	if !item.Exists() || !item.IsObject() {
-		return
+		return nil
 	}
-	itemBytes := bytes.Clone([]byte(item.Raw))
 	index := gjson.GetBytes(payload, "output_index")
+	added := len(item.Raw)
+	if index.Exists() {
+		added -= len(w.outputItemsByIndex[index.Int()])
+	}
+	if int64(w.outputBytes+added) > maxProxyBodyBytes("/v1/responses") {
+		return errors.New("websocket response output exceeds body limit")
+	}
+	w.outputBytes += added
+	itemBytes := bytes.Clone([]byte(item.Raw))
 	if index.Exists() {
 		w.outputItemsByIndex[index.Int()] = itemBytes
-		return
+	} else {
+		w.outputItemsUnindexed = append(w.outputItemsUnindexed, itemBytes)
 	}
-	w.outputItemsUnindexed = append(w.outputItemsUnindexed, itemBytes)
+	return nil
 }
 
 func (w *responsesWebsocketBridgeWriter) collectedOutput() []byte {
@@ -571,18 +516,4 @@ func sseEventData(rawEvent []byte) []byte {
 		dataLines = append(dataLines, data)
 	}
 	return bytes.Join(dataLines, []byte("\n"))
-}
-
-func writeResponsesWebsocketError(conn *websocket.Conn, code string, message string) error {
-	if err := conn.SetWriteDeadline(time.Now().Add(responsesWebsocketWriteTimeout)); err != nil {
-		return err
-	}
-	return conn.WriteJSON(gin.H{
-		"type": "error",
-		"error": gin.H{
-			"type":    "invalid_request_error",
-			"code":    code,
-			"message": message,
-		},
-	})
 }

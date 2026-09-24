@@ -40,7 +40,6 @@ func (s *Server) forwardAttempt(
 	// [FIX] 2026-01: 使用传入的 requestPath（可能已替换模型名）而非 reqCtx.requestPath
 	upstreamProtocol := protocol.Protocol(cfg.ResolveUpstreamProtocol(string(reqCtx.clientProtocol)))
 	reqCtx.upstreamProtocol = upstreamProtocol
-	bodyToSend = applyCodexToOpenAICapabilities(cfg, reqCtx.clientProtocol, upstreamProtocol, requestPath, bodyToSend)
 	bodyToSend = prepareCodexResponsesBodyForUpstream(cfg, upstreamProtocol, requestPath, bodyToSend)
 	plan, err := protocol.BuildTransformPlan(
 		reqCtx.clientProtocol,
@@ -173,6 +172,11 @@ func (s *Server) forwardAttempt(
 		}
 		if errors.Is(err, ErrChannelRPMExceeded) || errors.Is(err, ErrChannelConcurrencyExceeded) {
 			return nil, cooldown.ActionRetryChannel, err
+		}
+		if errors.Is(err, protocol.ErrUnsupportedRequestShape) {
+			// Conversion support is channel-specific; another channel may accept
+			// this request natively. Skip its keys and URLs without cooling them.
+			return &proxyResult{status: http.StatusBadRequest, body: []byte(err.Error()), channelID: &cfg.ID, nextAction: cooldown.ActionSkipChannel}, cooldown.ActionSkipChannel, nil
 		}
 		result, action := s.handleNetworkError(
 			ctx, cfg, keyIndex, actualModel, selectedKey,

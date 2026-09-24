@@ -392,10 +392,12 @@ func (b *responsesWSBody) Read(p []byte) (int, error) {
 		return 0, fmt.Errorf("%w: invalid upstream event", errResponsesWSOutcomeUnknown)
 	}
 	eventType := gjson.GetBytes(payload, "type").String()
-	b.output.collectOutputItem(eventType, payload)
+	if err := b.output.collectOutputItem(eventType, payload); err != nil {
+		return 0, err
+	}
 	switch eventType {
-	case "response.completed", "response.done":
-		if status := gjson.GetBytes(payload, "response.status").String(); status != "" && status != "completed" {
+	case "response.completed", "response.done", "response.incomplete":
+		if status := gjson.GetBytes(payload, "response.status").String(); status != "" && status != "completed" && status != "incomplete" {
 			b.unsafeTerminal = true
 			b.terminal.Store(true)
 			b.upstream.close()
@@ -409,7 +411,7 @@ func (b *responsesWSBody) Read(p []byte) (int, error) {
 		}
 		b.upstream.lastUsed = time.Now()
 		b.terminal.Store(true)
-	case "error", "response.failed", "response.incomplete":
+	case "error", "response.failed":
 		b.unsafeTerminal = b.observedResponse || eventType != "error"
 		b.terminal.Store(true)
 		b.upstream.close()

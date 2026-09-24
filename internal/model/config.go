@@ -15,22 +15,41 @@ const (
 	// ProtocolTransformModeLocal keeps extra exposed protocols on the existing local-translation path.
 	ProtocolTransformModeLocal = "local"
 	// ProtocolTransformModeUpstream forwards extra exposed protocols to upstream natively.
-	ProtocolTransformModeUpstream     = "upstream"
-	ProtocolCapabilityFunctionTools   = "function_tools"
+	ProtocolTransformModeUpstream = "upstream"
+	// ProtocolCapabilityFunctionTools and related constants identify routing capabilities.
+	ProtocolCapabilityFunctionTools = "function_tools"
+	// ProtocolCapabilityHostedWebSearch identifies a configurable protocol feature.
 	ProtocolCapabilityHostedWebSearch = "hosted_web_search"
-	ProtocolCapabilityToolSearch      = "tool_search"
-	ProtocolCapabilityReasoning       = "reasoning"
-	ProtocolCapabilityPromptCache     = "prompt_cache"
+	// ProtocolCapabilityToolSearch identifies a configurable protocol feature.
+	ProtocolCapabilityToolSearch = "tool_search"
+	// ProtocolCapabilityReasoning identifies a configurable protocol feature.
+	ProtocolCapabilityReasoning = "reasoning"
+	// ProtocolCapabilityPromptCache identifies a configurable protocol feature.
+	ProtocolCapabilityPromptCache = "prompt_cache"
+	// ProtocolCapabilityStructuredOutputs identifies a configurable protocol feature.
+	ProtocolCapabilityStructuredOutputs = "structured_outputs"
+	// ProtocolCapabilityImages identifies a configurable protocol feature.
+	ProtocolCapabilityImages = "images"
+	// ProtocolCapabilityFiles identifies a configurable protocol feature.
+	ProtocolCapabilityFiles = "files"
 	// ExactUpstreamURLMarker marks a configured channel URL as the exact upstream request URL.
 	ExactUpstreamURLMarker = "#"
 )
 
+// ProtocolCapabilityDeveloperRole opts into preserving developer messages at the upstream boundary.
+const ProtocolCapabilityDeveloperRole = "developer_role"
+
+// CodexToOpenAICapabilities lists configurable local Responses-to-Chat features.
 var CodexToOpenAICapabilities = []string{
+	ProtocolCapabilityDeveloperRole,
 	ProtocolCapabilityFunctionTools,
 	ProtocolCapabilityHostedWebSearch,
 	ProtocolCapabilityToolSearch,
 	ProtocolCapabilityReasoning,
 	ProtocolCapabilityPromptCache,
+	ProtocolCapabilityStructuredOutputs,
+	ProtocolCapabilityImages,
+	ProtocolCapabilityFiles,
 }
 
 // HasExactUpstreamURLMarker reports whether raw ends with the exact upstream URL marker.

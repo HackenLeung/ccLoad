@@ -4,23 +4,37 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"ccLoad/internal/protocol"
 
 	"github.com/bytedance/sonic"
+	"github.com/google/uuid"
 )
 
 type pendingToolCall struct {
-	id        string
-	name      string
-	arguments string
+	id          string
+	name        string
+	arguments   string
+	outputIndex int
+	sent        int
+	started     bool
 }
 
 type openAIToCodexStreamState struct {
-	model      string
-	toolRoutes map[string]codexOpenAIToolRoute
-	usage      struct {
+	created      int64
+	sequence     int
+	started      bool
+	serviceTier  any
+	model        string
+	responseID   string
+	finishReason string
+	finished     bool
+	output       map[int]map[string]any
+	toolRoutes   map[string]codexOpenAIToolRoute
+	usage        struct {
 		promptTokens             int64
 		completionTokens         int64
 		totalTokens              int64
@@ -29,6 +43,11 @@ type openAIToCodexStreamState struct {
 		reasoningTokens          int64
 		seen                     bool
 	}
+	reasoningStarted   bool
+	reasoningIndex     int
+	refusal            string
+	refusalIndex       int
+	refusalStarted     bool
 	reasoningText      string
 	reasoningEncrypted string
 	textValue          string
@@ -39,8 +58,12 @@ type openAIToCodexStreamState struct {
 }
 
 type codexToOpenAIStreamState struct {
-	model string
-	usage struct {
+	model         string
+	responseID    string
+	finished      bool
+	tools         map[string]*responsesChatToolState
+	reasoningSent map[string]bool
+	usage         struct {
 		inputTokens              int64
 		outputTokens             int64
 		totalTokens              int64
@@ -63,7 +86,11 @@ func convertOpenAIRequestToCodex(model string, rawJSON []byte, stream bool) ([]b
 	if err != nil {
 		return nil, err
 	}
-	return encodeCodexRequest(model, conv, stream)
+	encoded, err := encodeCodexRequest(model, conv, stream)
+	if err != nil {
+		return nil, err
+	}
+	return preserveOpenAIResponseRequestFields(rawJSON, encoded, true, stream)
 }
 
 func convertCodexRequestToOpenAI(model string, rawJSON []byte, stream bool) ([]byte, error) {
@@ -76,15 +103,10 @@ func convertCodexRequestToOpenAI(model string, rawJSON []byte, stream bool) ([]b
 		return nil, err
 	}
 	encoded, err := encodeOpenAIRequest(model, conv, stream)
-	if err != nil || req.PromptCacheKey == "" {
-		return encoded, err
-	}
-	var payload map[string]any
-	if err := sonic.Unmarshal(encoded, &payload); err != nil {
+	if err != nil {
 		return nil, err
 	}
-	payload["prompt_cache_key"] = req.PromptCacheKey
-	return marshalStableJSON(payload)
+	return preserveOpenAIResponseRequestFields(rawJSON, encoded, false, stream)
 }
 
 func convertOpenAIResponseToCodexNonStream(_ context.Context, model string, rawReq, _ []byte, rawJSON []byte) ([]byte, error) {
@@ -97,12 +119,18 @@ func convertOpenAIResponseToCodexNonStream(_ context.Context, model string, rawR
 		return nil, err
 	}
 	out := map[string]any{
-		"id":     "resp-proxy",
+		"id":     "resp_" + uuid.NewString(),
 		"object": "response",
 		"status": "completed",
 		"model":  coalesceModel(model, resp["model"]),
 		"output": output,
 	}
+	choices, _ := resp["choices"].([]any)
+	if len(choices) > 0 {
+		choice, _ := choices[0].(map[string]any)
+		setResponsesCompletionStatus(out, stringValue(choice["finish_reason"]))
+	}
+	copyServiceTier(resp, out)
 	if usage := openAIUsageFromMap(resp["usage"]); usage != nil {
 		out["usage"] = codexUsagePayload(&codexUsage{
 			inputTokens:              usage.promptTokens,
@@ -132,10 +160,16 @@ func convertCodexResponseToOpenAINonStream(_ context.Context, model string, rawR
 	} else if rawToolCalls, ok := message["tool_calls"].([]any); ok && len(rawToolCalls) > 0 {
 		finishReason = "tool_calls"
 	}
+	if reason := responsesFinishReason(resp); reason != "" {
+		finishReason = reason
+	}
+	if stringValue(resp["status"]) == "failed" || resp["error"] != nil {
+		return sonic.Marshal(map[string]any{"error": resp["error"]})
+	}
 	out := map[string]any{
-		"id":      "chatcmpl-proxy",
+		"id":      "chatcmpl_" + uuid.NewString(),
 		"object":  "chat.completion",
-		"created": 0,
+		"created": time.Now().Unix(),
 		"model":   coalesceModel(model, resp["model"]),
 		"choices": []map[string]any{{
 			"index":         0,
@@ -143,6 +177,7 @@ func convertCodexResponseToOpenAINonStream(_ context.Context, model string, rawR
 			"finish_reason": finishReason,
 		}},
 	}
+	copyServiceTier(resp, out)
 	if usage := codexUsageFromMap(resp["usage"]); usage != nil {
 		out["usage"] = openAIUsagePayload(&openAIUsage{
 			promptTokens:             usage.inputTokens,
@@ -156,15 +191,18 @@ func convertCodexResponseToOpenAINonStream(_ context.Context, model string, rawR
 	return sonic.Marshal(out)
 }
 
-func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq, _ []byte, rawJSON []byte, param *any) ([][]byte, error) {
+func convertOpenAIResponseToCodexStreamEvent(_ context.Context, model string, rawReq, _ []byte, rawJSON []byte, param *any) ([][]byte, error) {
 	if param == nil {
 		var local any
 		param = &local
 	}
 	if *param == nil {
-		*param = &openAIToCodexStreamState{model: model, toolRoutes: codexOpenAIToolRoutes(rawReq)}
+		*param = &openAIToCodexStreamState{model: model, responseID: "resp_" + uuid.NewString(), created: time.Now().Unix(), output: make(map[int]map[string]any), toolRoutes: codexOpenAIToolRoutes(rawReq)}
 	}
 	st := (*param).(*openAIToCodexStreamState)
+	if st.finished {
+		return nil, nil
+	}
 	if st.model == "" {
 		st.model = model
 	}
@@ -186,27 +224,32 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 			return nil, err
 		}
 		chunks = append(chunks, textChunks...)
-		// 按 index 顺序发出所有累积的 function_call 事件
-		for idx := 0; ; idx++ {
-			tc, ok := st.toolCalls[idx]
-			if !ok {
-				break
-			}
+		indices := make([]int, 0, len(st.toolCalls))
+		for idx := range st.toolCalls {
+			indices = append(indices, idx)
+		}
+		sort.Ints(indices)
+		for _, idx := range indices {
+			tc := st.toolCalls[idx]
 			toolItem := codexToolCallItemFromOpenAI(tc.id, tc.name, tc.arguments, st.toolRoute(tc.name))
-			item := map[string]any{
-				"type":         "response.output_item.done",
-				"output_index": st.nextOutputIndex,
-				"item":         toolItem,
+			toolItem["id"] = st.toolItemID(tc)
+			toolItem["status"] = "completed"
+			if tc.started {
+				done, err := appendCodexSSEEvent(nil, "response.function_call_arguments.done", map[string]any{"type": "response.function_call_arguments.done", "item_id": st.toolItemID(tc), "output_index": tc.outputIndex, "arguments": tc.arguments})
+				if err != nil {
+					return nil, err
+				}
+				chunks = append(chunks, done)
 			}
-			st.nextOutputIndex++
-			body, err := sonic.Marshal(item)
+			st.output[tc.outputIndex] = toolItem
+			body, err := appendCodexSSEEvent(nil, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": tc.outputIndex, "item": toolItem})
 			if err != nil {
 				return nil, err
 			}
-			chunks = append(chunks, append([]byte("event: response.output_item.done\ndata: "), append(body, []byte("\n\n")...)...))
+			chunks = append(chunks, body)
 		}
 		response := map[string]any{
-			"id":     "resp-proxy",
+			"id":     st.responseID,
 			"object": "response",
 			"status": "completed",
 			"model":  st.model,
@@ -221,12 +264,32 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 				reasoningTokens:          st.usage.reasoningTokens,
 			})
 		}
-		done := map[string]any{"type": "response.completed", "response": response}
+		if st.refusalStarted {
+			events, err := st.refusalEvents("", true)
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, events...)
+		}
+		output := make([]map[string]any, 0, len(st.output))
+		for i := 0; i < st.nextOutputIndex; i++ {
+			if item := st.output[i]; item != nil {
+				output = append(output, item)
+			}
+		}
+		response["output"] = output
+		response["created_at"] = st.created
+		if st.serviceTier != nil {
+			response["service_tier"] = st.serviceTier
+		}
+		eventName := setResponsesCompletionStatus(response, st.finishReason)
+		st.finished = true
+		done := map[string]any{"type": eventName, "response": response}
 		body, err := sonic.Marshal(done)
 		if err != nil {
 			return nil, err
 		}
-		completed := append([]byte("event: response.completed\ndata: "), append(body, []byte("\n\n")...)...)
+		completed := append([]byte("event: "+eventName+"\ndata: "), append(body, []byte("\n\n")...)...)
 		chunks = append(chunks, completed)
 		return chunks, nil
 	}
@@ -238,8 +301,16 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 	if eventName := stringValue(chunk["type"]); isCodexResponseEventType(eventName) {
 		return [][]byte{marshalRawCodexEvent(eventName, line)}, nil
 	}
-	if chunkModel := stringValue(chunk["model"]); chunkModel != "" {
+	if failure := chunk["error"]; failure != nil {
+		st.finished = true
+		body, err := appendCodexSSEEvent(nil, "response.failed", map[string]any{"type": "response.failed", "response": map[string]any{"id": st.responseID, "status": "failed", "error": failure, "output": []any{}}})
+		return [][]byte{body}, err
+	}
+	if chunkModel := stringValue(chunk["model"]); st.model == "" && chunkModel != "" {
 		st.model = chunkModel
+	}
+	if tier, ok := chunk["service_tier"]; ok {
+		st.serviceTier = tier
 	}
 	if usage := openAIUsageFromMap(chunk["usage"]); usage != nil {
 		st.usage.promptTokens = usage.promptTokens
@@ -255,17 +326,30 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 		return nil, nil
 	}
 	choice, _ := choices[0].(map[string]any)
+	if reason := stringValue(choice["finish_reason"]); reason != "" {
+		st.finishReason = reason
+	}
+	var chunks [][]byte
 	delta, _ := choice["delta"].(map[string]any)
 	content := stringValue(delta["content"])
+	if refusal := stringValue(delta["refusal"]); refusal != "" {
+		events, err := st.refusalEvents(refusal, false)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, events...)
+	}
 	if reasoning := stringValue(delta["reasoning_content"]); reasoning != "" {
-		st.reasoningText += reasoning
-		return nil, nil
+		reasoningChunks, err := st.reasoningDelta(reasoning)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, reasoningChunks...)
 	}
 	if reasoning, _ := delta["reasoning"].(map[string]any); reasoning != nil {
 		if encrypted := stringValue(reasoning["encrypted_content"]); encrypted != "" {
 			st.reasoningEncrypted = encrypted
 		}
-		return nil, nil
 	}
 	// 累积增量 tool_calls（按 index 合并 id/name/arguments）
 	if rawCalls, ok := delta["tool_calls"].([]any); ok && len(rawCalls) > 0 {
@@ -279,7 +363,8 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 			}
 			idx := int(int64Value(tc["index"]))
 			if _, exists := st.toolCalls[idx]; !exists {
-				st.toolCalls[idx] = &pendingToolCall{}
+				st.toolCalls[idx] = &pendingToolCall{outputIndex: st.nextOutputIndex}
+				st.nextOutputIndex++
 			}
 			p := st.toolCalls[idx]
 			if id := stringValue(tc["id"]); id != "" {
@@ -293,16 +378,21 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 					p.arguments += args
 				}
 			}
+			toolChunks, err := st.toolDeltas(p)
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, toolChunks...)
 		}
-		return nil, nil
 	}
 	if content == "" {
-		return nil, nil
+		return chunks, nil
 	}
-	chunks, err := finishOpenAICodexReasoning(st)
+	reasoningChunks, err := finishOpenAICodexReasoning(st)
 	if err != nil {
 		return nil, err
 	}
+	chunks = append(chunks, reasoningChunks...)
 	st.textValue += content
 	if !st.textStarted {
 		st.textStarted = true
@@ -310,10 +400,10 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 		st.nextOutputIndex++
 		added := map[string]any{
 			"type": "response.output_item.added", "output_index": st.textOutputIndex,
-			"item": map[string]any{"id": "msg-proxy", "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}},
+			"item": map[string]any{"id": st.responseID + "_msg", "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}},
 		}
 		partAdded := map[string]any{
-			"type": "response.content_part.added", "item_id": "msg-proxy", "output_index": st.textOutputIndex, "content_index": 0,
+			"type": "response.content_part.added", "item_id": st.responseID + "_msg", "output_index": st.textOutputIndex, "content_index": 0,
 			"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
 		}
 		var err error
@@ -329,7 +419,7 @@ func convertOpenAIResponseToCodexStream(_ context.Context, model string, rawReq,
 		chunks = append(chunks, chunk)
 	}
 	outputDelta := map[string]any{
-		"type": "response.output_text.delta", "item_id": "msg-proxy", "output_index": st.textOutputIndex, "content_index": 0, "delta": content,
+		"type": "response.output_text.delta", "item_id": st.responseID + "_msg", "output_index": st.textOutputIndex, "content_index": 0, "delta": content,
 	}
 	deltaChunk, err := appendCodexSSEEvent(nil, "response.output_text.delta", outputDelta)
 	if err != nil {
@@ -350,20 +440,21 @@ func finishOpenAICodexText(st *openAIToCodexStreamState) ([][]byte, error) {
 		return nil, nil
 	}
 	textDone := map[string]any{
-		"type": "response.output_text.done", "item_id": "msg-proxy", "output_index": st.textOutputIndex, "content_index": 0, "text": value,
+		"type": "response.output_text.done", "item_id": st.responseID + "_msg", "output_index": st.textOutputIndex, "content_index": 0, "text": value,
 	}
 	part := map[string]any{"type": "output_text", "text": value, "annotations": []any{}}
 	partDone := map[string]any{
-		"type": "response.content_part.done", "item_id": "msg-proxy", "output_index": st.textOutputIndex, "content_index": 0, "part": part,
+		"type": "response.content_part.done", "item_id": st.responseID + "_msg", "output_index": st.textOutputIndex, "content_index": 0, "part": part,
 	}
 	itemDone := map[string]any{
 		"type":         "response.output_item.done",
 		"output_index": st.textOutputIndex,
 		"item": map[string]any{
-			"id": "msg-proxy", "type": "message", "role": "assistant", "status": "completed",
+			"id": st.responseID + "_msg", "type": "message", "role": "assistant", "status": "completed",
 			"content": []map[string]any{part},
 		},
 	}
+	st.output[st.textOutputIndex] = itemDone["item"].(map[string]any)
 	textDoneChunk, err := appendCodexSSEEvent(nil, "response.output_text.done", textDone)
 	if err != nil {
 		return nil, err
@@ -387,21 +478,17 @@ func finishOpenAICodexReasoning(st *openAIToCodexStreamState) ([][]byte, error) 
 	encrypted := st.reasoningEncrypted
 	st.reasoningText = ""
 	st.reasoningEncrypted = ""
-	outputIndex := st.nextOutputIndex
-	st.nextOutputIndex++
-	itemID := fmt.Sprintf("rs-proxy-%d", outputIndex)
-
-	addedItem := codexReasoningItem("", encrypted)
-	addedItem["id"] = itemID
-	addedItem["status"] = "in_progress"
-	addedItem["summary"] = []map[string]any{}
-	added, err := appendCodexSSEEvent(nil, "response.output_item.added", map[string]any{
-		"type": "response.output_item.added", "output_index": outputIndex, "item": addedItem,
-	})
-	if err != nil {
-		return nil, err
+	var chunks [][]byte
+	if !st.reasoningStarted {
+		started, err := st.reasoningDelta("")
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, started...)
 	}
-	chunks := [][]byte{added}
+	outputIndex := st.reasoningIndex
+	itemID := fmt.Sprintf("%s_rs_%d", st.responseID, outputIndex)
+	st.reasoningStarted = false
 	summary := make([]map[string]any, 0, 1)
 	if text != "" {
 		part := map[string]any{"type": "summary_text", "text": text}
@@ -410,8 +497,6 @@ func finishOpenAICodexReasoning(st *openAIToCodexStreamState) ([][]byte, error) 
 			name    string
 			payload map[string]any
 		}{
-			{"response.reasoning_summary_part.added", map[string]any{"type": "response.reasoning_summary_part.added", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": ""}}},
-			{"response.reasoning_summary_text.delta", map[string]any{"type": "response.reasoning_summary_text.delta", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "delta": text}},
 			{"response.reasoning_summary_text.done", map[string]any{"type": "response.reasoning_summary_text.done", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "text": text}},
 			{"response.reasoning_summary_part.done", map[string]any{"type": "response.reasoning_summary_part.done", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "part": part}},
 		} {
@@ -426,6 +511,7 @@ func finishOpenAICodexReasoning(st *openAIToCodexStreamState) ([][]byte, error) 
 	doneItem["id"] = itemID
 	doneItem["status"] = "completed"
 	doneItem["summary"] = summary
+	st.output[outputIndex] = doneItem
 	done, err := appendCodexSSEEvent(nil, "response.output_item.done", map[string]any{
 		"type": "response.output_item.done", "output_index": outputIndex, "item": doneItem,
 	})
@@ -451,9 +537,12 @@ func convertCodexResponseToOpenAIStream(_ context.Context, model string, rawReq,
 		param = &local
 	}
 	if *param == nil {
-		*param = &codexToOpenAIStreamState{model: model}
+		*param = &codexToOpenAIStreamState{model: model, responseID: "chatcmpl_" + uuid.NewString(), tools: make(map[string]*responsesChatToolState), reasoningSent: make(map[string]bool)}
 	}
 	st := (*param).(*codexToOpenAIStreamState)
+	if st.finished {
+		return nil, nil
+	}
 	if st.model == "" {
 		st.model = model
 	}
@@ -471,8 +560,14 @@ func convertCodexResponseToOpenAIStream(_ context.Context, model string, rawReq,
 	if err := sonic.Unmarshal([]byte(line), &payload); err != nil {
 		return nil, err
 	}
+	if typ := stringValue(payload["type"]); typ != "" {
+		eventType = typ
+	}
+	if chunks, handled, err := st.convertIncrementalEvent(eventType, payload, rawReq, translatedReq); handled || err != nil {
+		return chunks, err
+	}
 	if response, ok := payload["response"].(map[string]any); ok {
-		if responseModel := stringValue(response["model"]); responseModel != "" {
+		if responseModel := stringValue(response["model"]); st.model == "" && responseModel != "" {
 			st.model = responseModel
 		}
 		if usage := codexUsageFromMap(response["usage"]); usage != nil {
@@ -485,15 +580,20 @@ func convertCodexResponseToOpenAIStream(_ context.Context, model string, rawReq,
 			st.usage.seen = true
 		}
 	}
-	if eventType == "response.completed" || stringValue(payload["type"]) == "response.completed" {
+	if eventType == "response.completed" || eventType == "response.incomplete" {
+		st.finished = true
 		finishReason := "stop"
 		if st.sawToolCall {
 			finishReason = "tool_calls"
 		}
+		response, _ := payload["response"].(map[string]any)
+		if reason := responsesFinishReason(response); reason != "" {
+			finishReason = reason
+		}
 		chunk := map[string]any{
-			"id":      "chatcmpl-proxy",
+			"id":      st.responseID,
 			"object":  "chat.completion.chunk",
-			"created": 0,
+			"created": time.Now().Unix(),
 			"model":   st.model,
 			"choices": []map[string]any{{
 				"index":         0,
@@ -526,9 +626,9 @@ func convertCodexResponseToOpenAIStream(_ context.Context, model string, rawReq,
 			return nil, nil
 		}
 		chunk := map[string]any{
-			"id":      "chatcmpl-proxy",
+			"id":      st.responseID,
 			"object":  "chat.completion.chunk",
-			"created": 0,
+			"created": time.Now().Unix(),
 			"model":   st.model,
 			"choices": []map[string]any{{
 				"index": 0,
@@ -545,55 +645,15 @@ func convertCodexResponseToOpenAIStream(_ context.Context, model string, rawReq,
 		item, _ := payload["item"].(map[string]any)
 		itemType := stringValue(item["type"])
 		switch {
-		case itemType == "function_call":
-			// Codex function_call -> OpenAI tool_calls chunk
-			call, err := decodeCodexToolCall(item)
-			if err != nil {
-				return nil, err
-			}
-			call.Name = st.restoreToolName(rawReq, translatedReq, call.Name)
-			// arguments 可能是 string 或 object，统一序列化为字符串
-			argsStr := "{}"
-			if len(call.Arguments) > 0 {
-				argsStr = string(call.Arguments)
-			}
-			chunk := map[string]any{
-				"id":      "chatcmpl-proxy",
-				"object":  "chat.completion.chunk",
-				"created": 0,
-				"model":   st.model,
-				"choices": []map[string]any{{
-					"index": 0,
-					"delta": map[string]any{
-						"tool_calls": []map[string]any{{
-							"index": st.toolCallIndex,
-							"id":    call.ID,
-							"type":  "function",
-							"function": map[string]any{
-								"name":      call.Name,
-								"arguments": argsStr,
-							},
-						}},
-					},
-					"finish_reason": nil,
-				}},
-			}
-			body, err := sonic.Marshal(chunk)
-			if err != nil {
-				return nil, err
-			}
-			st.sawToolCall = true
-			st.toolCallIndex++
-			return [][]byte{append([]byte("data: "), append(body, []byte("\n\n")...)...)}, nil
 		case normalizeRole(itemType) == "reasoning":
 			text := extractCodexReasoningText(item)
 			if text == "" {
 				return nil, nil
 			}
 			chunk := map[string]any{
-				"id":      "chatcmpl-proxy",
+				"id":      st.responseID,
 				"object":  "chat.completion.chunk",
-				"created": 0,
+				"created": time.Now().Unix(),
 				"model":   st.model,
 				"choices": []map[string]any{{
 					"index": 0,
@@ -654,6 +714,9 @@ func codexOutputItemsFromOpenAIResponse(resp map[string]any, toolRoutes map[stri
 		if item != nil {
 			textContent = append(textContent, item)
 		}
+	}
+	if refusal := stringValue(message["refusal"]); refusal != "" {
+		textContent = append(textContent, map[string]any{"type": "refusal", "refusal": refusal})
 	}
 	if len(textContent) > 0 {
 		items = append(items, map[string]any{"type": "message", "role": "assistant", "content": textContent})
@@ -784,6 +847,7 @@ func openAIMessageFromCodexOutput(output any, restore func(string) string) (map[
 	contentParts := make([]map[string]any, 0)
 	toolCalls := make([]map[string]any, 0)
 	reasoning := make([]map[string]any, 0)
+	var refusalBuilder strings.Builder
 	var reasoningBuilder strings.Builder
 	for i, item := range items {
 		itemMap, ok := item.(map[string]any)
@@ -793,7 +857,20 @@ func openAIMessageFromCodexOutput(output any, restore func(string) string) (map[
 		typ := normalizeRole(stringValue(itemMap["type"]))
 		switch typ {
 		case "message":
-			parts, err := extractCodexContentParts(itemMap["content"])
+			content := itemMap["content"]
+			if rawParts, ok := content.([]any); ok {
+				filtered := make([]any, 0, len(rawParts))
+				for _, rawPart := range rawParts {
+					part, _ := rawPart.(map[string]any)
+					if stringValue(part["type"]) == "refusal" {
+						refusalBuilder.WriteString(stringValue(part["refusal"]))
+						continue
+					}
+					filtered = append(filtered, rawPart)
+				}
+				content = filtered
+			}
+			parts, err := extractCodexContentParts(content)
 			if err != nil {
 				return nil, err
 			}
@@ -833,6 +910,9 @@ func openAIMessageFromCodexOutput(output any, restore func(string) string) (map[
 	message := map[string]any{
 		"role":    "assistant",
 		"content": encodeOpenAIContentValue(contentParts),
+	}
+	if refusalBuilder.Len() > 0 {
+		message["refusal"] = refusalBuilder.String()
 	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
@@ -893,19 +973,18 @@ func codexReasoningItemsFromOpenAIMessage(message map[string]any) []map[string]a
 }
 
 func extractCodexReasoningText(item map[string]any) string {
-	for _, key := range []string{"content", "summary"} {
+	for _, key := range []string{"summary", "content"} {
+		var text strings.Builder
 		parts, _ := item[key].([]any)
-		for _, rawPart := range parts {
-			part, ok := rawPart.(map[string]any)
-			if !ok {
-				continue
-			}
+		for _, raw := range parts {
+			part, _ := raw.(map[string]any)
 			switch normalizeRole(stringValue(part["type"])) {
 			case "reasoning_text", "summary_text":
-				if text := stringValue(part["text"]); text != "" {
-					return text
-				}
+				text.WriteString(stringValue(part["text"]))
 			}
+		}
+		if text.Len() > 0 {
+			return text.String()
 		}
 	}
 	return ""
@@ -931,9 +1010,7 @@ func openAIUsageFromMap(value any) *openAIUsage {
 	if usage.totalTokens == 0 {
 		usage.totalTokens = usage.promptTokens + usage.completionTokens
 	}
-	if usage.promptTokens == 0 && usage.completionTokens == 0 && usage.totalTokens == 0 && usage.cachedTokens == 0 && usage.cacheCreationInputTokens == 0 && usage.reasoningTokens == 0 {
-		return nil
-	}
+
 	return usage
 }
 
@@ -963,9 +1040,7 @@ func codexUsageFromMap(value any) *codexUsage {
 	if usage.totalTokens == 0 {
 		usage.totalTokens = usage.inputTokens + usage.outputTokens
 	}
-	if usage.inputTokens == 0 && usage.outputTokens == 0 && usage.totalTokens == 0 && usage.cachedTokens == 0 && usage.cacheCreationInputTokens == 0 && usage.reasoningTokens == 0 {
-		return nil
-	}
+
 	return usage
 }
 

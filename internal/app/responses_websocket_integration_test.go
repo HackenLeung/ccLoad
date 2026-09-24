@@ -67,6 +67,47 @@ func readResponsesFixtureEvent(t *testing.T, conn *websocket.Conn, want string) 
 	}
 }
 
+func TestResponsesWSNamedAndDefaultLanesAreIsolated(t *testing.T) {
+	requests := make(chan []byte, 8)
+	var sequence atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_%d\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}]}}\n\n", sequence.Add(1))
+	}))
+	defer upstream.Close()
+	srv := newInMemoryServer(t)
+	srv.client = upstream.Client()
+	addResponsesFixtureChannel(t, srv, "http", upstream.URL, model.ResponsesTransportHTTP, 1)
+	conn := connectResponsesFixture(t, srv)
+	send := func(payload string) ([]byte, []byte) {
+		t.Helper()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+		event := readResponsesFixtureEvent(t, conn, "response.completed")
+		return event, <-requests
+	}
+	a, _ := send(`{"type":"response.create","model":"test","stream_id":"a","input":[{"role":"user","content":"A"}]}`)
+	_, body := send(`{"type":"response.create","model":"test","stream_id":"b","input":[{"role":"user","content":"B"}]}`)
+	if strings.Contains(string(body), `"A"`) {
+		t.Fatalf("A leaked into B: %s", body)
+	}
+	defaultEvent, body := send(`{"type":"response.create","model":"test","input":[{"role":"user","content":"default"}]}`)
+	if gjson.GetBytes(defaultEvent, "stream_id").Exists() || len(gjson.GetBytes(body, "input").Array()) != 1 {
+		t.Fatalf("default lane inherited named state: %s %s", defaultEvent, body)
+	}
+	_, body = send(fmt.Sprintf(`{"type":"response.create","stream_id":"fork","previous_response_id":%q,"input":[{"role":"user","content":"child"}]}`, gjson.GetBytes(a, "response.id").String()))
+	if !strings.Contains(string(body), `"A"`) || strings.Contains(string(body), `"B"`) {
+		t.Fatalf("wrong fork context: %s", body)
+	}
+	_, body = send(fmt.Sprintf(`{"type":"response.create","stream_id":"a","previous_response_id":%q,"input":[{"role":"user","content":"parent"}]}`, gjson.GetBytes(a, "response.id").String()))
+	if strings.Contains(string(body), `"child"`) {
+		t.Fatalf("fork mutated parent: %s", body)
+	}
+}
+
 func TestResponsesWSEndToEndFailoverAndWarmup(t *testing.T) {
 	var unavailable atomic.Int32
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { unavailable.Add(1); w.WriteHeader(426) }))
@@ -277,5 +318,144 @@ func TestResponsesWSUncertainExecutionDoesNotFailOver(t *testing.T) {
 				t.Fatal("uncertain session remained usable")
 			}
 		})
+	}
+}
+
+// The first handler cannot finish until the other lane has reached the upstream.
+// A serial implementation times out, even if it labels responses with stream_id.
+func TestResponsesWSConcurrentLanes(t *testing.T) {
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		arrived <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_%s\",\"status\":\"completed\",\"output\":[]}}\n\n", gjson.GetBytes(body, "input.0.content").String())
+	}))
+	defer upstream.Close()
+	srv := newInMemoryServer(t)
+	srv.client = upstream.Client()
+	addResponsesFixtureChannel(t, srv, "parallel", upstream.URL, model.ResponsesTransportHTTP, 1)
+	conn := connectResponsesFixture(t, srv)
+	defer func() { _ = conn.Close() }()
+	defer close(release)
+	for _, id := range []string{"a", "b"} {
+		if err := conn.WriteJSON(map[string]any{"type": "response.create", "model": "test", "stream_id": id, "input": id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		select {
+		case <-arrived:
+		case <-time.After(5 * time.Second):
+			t.Fatal("lanes did not execute concurrently")
+		}
+	}
+}
+
+func TestResponsesWSInstructionsDoNotLeakIntoContinuation(t *testing.T) {
+	session := newResponsesWebsocketSession()
+	session.commit([]byte(`{"model":"test","instructions":"old instruction","input":[]}`), responsesWebsocketTurnResult{completedResponseID: "r1", completedOutput: []byte("[]")})
+	body, err := session.normalizeRequest([]byte(`{"type":"response.create","previous_response_id":"r1","input":"next"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gjson.GetBytes(body, "instructions").Exists() {
+		t.Fatalf("inherited instructions: %s", body)
+	}
+	if gjson.GetBytes(body, "input.0.content").String() != "next" {
+		t.Fatalf("string input lost: %s", body)
+	}
+}
+
+func TestResponsesWSCancelIsolationAndFIFO(t *testing.T) {
+	arrived := make(chan string, 4)
+	cancelled := make(chan struct{}, 1)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		label := gjson.GetBytes(body, "input.0.content").String()
+		arrived <- label
+		if label == "cancel" {
+			<-r.Context().Done()
+			cancelled <- struct{}{}
+			return
+		}
+		if label == "first" {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"%s\",\"status\":\"completed\",\"output\":[]}}\n\n", label)
+	}))
+	defer upstream.Close()
+	srv := newInMemoryServer(t)
+	srv.client = upstream.Client()
+	addResponsesFixtureChannel(t, srv, "cancel-isolation", upstream.URL, model.ResponsesTransportHTTP, 1)
+	conn := connectResponsesFixture(t, srv)
+	defer func() { _ = conn.Close() }()
+	send := func(id, label string) {
+		t.Helper()
+		if err := conn.WriteJSON(map[string]any{"type": "response.create", "model": "test", "stream_id": id, "input": label}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send("a", "cancel")
+	send("b", "first")
+	for range 2 {
+		select {
+		case <-arrived:
+		case <-time.After(5 * time.Second):
+			t.Fatal("missing concurrent request")
+		}
+	}
+	send("b", "second")
+	if err := conn.WriteJSON(map[string]any{"type": "response.cancel", "stream_id": "a"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancel was not propagated")
+	}
+	select {
+	case label := <-arrived:
+		t.Fatalf("same lane overtook active request: %s", label)
+	default:
+	}
+	close(release)
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var completed []string
+	for len(completed) < 2 {
+		_, event, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		typ := gjson.GetBytes(event, "type").String()
+		if typ == "error" {
+			if gjson.GetBytes(event, "stream_id").String() != "a" {
+				t.Fatalf("cancel affected another lane: %s", event)
+			}
+			continue
+		}
+		if typ == "response.completed" {
+			if gjson.GetBytes(event, "stream_id").String() != "b" {
+				t.Fatalf("wrong lane: %s", event)
+			}
+			completed = append(completed, gjson.GetBytes(event, "response.id").String())
+		}
+	}
+	if strings.Join(completed, ",") != "first,second" {
+		t.Fatalf("FIFO violated: %v", completed)
 	}
 }

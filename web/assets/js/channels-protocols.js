@@ -2,11 +2,15 @@
   const ALL_PROTOCOLS = Object.freeze(['anthropic', 'codex', 'openai', 'gemini']);
   const PROTOCOL_TRANSFORM_MODES = Object.freeze(['upstream', 'local']);
   const CODEX_TO_OPENAI_CAPABILITIES = Object.freeze([
+    'developer_role',
     'function_tools',
     'hosted_web_search',
     'tool_search',
     'reasoning',
-    'prompt_cache'
+    'prompt_cache',
+    'structured_outputs',
+    'images',
+    'files'
   ]);
   const SUPPORTED_TRANSFORMS_BY_CHANNEL_TYPE = Object.freeze(
     Object.fromEntries(
@@ -58,7 +62,7 @@
     const raw = rawCapabilities && rawCapabilities.codex;
     return Object.fromEntries(CODEX_TO_OPENAI_CAPABILITIES.map((capability) => [
       capability,
-      !raw || typeof raw[capability] !== 'boolean' ? true : raw[capability]
+      !raw || typeof raw[capability] !== 'boolean' ? capability !== 'developer_role' : raw[capability]
     ]));
   }
 

@@ -120,7 +120,7 @@ func (s *Server) buildProxyRequest(
 	body = normalizeAnyrouterAdaptiveThinking(cfg, requestPath, body)
 
 	// 1.55 messages[].role=developer 降级为 system（多数上游 role 枚举不含 developer）
-	body = normalizeDeveloperMessageRole(requestPath, body)
+	body = normalizeChannelDeveloperRole(cfg, requestPath, body)
 
 	// 1.6 自定义请求体规则（仅对 JSON body 生效）
 	body = applyBodyRules(hdr.Get("Content-Type"), body, cfg.BodyRules())
@@ -461,7 +461,8 @@ func translatedStreamChunkCompletes(clientProtocol protocol.Protocol, chunk []by
 	case protocol.Anthropic:
 		return eventType == "message_stop" || ssePayloadType(data) == "message_stop"
 	case protocol.Codex:
-		return eventType == "response.completed" || ssePayloadType(data) == "response.completed"
+		typ := ssePayloadType(data)
+		return eventType == "response.completed" || typ == "response.completed" || eventType == "response.incomplete" || typ == "response.incomplete" || eventType == "response.failed" || typ == "response.failed"
 	case protocol.OpenAI:
 		if bytes.Equal(data, sseDoneMarker) {
 			return true
@@ -1436,7 +1437,7 @@ func (s *Server) forwardOnceAsync(ctx context.Context, cfg *model.Config, apiKey
 	if s.protocolRegistry != nil && plan.NeedsTransform {
 		translatedBody, err := s.protocolRegistry.TranslateRequest(plan.ClientProtocol, plan.UpstreamProtocol, plan.RequestModel(), plan.TranslatedBody, plan.Streaming)
 		if err != nil {
-			return nil, 0, fmt.Errorf("translate request for channel %d: %w", cfg.ID, err)
+			return nil, 0, fmt.Errorf("%w: translate request for channel %d: %v", protocol.ErrUnsupportedRequestShape, cfg.ID, err)
 		}
 		plan.TranslatedBody = translatedBody
 		switch plan.UpstreamProtocol {

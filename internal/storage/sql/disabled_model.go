@@ -13,6 +13,7 @@ func disabledModelKey(modelName string) string {
 	return strings.ToLower(strings.TrimSpace(modelName))
 }
 
+// ListGlobalDisabledModels manages the global disabled-model registry.
 func (s *SQLStore) ListGlobalDisabledModels(ctx context.Context) ([]model.GlobalDisabledModel, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT model, note, created_at FROM global_disabled_models ORDER BY created_at ASC, model ASC`)
 	if err != nil {
@@ -34,6 +35,7 @@ func (s *SQLStore) ListGlobalDisabledModels(ctx context.Context) ([]model.Global
 	return result, nil
 }
 
+// UpsertGlobalDisabledModel manages the global disabled-model registry.
 func (s *SQLStore) UpsertGlobalDisabledModel(ctx context.Context, entry model.GlobalDisabledModel) error {
 	entry.Model = strings.TrimSpace(entry.Model)
 	entry.Note = strings.TrimSpace(entry.Note)
@@ -60,6 +62,7 @@ func (s *SQLStore) UpsertGlobalDisabledModel(ctx context.Context, entry model.Gl
 	return nil
 }
 
+// DeleteGlobalDisabledModel manages the global disabled-model registry.
 func (s *SQLStore) DeleteGlobalDisabledModel(ctx context.Context, modelName string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM global_disabled_models WHERE model_key = ?`, disabledModelKey(modelName)); err != nil {
 		return fmt.Errorf("delete global_disabled_models: %w", err)

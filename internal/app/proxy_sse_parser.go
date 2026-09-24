@@ -515,6 +515,28 @@ func (p *sseUsageParser) parseEvent(eventType, data string) error {
 		return nil // 不解析usage，避免误判
 	}
 
+	if (eventType == "" || eventType == "response.failed") && ssePayloadType([]byte(data)) == "response.failed" {
+		var failed struct {
+			Response struct {
+				Error json.RawMessage `json:"error"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(data), &failed); err != nil {
+			return err
+		}
+		failure := failed.Response.Error
+		if len(failure) == 0 || string(failure) == "null" {
+			failure = json.RawMessage(`{"type":"server_error","message":"upstream response failed"}`)
+		}
+		body, err := json.Marshal(map[string]any{"type": "error", "error": failure})
+		if err != nil {
+			return err
+		}
+		p.lastError = body
+		p.streamComplete = true
+		return nil
+	}
+
 	if isHeartbeatEvent(eventType, data) {
 		return nil
 	}
@@ -540,7 +562,7 @@ func (p *sseUsageParser) parseEvent(eventType, data string) error {
 	// Anthropic 终止事件：部分上游只在 data JSON 的 type 字段给 message_stop，
 	// 不发同名 event 行，仅比对 eventType 会漏判流结束。
 	isAnthropicTerminal := payloadType == "message_stop" || (payloadType == "" && eventType == "message_stop")
-	if isAnthropicTerminal || (eventType == "response.completed" && payloadType == "response.completed") {
+	if isAnthropicTerminal || ((payloadType == "response.completed" || payloadType == "response.incomplete") && (eventType == "" || eventType == payloadType)) {
 		p.streamComplete = true
 	}
 

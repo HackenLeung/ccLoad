@@ -152,6 +152,9 @@ func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, 
 			if tool.Description != "" {
 				item["function"].(map[string]any)["description"] = tool.Description
 			}
+			if tool.Strict != nil {
+				item["function"].(map[string]any)["strict"] = *tool.Strict
+			}
 			if toolType == "custom" {
 				item["function"].(map[string]any)["parameters"] = openAICustomToolInputSchema()
 			} else if anySchema, err := rawJSONToAny(tool.InputSchema); err == nil && anySchema != nil {
@@ -231,16 +234,8 @@ func encodeOpenAIRequest(model string, conv conversation, stream bool) ([]byte, 
 	return marshalStableJSON(payload)
 }
 
-// openAIWireRole 把内部会话角色映射成 chat/completions 线上角色。
-// developer 是 OpenAI 官方 o1+ 的新写法，但多数 OpenAI 兼容上游的 role 枚举只有
-// system/user/assistant/tool，见到 developer 会直接 400 反序列化失败。
-// system 语义等价且 OpenAI 自身仍完全接受，故统一降级为 system。
-func openAIWireRole(role string) string {
-	if role == "developer" {
-		return "system"
-	}
-	return role
-}
+// Preserve instruction authority; compatibility must not silently merge roles.
+func openAIWireRole(role string) string { return role }
 
 // normalizeOpenAIEffort 把 OpenAI reasoning_effort 枚举收敛到 Codex 接受的档位。
 // minimal 归入 low，auto 归入 medium；xhigh 与 max 是两个独立档位，各自原样保留。

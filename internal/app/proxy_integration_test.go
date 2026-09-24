@@ -3080,6 +3080,15 @@ func TestProxy_CodexToOpenAIHostedWebSearchUsesChannelCapability(t *testing.T) {
 				}},
 				"tools": []map[string]any{{"type": "web_search", "search_context_size": "medium"}},
 			}, nil)
+			if !tt.enabled {
+				if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "unsupported_capability") {
+					t.Fatalf("expected capability rejection, got %d: %s", w.Code, w.Body.String())
+				}
+				if len(gotBody) != 0 {
+					t.Fatal("unsupported request reached upstream")
+				}
+				return
+			}
 			if w.Code != http.StatusOK {
 				t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 			}

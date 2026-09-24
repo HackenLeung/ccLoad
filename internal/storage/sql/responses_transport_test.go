@@ -1,9 +1,10 @@
 package sql_test
 
 import (
-	"ccLoad/internal/model"
 	"context"
 	"testing"
+
+	"ccLoad/internal/model"
 )
 
 func TestConfigResponsesTransportRoundTrip(t *testing.T) {

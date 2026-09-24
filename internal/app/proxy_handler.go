@@ -419,7 +419,7 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 	// Both share requireNativeGPT for candidate filtering + multi-channel retry.
 	requireNativeGPT := shouldRouteToNativeGPT(requestMethod, effectiveRequestPath, originalModel, all)
 
-	cands, rejection, err := s.resolveProxyCandidates(ctx, c, originalModel, clientProtocol, tokenHashStr, requireNativeGPT)
+	cands, rejection, err := s.resolveProxyCandidates(ctx, c, originalModel, clientProtocol, tokenHashStr, requireNativeGPT, all)
 	if err != nil {
 		if errors.Is(err, errUnknownChannelType) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "unsupported path"})
@@ -490,7 +490,7 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 		}
 		budgetLeft -= time.Since(waitStart)
 
-		nextCands, _, err := s.resolveProxyCandidates(ctx, c, originalModel, clientProtocol, tokenHashStr, requireNativeGPT)
+		nextCands, _, err := s.resolveProxyCandidates(ctx, c, originalModel, clientProtocol, tokenHashStr, requireNativeGPT, all)
 		if err != nil || len(nextCands) == 0 {
 			break
 		}
@@ -505,10 +505,11 @@ func (s *Server) HandleProxyRequest(c *gin.Context) {
 type candidateRejection int
 
 const (
-	candidateRejectionNone          candidateRejection = iota // 候选非空，无需拒绝
-	candidateRejectionNoUpstream                              // 503：无可用上游（全冷却或没有匹配渠道）
-	candidateRejectionDisabledModel                           // 403：匹配到的上游模型全被全局禁用
-	candidateRejectionTokenChannel                            // 403：令牌不允许访问任何匹配渠道
+	candidateRejectionNone candidateRejection = iota // 候选非空，无需拒绝
+	candidateRejectionCapabilities
+	candidateRejectionNoUpstream    // 503：无可用上游（全冷却或没有匹配渠道）
+	candidateRejectionDisabledModel // 403：匹配到的上游模型全被全局禁用
+	candidateRejectionTokenChannel  // 403：令牌不允许访问任何匹配渠道
 )
 
 // resolveProxyCandidates 选路并逐层过滤候选渠道。
@@ -520,6 +521,7 @@ func (s *Server) resolveProxyCandidates(
 	clientProtocol protocol.Protocol,
 	tokenHash string,
 	requireNativeGPT bool,
+	body []byte,
 ) ([]*model.Config, candidateRejection, error) {
 	cands, err := s.selectRouteCandidates(ctx, c, originalModel, string(clientProtocol))
 	if err != nil {
@@ -551,6 +553,10 @@ func (s *Server) resolveProxyCandidates(
 		}
 	}
 
+	cands = filterProtocolCapabilityCandidates(cands, clientProtocol, body)
+	if len(cands) == 0 {
+		return nil, candidateRejectionCapabilities, nil
+	}
 	return cands, candidateRejectionNone, nil
 }
 
@@ -564,6 +570,8 @@ func (s *Server) writeCandidateRejection(
 	thinkingEffort string,
 ) {
 	switch rejection {
+	case candidateRejectionCapabilities:
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "no matching channel supports the requested protocol capabilities; use a native channel or replay full context", "type": "unsupported_capability", "code": "unsupported_capability"}})
 	case candidateRejectionDisabledModel:
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
 			"message": "all matching upstream models are globally disabled",

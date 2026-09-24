@@ -19,11 +19,12 @@ test('Codex to OpenAI capability panel is limited to local OpenAI transforms', (
   assert.equal(config.shouldShowCodexToOpenAICapabilities('codex', ['openai'], 'local'), false);
 });
 
-test('missing capability config defaults every capability to enabled', () => {
+test('missing capability config keeps legacy developer role normalization', () => {
   const config = loadProtocolConfig();
   const values = config.normalizeCodexToOpenAICapabilities(null);
   assert.equal(Object.keys(values).join(','), config.CODEX_TO_OPENAI_CAPABILITIES.join(','));
-  assert.equal(Object.values(values).every(Boolean), true);
+  assert.equal(values.developer_role, false);
+  assert.equal(Object.entries(values).filter(([key]) => key !== 'developer_role').every(([, value]) => value), true);
 });
 
 test('explicit capability values override defaults independently', () => {

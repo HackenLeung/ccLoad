@@ -114,6 +114,7 @@ func (s *Server) listCachedGlobalDisabledModels() []model.GlobalDisabledModel {
 	return entries
 }
 
+// HandleGlobalDisabledModels manages the global disabled-model registry.
 func (s *Server) HandleGlobalDisabledModels(c *gin.Context) {
 	store, err := s.disabledModelStore()
 	if err != nil {
@@ -159,6 +160,7 @@ func (s *Server) HandleGlobalDisabledModels(c *gin.Context) {
 	}
 }
 
+// HandleDeleteGlobalDisabledModel manages the global disabled-model registry.
 func (s *Server) HandleDeleteGlobalDisabledModel(c *gin.Context) {
 	modelName, err := normalizeGlobalDisabledModelName(c.Query("model"))
 	if err != nil {

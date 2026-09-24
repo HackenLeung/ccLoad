@@ -563,7 +563,7 @@ func familyUsesMessagesArray(family protocol.RequestFamily) bool {
 // 但绝大多数 OpenAI 兼容上游（以及 Anthropic 兼容中转）的 role 枚举只有
 // system/user/assistant/tool，收到 developer 会在反序列化阶段直接 400，
 // 且这类失败对整条请求是致命的（换 Key、换渠道都救不回来）。
-// 两者语义等价、OpenAI 自身也仍接受 system，故在发出前统一降级。
+// 这是兼容性降级，可能合并指令层级；支持 developer 的渠道可显式保留角色。
 //
 // 只处理带 messages 数组的 chat/completions 与 messages 族；Codex /v1/responses
 // 的 input[] 里 developer 是合法角色，不能碰。
@@ -1300,4 +1300,12 @@ func formatModelDisplayName(modelID string) string {
 		}
 	}
 	return strings.Join(words, " ")
+}
+
+// normalizeChannelDeveloperRole keeps legacy channels compatible unless explicitly opted in.
+func normalizeChannelDeveloperRole(cfg *model.Config, requestPath string, body []byte) []byte {
+	if cfg != nil && protocol.DetectRequestFamily(requestPath) == protocol.DetectRequestFamily("/v1/chat/completions") && cfg.ProtocolCapabilities["codex"][model.ProtocolCapabilityDeveloperRole] {
+		return body
+	}
+	return normalizeDeveloperMessageRole(requestPath, body)
 }

@@ -66,6 +66,7 @@ type conversationMedia struct {
 }
 
 type conversationTool struct {
+	Strict      *bool
 	Type        string
 	Name        string
 	Namespace   string

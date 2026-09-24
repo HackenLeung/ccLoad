@@ -700,7 +700,7 @@ func TestConvertCodexRequestToOpenAI_FieldsPreserved(t *testing.T) {
 	}
 	body := string(out)
 	for _, want := range []string{
-		`"temperature":0.5`, `"top_p":0.8`, `"max_tokens":512`,
+		`"temperature":0.5`, `"top_p":0.8`, `"max_completion_tokens":512`,
 		`"stop":["DONE"]`, `"user":"u1"`,
 		`"reasoning_effort":"medium"`, `"parallel_tool_calls":false`,
 		`"prompt_cache_key":"cache-key-1"`,
@@ -711,24 +711,17 @@ func TestConvertCodexRequestToOpenAI_FieldsPreserved(t *testing.T) {
 	}
 }
 
-// 覆盖 encodeOpenAIRequest：developer 角色降级为 system。
-// 多数 OpenAI 兼容上游的 role 枚举只有 system/user/assistant/tool，
-// 原样发出 developer 会在反序列化阶段 400。
-func TestEncodeOpenAIRequest_DeveloperRoleDowngradedToSystem(t *testing.T) {
+func TestEncodeOpenAIRequest_DeveloperRolePreserved(t *testing.T) {
 	conv := conversation{Turns: []conversationTurn{
-		{Role: "developer", Parts: []conversationPart{{Kind: partKindText, Text: "be brief"}}},
-		{Role: "user", Parts: []conversationPart{{Kind: partKindText, Text: "hi"}}},
+		{Role: "system", Parts: []conversationPart{{Kind: partKindText, Text: "system instruction"}}},
+		{Role: "developer", Parts: []conversationPart{{Kind: partKindText, Text: "developer instruction"}}},
 	}}
-	raw, err := encodeOpenAIRequest("gpt-x", conv, false)
+	raw, err := encodeOpenAIRequest("test", conv, false)
 	if err != nil {
-		t.Fatalf("encodeOpenAIRequest failed: %v", err)
+		t.Fatal(err)
 	}
-	body := string(raw)
-	if strings.Contains(body, `"role":"developer"`) {
-		t.Fatalf("developer role should be rewritten: %s", body)
-	}
-	if !strings.Contains(body, `"role":"system"`) {
-		t.Fatalf("expected system role in output: %s", body)
+	if !strings.Contains(string(raw), `"role":"developer"`) || !strings.Contains(string(raw), `"role":"system"`) {
+		t.Fatalf("roles collapsed: %s", raw)
 	}
 }
 

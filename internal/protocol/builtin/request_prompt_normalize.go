@@ -361,7 +361,11 @@ func parseFunctionTools(raw json.RawMessage, source string) ([]conversationTool,
 				if schemaErr != nil {
 					return nil, schemaErr
 				}
-				tools = append(tools, conversationTool{Type: "function", Name: name, Namespace: namespace, Description: stringValue(child["description"]), InputSchema: schema})
+				strict, strictErr := functionToolStrict(child, source)
+				if strictErr != nil {
+					return nil, strictErr
+				}
+				tools = append(tools, conversationTool{Type: "function", Name: name, Namespace: namespace, Description: stringValue(child["description"]), InputSchema: schema, Strict: strict})
 			}
 			continue
 		}
@@ -423,7 +427,12 @@ func parseFunctionTools(raw json.RawMessage, source string) ([]conversationTool,
 		if err != nil {
 			return nil, err
 		}
+		strict, strictErr := functionToolStrict(fn, source)
+		if strictErr != nil {
+			return nil, strictErr
+		}
 		tools = append(tools, conversationTool{
+			Strict:      strict,
 			Type:        "function",
 			Name:        name,
 			Description: stringValue(fn["description"]),

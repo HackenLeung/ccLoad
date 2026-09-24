@@ -32,6 +32,9 @@ func encodeCodexRequest(model string, conv conversation, stream bool) ([]byte, e
 		for _, tool := range conv.Tools {
 			if tool.toolType() == "function" {
 				item := map[string]any{"type": "function", "name": toolAliases.shorten(tool.Name)}
+				if tool.Strict != nil {
+					item["strict"] = *tool.Strict
+				}
 				if tool.Description != "" {
 					item["description"] = tool.Description
 				}
@@ -201,9 +204,12 @@ func applyCodexSampling(out *codexRequestPayload, sp *samplingParams) {
 // 未触发返回 nil，避免给非 reasoning 模型硬塞导致上游 400。
 func buildCodexReasoningConfig(conv conversation) map[string]any {
 	if conv.Sampling != nil {
-		if effort := strings.ToLower(strings.TrimSpace(conv.Sampling.ReasoningEffort)); effort != "" && effort != "none" {
+		if effort := strings.ToLower(strings.TrimSpace(conv.Sampling.ReasoningEffort)); effort != "" {
+			if effort == "none" {
+				return map[string]any{"effort": "none"}
+			}
 			return map[string]any{
-				"effort":  normalizeOpenAIEffort(effort),
+				"effort":  effort,
 				"summary": "auto",
 			}
 		}

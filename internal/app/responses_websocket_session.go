@@ -34,9 +34,11 @@ func (s *responsesWebsocketSession) normalizeRequest(payload []byte) ([]byte, er
 	if s.outcomeUnknown.Load() {
 		return nil, errResponsesWSOutcomeUnknown
 	}
-	if streamID := strings.TrimSpace(gjson.GetBytes(payload, "stream_id").String()); streamID != "" {
-		s.streamID = streamID
+	streamID, err := validateResponsesStreamID(payload)
+	if err != nil {
+		return nil, err
 	}
+	s.streamID = streamID
 	requestType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 	if requestType != responsesWebsocketRequestCreate && requestType != responsesWebsocketRequestAppend {
 		return nil, fmt.Errorf("unsupported websocket request type %q", requestType)
@@ -51,6 +53,12 @@ func (s *responsesWebsocketSession) normalizeRequest(payload []byte) ([]byte, er
 		return normalizeInitialResponsesWebsocketRequest(payload)
 	}
 
+	if input := gjson.GetBytes(payload, "input"); input.Type == gjson.String {
+		payload, err = sjson.SetBytes(payload, "input", []map[string]string{{"role": "user", "content": input.String()}})
+		if err != nil {
+			return nil, err
+		}
+	}
 	nextInput := gjson.GetBytes(payload, "input")
 	if !nextInput.Exists() || !nextInput.IsArray() {
 		return nil, errors.New("websocket request requires array field: input")
@@ -157,7 +165,7 @@ func normalizeReplacementResponsesWebsocketRequest(payload []byte, lastRequest [
 		return nil, err
 	}
 	for key, value := range previous {
-		if key == "input" || key == "previous_response_id" || key == "type" || key == "stream_id" || key == "generate" {
+		if key == "input" || key == "previous_response_id" || key == "type" || key == "stream_id" || key == "generate" || key == "instructions" {
 			continue
 		}
 		if _, exists := current[key]; !exists {
@@ -179,12 +187,6 @@ func normalizeReplacementResponsesWebsocketRequest(payload []byte, lastRequest [
 		modelName := strings.TrimSpace(gjson.GetBytes(lastRequest, "model").String())
 		if modelName != "" {
 			normalized, _ = sjson.SetBytes(normalized, "model", modelName)
-		}
-	}
-	if !gjson.GetBytes(normalized, "instructions").Exists() {
-		instructions := gjson.GetBytes(lastRequest, "instructions")
-		if instructions.Exists() {
-			normalized, _ = sjson.SetRawBytes(normalized, "instructions", []byte(instructions.Raw))
 		}
 	}
 	normalized, err = sjson.SetBytes(normalized, "stream", true)
@@ -262,4 +264,32 @@ func enforceResponsesWebsocketTranscriptLimit(payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("websocket transcript exceeds %d byte limit; compact and replay the conversation", maxBytes)
 	}
 	return payload, nil
+}
+
+// validateResponsesStreamID keeps the default lane distinct from named lanes.
+func validateResponsesStreamID(payload []byte) (string, error) {
+	value := gjson.GetBytes(payload, "stream_id")
+	if !value.Exists() {
+		return "", nil
+	}
+	if value.Type != gjson.String || len(value.Str) == 0 || len(value.Str) > 256 {
+		return "", errors.New("stream_id must contain 1-256 letters, digits, underscores, hyphens or periods")
+	}
+	for _, ch := range value.Str {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.' {
+			continue
+		}
+		return "", errors.New("invalid stream_id character")
+	}
+	return value.Str, nil
+}
+
+// fork copies client-visible context; an upstream connection is never shared.
+func (s *responsesWebsocketSession) fork() *responsesWebsocketSession {
+	return &responsesWebsocketSession{
+		lastRequest:        bytes.Clone(s.lastRequest),
+		lastResponseOutput: bytes.Clone(s.lastResponseOutput),
+		lastResponseID:     s.lastResponseID,
+		pendingToolCallIDs: append([]string(nil), s.pendingToolCallIDs...),
+	}
 }

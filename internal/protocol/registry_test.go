@@ -456,7 +456,7 @@ func TestRegistry_TranslateResponseStream_OpenAIToCodex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TranslateResponseStream failed: %v", err)
 	}
-	if len(chunks) != 3 || !strings.Contains(string(bytes.Join(chunks, nil)), "event: response.output_item.added") || !strings.Contains(string(bytes.Join(chunks, nil)), "event: response.output_text.delta") || !strings.Contains(string(bytes.Join(chunks, nil)), `"delta":"hello"`) {
+	if len(chunks) != 4 || !strings.Contains(string(bytes.Join(chunks, nil)), "event: response.output_item.added") || !strings.Contains(string(bytes.Join(chunks, nil)), "event: response.output_text.delta") || !strings.Contains(string(bytes.Join(chunks, nil)), `"delta":"hello"`) {
 		t.Fatalf("unexpected codex stream chunk: %#v", chunks)
 	}
 

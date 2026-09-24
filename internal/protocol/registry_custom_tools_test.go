@@ -324,7 +324,7 @@ func TestRegistry_TranslateResponseStream_OpenAIReasoningPrecedesTextWithDistinc
 	if reasoningAdded < 0 || reasoningDelta < reasoningAdded || reasoningDone < reasoningDelta || textAdded < reasoningDone {
 		t.Fatalf("reasoning lifecycle must complete before text starts:\n%s", result)
 	}
-	for _, want := range []string{`"id":"rs-proxy-0"`, `"output_index":0`, `"output_index":1`, `event: response.reasoning_summary_text.done`, `"delta":"answer"`, `event: response.completed`} {
+	for _, want := range []string{`_rs_0"`, `"output_index":0`, `"output_index":1`, `event: response.reasoning_summary_text.done`, `"delta":"answer"`, `event: response.completed`} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("stream output missing %s:\n%s", want, result)
 		}

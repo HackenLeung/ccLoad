@@ -221,11 +221,15 @@ function getSelectedProtocolTransformMode() {
 
 function protocolCapabilityLabel(capability) {
   const labels = {
+    developer_role: 'channels.protocolCapabilityDeveloperRole',
     function_tools: 'channels.protocolCapabilityFunctionTools',
     hosted_web_search: 'channels.protocolCapabilityHostedWebSearch',
     tool_search: 'channels.protocolCapabilityToolSearch',
     reasoning: 'channels.protocolCapabilityReasoning',
-    prompt_cache: 'channels.protocolCapabilityPromptCache'
+    prompt_cache: 'channels.protocolCapabilityPromptCache',
+    structured_outputs: 'channels.protocolCapabilityStructuredOutputs',
+    images: 'channels.protocolCapabilityImages',
+    files: 'channels.protocolCapabilityFiles'
   };
   const key = labels[capability] || capability;
   return window.t ? window.t(key) : key;
