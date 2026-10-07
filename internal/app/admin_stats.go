@@ -344,10 +344,15 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 		}
 	}
 
+	rangeTokens, rangeTokensByType := summarizeTokens(stats, channelTypes)
 	todayTokens, todayTokensByType := summarizeTokens(todayStats, channelTypes)
 	cumulativeTokens, cumulativeTokensByType := summarizeTokens(allTimeStats, channelTypes)
 	cumulativeCostsByType := summarizeTypeCosts(allTimeStats, channelTypes)
 	recentTPM, _ := summarizeTokens(recentStats, channelTypes)
+	for channelType, tokens := range rangeTokensByType {
+		ts := ensureTypeSummary(typeStats, channelType)
+		ts.RangeTokens = tokens
+	}
 	for channelType, tokens := range todayTokensByType {
 		ts := ensureTypeSummary(typeStats, channelType)
 		ts.TodayTokens = tokens
@@ -372,6 +377,7 @@ func (s *Server) HandlePublicSummary(c *gin.Context) {
 		"range":                 params.Range,
 		"duration_seconds":      durationSeconds,
 		"rpm_stats":             rpmStats,
+		"range_tokens":          rangeTokens,
 		"today_tokens":          todayTokens,
 		"cumulative_tokens":     cumulativeTokens,
 		"cumulative_updated_at": cumulativeUpdatedAt,
@@ -399,6 +405,7 @@ type TypeSummary struct {
 	CumulativeCost           float64  `json:"cumulative_cost,omitempty"`             // 累计标准成本
 	CumulativeEffectiveCost  *float64 `json:"cumulative_effective_cost,omitempty"`   // 累计倍率后成本
 	TodayTokens              int64    `json:"today_tokens"`
+	RangeTokens              int64    `json:"range_tokens"` // 当前筛选区间，独立于今日和永久累计
 	CumulativeTokens         int64    `json:"cumulative_tokens"`
 }
 

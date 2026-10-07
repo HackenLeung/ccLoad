@@ -7,7 +7,7 @@
       active_models: 0,
       duration_seconds: 1,
       rpm_stats: null,
-      today_tokens: 0,
+      range_tokens: 0,
       cumulative_tokens: 0,
       recent_tpm: 0,
       avg_response_seconds: 0,
@@ -20,6 +20,7 @@
     let indexLoadSequence = 0;
     let indexLoadPending = false;
     let cumulativeRefreshPending = false;
+    const indexMetricSelector = '.index-overview-grid .summary-value, .channel-card .metric-value, .channel-token-value, .cost-value, .token-value, .index-summary-grid .summary-value';
 
     function buildSummaryURL(forceRefresh) {
       const query = typeof window.buildDateRangeQuery === 'function'
@@ -43,10 +44,13 @@
       }
       try {
         window.updateRefreshStatus('index-refresh-status', 'loading');
-        // 添加加载状态
-        document.querySelectorAll('.metric-number').forEach(el => {
-          el.classList.add('animate-pulse');
-        });
+        // 后台轮询只更新状态文字，避免整页数字闪动。
+        if (!background) {
+          document.querySelectorAll(indexMetricSelector).forEach(el => {
+            el.classList.add('animate-pulse');
+          });
+        }
+        document.querySelector('.index-main-content')?.setAttribute('aria-busy', 'true');
 
         const data = await fetchDataWithAuth(buildSummaryURL(forceRefresh));
         if (requestID !== indexLoadSequence) return;
@@ -68,39 +72,56 @@
         if (requestID === indexLoadSequence) {
           indexLoadPending = false;
           // 移除加载状态
-          document.querySelectorAll('.metric-number').forEach(el => {
+          document.querySelectorAll(indexMetricSelector).forEach(el => {
             el.classList.remove('animate-pulse');
           });
+          document.querySelector('.index-main-content')?.setAttribute('aria-busy', 'false');
         }
       }
     }
 
     // 更新统计显示
     function updateStatsDisplay() {
-      const successRate = statsData.total_requests > 0
-        ? ((statsData.success_requests / statsData.total_requests) * 100).toFixed(1)
-        : '0.0';
+      const range = statsData.range || currentTimeRange;
+      const isToday = statsData.is_today === true;
+      const rangeLabel = window.getRangeLabel(range);
+      document.querySelectorAll('[data-index-range-tokens]').forEach(el => {
+        el.textContent = t('index.metrics.rangeTokens', { range: rangeLabel });
+        el.title = range === 'custom' ? (currentCustomTimeRange?.label || rangeLabel) : rangeLabel;
+      });
+      document.getElementById('overview-performance-label').textContent = t(isToday
+        ? 'index.metrics.recentPerformance' : 'index.metrics.averagePerformance');
 
       // 更新总体数字显示（成功/失败合并显示）
-      document.getElementById('success-requests').textContent = formatNumber(statsData.success_requests || 0);
-      document.getElementById('error-requests').textContent = formatNumber(statsData.error_requests || 0);
-      document.getElementById('success-rate').textContent = successRate + '%';
+      displayNumber('success-requests', statsData.success_requests);
+      displayNumber('error-requests', statsData.error_requests);
+      document.getElementById('success-rate').textContent = formatSuccessRate(statsData.success_requests, statsData.total_requests);
 
-      document.getElementById('overview-today-tokens').textContent = formatNumber(statsData.today_tokens || 0);
-      document.getElementById('overview-cumulative-tokens').textContent = formatNumber(statsData.cumulative_tokens || 0);
-      document.getElementById('overview-tpm').textContent = formatNumber(statsData.recent_tpm || 0);
+      displayNumber('overview-range-tokens', statsData.range_tokens);
+      displayNumber('overview-cumulative-tokens', statsData.cumulative_tokens);
+      const averageTPM = (Number(statsData.range_tokens) || 0) * 60 / Math.max(1, Number(statsData.duration_seconds) || 1);
+      displayNumber('overview-tpm', isToday ? statsData.recent_tpm : averageTPM, true);
       document.getElementById('overview-avg-response').textContent = formatResponseTime(statsData.avg_response_seconds);
 
       const rpmStats = statsData.rpm_stats || null;
-      document.getElementById('overview-rpm').textContent = formatNumber(rpmStats ? (rpmStats.recent_rpm || 0) : 0);
+      displayNumber('overview-rpm', isToday ? rpmStats?.recent_rpm : rpmStats?.avg_rpm, true);
 
       // 更新按渠道类型统计
-      if (statsData.by_type) {
-        updateTypeStats('anthropic', statsData.by_type.anthropic);
-        updateTypeStats('codex', statsData.by_type.codex);
-        updateTypeStats('openai', statsData.by_type.openai);
-        updateTypeStats('gemini', statsData.by_type.gemini);
+      for (const type of ['anthropic', 'codex', 'openai', 'gemini']) {
+        updateTypeStats(type, statsData.by_type?.[type]);
       }
+    }
+
+    function displayNumber(id, value, rate = false) {
+      const el = document.getElementById(id);
+      const parsed = Number(value);
+      const number = Number.isFinite(parsed) ? parsed : 0;
+      el.textContent = formatNumber(rate ? Number(number.toFixed(1)) : number);
+      el.title = number.toLocaleString(undefined, { maximumFractionDigits: rate ? 3 : 0 });
+    }
+
+    function formatSuccessRate(success, total) {
+      return total > 0 ? `${((success / total) * 100).toFixed(1)}%` : '--';
     }
 
     function formatResponseTime(seconds) {
@@ -121,17 +142,13 @@
       const successRequests = data ? (data.success_requests || 0) : 0;
       const errorRequests = data ? (data.error_requests || 0) : 0;
 
-      const successRate = totalRequests > 0
-        ? ((successRequests / totalRequests) * 100).toFixed(1)
-        : '0.0';
-
       // 更新基础统计（总请求、成功、失败、成功率）
-      document.getElementById(`type-${type}-requests`).textContent = formatNumber(totalRequests);
-      document.getElementById(`type-${type}-success`).textContent = formatNumber(successRequests);
-      document.getElementById(`type-${type}-error`).textContent = formatNumber(errorRequests);
-      document.getElementById(`type-${type}-rate`).textContent = successRate + '%';
-      document.getElementById(`type-${type}-today-tokens`).textContent = formatNumber(data ? (data.today_tokens || 0) : 0);
-      document.getElementById(`type-${type}-cumulative-tokens`).textContent = formatNumber(data ? (data.cumulative_tokens || 0) : 0);
+      displayNumber(`type-${type}-requests`, totalRequests);
+      displayNumber(`type-${type}-success`, successRequests);
+      displayNumber(`type-${type}-error`, errorRequests);
+      document.getElementById(`type-${type}-rate`).textContent = formatSuccessRate(successRequests, totalRequests);
+      displayNumber(`type-${type}-range-tokens`, data?.range_tokens);
+      displayNumber(`type-${type}-cumulative-tokens`, data?.cumulative_tokens);
 
       // 所有渠道类型的Token和成本统计
       const inputTokens = data ? (data.total_input_tokens || 0) : 0;
@@ -145,8 +162,8 @@
         ? Number(data.cumulative_effective_cost) || 0
         : cumulativeCost;
 
-      document.getElementById(`type-${type}-input`).textContent = formatNumber(inputTokens);
-      document.getElementById(`type-${type}-output`).textContent = formatNumber(outputTokens);
+      displayNumber(`type-${type}-input`, inputTokens);
+      displayNumber(`type-${type}-output`, outputTokens);
       document.getElementById(`type-${type}-cost`).innerHTML = buildCostStackHtml(totalCost, effectiveCost, { tone: 'warning', inline: true });
       document.getElementById(`type-${type}-cumulative-cost`).innerHTML = buildCostStackHtml(cumulativeCost, cumulativeEffectiveCost, { tone: 'warning', inline: true });
 
@@ -154,14 +171,14 @@
       if (type === 'anthropic' || type === 'codex') {
         const cacheReadTokens = data ? (data.total_cache_read_tokens || 0) : 0;
         const cacheCreateTokens = data ? (data.total_cache_creation_tokens || 0) : 0;
-        document.getElementById(`type-${type}-cache-read`).textContent = formatNumber(cacheReadTokens);
-        document.getElementById(`type-${type}-cache-create`).textContent = formatNumber(cacheCreateTokens);
+        displayNumber(`type-${type}-cache-read`, cacheReadTokens);
+        displayNumber(`type-${type}-cache-create`, cacheCreateTokens);
       }
 
       // OpenAI和Gemini类型的缓存统计（仅缓存读）
       if (type === 'openai' || type === 'gemini') {
         const cacheReadTokens = data ? (data.total_cache_read_tokens || 0) : 0;
-        document.getElementById(`type-${type}-cache-read`).textContent = formatNumber(cacheReadTokens);
+        displayNumber(`type-${type}-cache-read`, cacheReadTokens);
       }
     }
 
@@ -188,6 +205,7 @@
       });
 
       document.getElementById('refresh-cumulative')?.addEventListener('click', () => loadStats(true));
+      window.i18n.onLocaleChange(updateStatsDisplay);
       loadStats();
 
       // 自动刷新（system_settings.auto_refresh_interval_seconds，0=禁用）

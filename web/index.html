@@ -66,8 +66,8 @@
                 </svg>
               </div>
               <div class="summary-content">
-                <div class="summary-value" id="overview-today-tokens">--</div>
-                <div class="summary-label" data-i18n="index.metrics.todayTokens">今日 Token</div>
+                <div class="summary-value" id="overview-range-tokens">--</div>
+                <div class="summary-label" data-index-range-tokens>今日 Token</div>
               </div>
             </div>
             <div class="summary-card summary-card-success">
@@ -79,7 +79,7 @@
               </div>
               <div class="summary-content">
                 <div class="summary-value" id="overview-cumulative-tokens">--</div>
-                <div class="summary-label" data-i18n="index.metrics.cumulativeTokens">累计 Token</div>
+                <div class="summary-label" data-i18n="index.metrics.cumulativeTokens" data-i18n-title="index.metrics.cumulativeHint">累计 Token</div>
               </div>
             </div>
             <div class="summary-card summary-card-rate">
@@ -93,7 +93,7 @@
                   <span id="overview-rpm">--</span><small>RPM</small>
                   <span id="overview-tpm">--</span><small>TPM</small>
                 </div>
-                <div class="summary-label" data-i18n="index.metrics.performance">性能指标</div>
+                <div class="summary-label" id="overview-performance-label" data-i18n="index.metrics.recentPerformance">最近一分钟</div>
               </div>
             </div>
             <div class="summary-card summary-card-error">
@@ -127,15 +127,15 @@
                 </div>
                 <div class="channel-header-stats">
                   <div class="channel-header-stat">
-                    <span class="cost-label" data-i18n="index.metrics.todayTokens">今日 Token</span>
-                    <span class="channel-token-value" id="type-anthropic-today-tokens">0</span>
+                    <span class="cost-label" data-index-range-tokens>今日 Token</span>
+                    <span class="channel-token-value" id="type-anthropic-range-tokens">0</span>
                   </div>
                   <div class="channel-header-stat">
                     <span class="cost-label" data-i18n="index.metrics.cumulativeTokens">累计 Token</span>
                     <span class="channel-token-value" id="type-anthropic-cumulative-tokens">0</span>
                   </div>
                   <div class="channel-cost channel-header-stat">
-                    <span class="cost-label" data-i18n="common.cost">成本</span>
+                    <span class="cost-label" data-i18n="index.metrics.rangeCost">区间成本</span>
                     <span class="cost-value" id="type-anthropic-cost">$0.00</span>
                   </div>
                   <div class="channel-cost channel-header-stat">
@@ -159,7 +159,7 @@
                   <div class="metric-label" data-i18n="index.metrics.failed">失败</div>
                 </div>
                 <div class="metric-item">
-                  <div class="metric-value metric-rate" id="type-anthropic-rate">0.0%</div>
+                  <div class="metric-value metric-rate" id="type-anthropic-rate">--</div>
                   <div class="metric-label" data-i18n="index.metrics.successRate">成功率</div>
                 </div>
               </div>
@@ -197,15 +197,15 @@
                 </div>
                 <div class="channel-header-stats">
                   <div class="channel-header-stat">
-                    <span class="cost-label" data-i18n="index.metrics.todayTokens">今日 Token</span>
-                    <span class="channel-token-value" id="type-codex-today-tokens">0</span>
+                    <span class="cost-label" data-index-range-tokens>今日 Token</span>
+                    <span class="channel-token-value" id="type-codex-range-tokens">0</span>
                   </div>
                   <div class="channel-header-stat">
                     <span class="cost-label" data-i18n="index.metrics.cumulativeTokens">累计 Token</span>
                     <span class="channel-token-value" id="type-codex-cumulative-tokens">0</span>
                   </div>
                   <div class="channel-cost channel-header-stat">
-                    <span class="cost-label" data-i18n="common.cost">成本</span>
+                    <span class="cost-label" data-i18n="index.metrics.rangeCost">区间成本</span>
                     <span class="cost-value" id="type-codex-cost">$0.00</span>
                   </div>
                   <div class="channel-cost channel-header-stat">
@@ -229,7 +229,7 @@
                   <div class="metric-label" data-i18n="index.metrics.failed">失败</div>
                 </div>
                 <div class="metric-item">
-                  <div class="metric-value metric-rate" id="type-codex-rate">0.0%</div>
+                  <div class="metric-value metric-rate" id="type-codex-rate">--</div>
                   <div class="metric-label" data-i18n="index.metrics.successRate">成功率</div>
                 </div>
               </div>
@@ -267,15 +267,15 @@
                 </div>
                 <div class="channel-header-stats">
                   <div class="channel-header-stat">
-                    <span class="cost-label" data-i18n="index.metrics.todayTokens">今日 Token</span>
-                    <span class="channel-token-value" id="type-openai-today-tokens">0</span>
+                    <span class="cost-label" data-index-range-tokens>今日 Token</span>
+                    <span class="channel-token-value" id="type-openai-range-tokens">0</span>
                   </div>
                   <div class="channel-header-stat">
                     <span class="cost-label" data-i18n="index.metrics.cumulativeTokens">累计 Token</span>
                     <span class="channel-token-value" id="type-openai-cumulative-tokens">0</span>
                   </div>
                   <div class="channel-cost channel-header-stat">
-                    <span class="cost-label" data-i18n="common.cost">成本</span>
+                    <span class="cost-label" data-i18n="index.metrics.rangeCost">区间成本</span>
                     <span class="cost-value" id="type-openai-cost">$0.00</span>
                   </div>
                   <div class="channel-cost channel-header-stat">
@@ -299,7 +299,7 @@
                   <div class="metric-label" data-i18n="index.metrics.failed">失败</div>
                 </div>
                 <div class="metric-item">
-                  <div class="metric-value metric-rate" id="type-openai-rate">0.0%</div>
+                  <div class="metric-value metric-rate" id="type-openai-rate">--</div>
                   <div class="metric-label" data-i18n="index.metrics.successRate">成功率</div>
                 </div>
               </div>
@@ -333,15 +333,15 @@
                 </div>
                 <div class="channel-header-stats">
                   <div class="channel-header-stat">
-                    <span class="cost-label" data-i18n="index.metrics.todayTokens">今日 Token</span>
-                    <span class="channel-token-value" id="type-gemini-today-tokens">0</span>
+                    <span class="cost-label" data-index-range-tokens>今日 Token</span>
+                    <span class="channel-token-value" id="type-gemini-range-tokens">0</span>
                   </div>
                   <div class="channel-header-stat">
                     <span class="cost-label" data-i18n="index.metrics.cumulativeTokens">累计 Token</span>
                     <span class="channel-token-value" id="type-gemini-cumulative-tokens">0</span>
                   </div>
                   <div class="channel-cost channel-header-stat">
-                    <span class="cost-label" data-i18n="common.cost">成本</span>
+                    <span class="cost-label" data-i18n="index.metrics.rangeCost">区间成本</span>
                     <span class="cost-value" id="type-gemini-cost">$0.00</span>
                   </div>
                   <div class="channel-cost channel-header-stat">
@@ -365,7 +365,7 @@
                   <div class="metric-label" data-i18n="index.metrics.failed">失败</div>
                 </div>
                 <div class="metric-item">
-                  <div class="metric-value metric-rate" id="type-gemini-rate">0.0%</div>
+                  <div class="metric-value metric-rate" id="type-gemini-rate">--</div>
                   <div class="metric-label" data-i18n="index.metrics.successRate">成功率</div>
                 </div>
               </div>

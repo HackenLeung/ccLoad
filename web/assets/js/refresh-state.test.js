@@ -196,6 +196,96 @@ test('homepage date changes reuse cumulative cache; explicit refresh opts out', 
   assert.match(urls[2], /refresh_cumulative=1/);
 });
 
+test('compact numbers promote rounded boundaries and support billions and larger units', () => {
+  const { context } = page('ui.js');
+  const cases = [
+    [0, '0'], [15, '15'], [1000, '1.0K'], [135500000, '135.5M'],
+    [999949, '999.9K'], [999950, '1.0M'], [999949999, '999.9M'],
+    [999950000, '1.0B'], [1000000000, '1.0B'], [1145100000, '1.1B'],
+    [1000000000000, '1.0T'], [1000000000000000, '1.0Q'],
+    [-1000000000, '-1.0B'], ['1000000000', '1.0B'], [NaN, '0'], [Infinity, '0']
+  ];
+  for (const [value, expected] of cases) {
+    assert.equal(context.formatNumber(value), expected, String(value));
+  }
+});
+
+function indexPage(extras = {}) {
+  const ui = page('ui.js');
+  const p = page('index.js', { formatNumber: ui.context.formatNumber, buildCostStackHtml: ui.context.buildCostStackHtml, ...extras });
+  const html = fs.readFileSync(path.join(__dirname, '../../index.html'), 'utf8');
+  for (const [, id] of html.matchAll(/id="([^"]+)"/g)) p.elements.set(id, element());
+  const labels = Array.from({ length: 5 }, () => element());
+  p.context.document.querySelectorAll = selector => selector === '[data-index-range-tokens]' ? labels : [];
+  p.context.t = (key, args = {}) => {
+    const value = p.context.I18N_LOCALES[p.context.locale || 'zh-CN'][key] || key;
+    return value.replace('{range}', args.range || '');
+  };
+  for (const file of ['../locales/zh-CN.js', '../locales/en.js', 'date-range-selector.js']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, file), 'utf8'), p.context);
+  }
+  return { ...p, labels };
+}
+
+test('homepage renders selected-period usage and historical average rates, keeping cumulative totals', () => {
+  const p = indexPage();
+  p.run(`statsData = {
+    range: 'yesterday', is_today: false, duration_seconds: 86400,
+    today_tokens: 999, range_tokens: 14400, cumulative_tokens: 1145100000,
+    recent_tpm: 999, rpm_stats: { recent_rpm: 999, avg_rpm: 0.5 },
+    total_requests: 720, success_requests: 700, error_requests: 20,
+    by_type: { openai: { total_requests: 720, success_requests: 700, error_requests: 20,
+      today_tokens: 999, range_tokens: 14400, cumulative_tokens: 1145100000 } }
+  }; updateStatsDisplay();`);
+  assert.equal(p.elements.get('overview-range-tokens').textContent, '14.4K');
+  assert.equal(p.elements.get('type-openai-range-tokens').textContent, '14.4K');
+  assert.equal(p.elements.get('overview-cumulative-tokens').textContent, '1.1B');
+  assert.equal(p.elements.get('overview-cumulative-tokens').title.replace(/\D/g, ''), '1145100000');
+  assert.equal(p.elements.get('overview-rpm').textContent, '0.5');
+  assert.equal(p.elements.get('overview-tpm').textContent, '10');
+  assert.equal(p.elements.get('overview-performance-label').textContent, '区间平均');
+  assert.ok(p.labels.every(label => label.textContent === '昨日 Token'));
+  assert.equal(p.elements.get('type-gemini-rate').textContent, '--');
+  p.context.locale = 'en';
+  p.run('updateStatsDisplay()');
+  assert.ok(p.labels.every(label => label.textContent === 'Yesterday Tokens'));
+  assert.equal(p.elements.get('overview-performance-label').textContent, 'Period Average');
+});
+
+test('homepage shows recent-minute rates for today and clears cards for an empty response', () => {
+  const p = indexPage();
+  p.run(`statsData = { range: 'today', is_today: true, range_tokens: 100,
+    recent_tpm: 25, rpm_stats: { recent_rpm: 2, avg_rpm: 99 },
+    by_type: { codex: { total_requests: 1, success_requests: 1, range_tokens: 100 } }
+  }; updateStatsDisplay();`);
+  assert.equal(p.elements.get('overview-rpm').textContent, '2');
+  assert.equal(p.elements.get('overview-tpm').textContent, '25');
+  assert.equal(p.elements.get('overview-performance-label').textContent, '最近一分钟');
+  assert.equal(p.elements.get('type-codex-rate').textContent, '100.0%');
+  p.run('statsData = { range: "yesterday", is_today: false }; updateStatsDisplay()');
+  assert.equal(p.elements.get('type-codex-requests').textContent, '0');
+  assert.equal(p.elements.get('type-codex-range-tokens').textContent, '0');
+  assert.equal(p.elements.get('type-codex-rate').textContent, '--');
+  assert.equal(p.elements.get('success-rate').textContent, '--');
+});
+
+test('homepage custom queries preserve exact endpoints and ignore responses from older ranges', async () => {
+  const requests = [];
+  const p = indexPage({
+    fetchDataWithAuth(url) { const d = deferred(); requests.push({ ...d, url }); return d.promise; }
+  });
+  const first = p.run('loadStats()');
+  p.run('currentTimeRange = "custom"; currentCustomTimeRange = { startMs: 1000000, endMs: 2000000, label: "Selected dates" }');
+  const second = p.run('loadStats()');
+  assert.match(requests[1].url, /range=custom&start_time=1000000&end_time=2000000/);
+  requests[1].resolve({ range: 'custom', is_today: false, range_tokens: 200, total_requests: 1, success_requests: 1 });
+  await second;
+  requests[0].resolve({ range: 'today', is_today: true, range_tokens: 999 });
+  await first;
+  assert.equal(p.elements.get('overview-range-tokens').textContent, '200');
+  assert.ok(p.labels.every(label => label.textContent === '自定义 Token' && label.title === 'Selected dates'));
+});
+
 function trendPage() {
   const requests = [];
   const p = page('trend.js', {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -9,6 +10,60 @@ import (
 	"ccLoad/internal/model"
 	"ccLoad/internal/version"
 )
+
+func TestPublicSummary_SelectedRangeTokens(t *testing.T) {
+	server, store, cleanup := setupAdminTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	channel, err := store.CreateConfig(ctx, &model.Config{
+		Name: "range-test", URL: "https://example.com", ChannelType: "openai",
+		ModelEntries: []model.ModelEntry{{Model: "m1"}}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	yesterday := beginningOfDay(now).AddDate(0, 0, -1).Add(12 * time.Hour)
+	logs := []*model.LogEntry{
+		{Time: model.JSONTime{Time: now}, ChannelID: channel.ID, Model: "m1", LogSource: model.LogSourceProxy,
+			StatusCode: 200, InputTokens: 10, OutputTokens: 20, CacheReadInputTokens: 5, CacheCreationInputTokens: 7},
+		{Time: model.JSONTime{Time: yesterday}, ChannelID: channel.ID, Model: "m1", LogSource: model.LogSourceProxy,
+			StatusCode: 200, InputTokens: 100, OutputTokens: 200, CacheReadInputTokens: 30, CacheCreationInputTokens: 40},
+	}
+	if err := store.BatchAddLogs(ctx, logs); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  int64
+	}{
+		{"today", "range=today", 42},
+		{"yesterday", "range=yesterday", 370},
+		{"empty", "range=day_before_yesterday", 0},
+		{"custom", fmt.Sprintf("range=custom&start_time=%d&end_time=%d", yesterday.Add(-time.Minute).UnixMilli(), yesterday.Add(time.Minute).UnixMilli()), 370},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, w := newTestContext(t, newRequest(http.MethodGet, "/public/summary?"+tc.query, nil))
+			server.HandlePublicSummary(c)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d, body=%s", w.Code, w.Body.String())
+			}
+			data := mustParseAPIResponse[struct {
+				RangeTokens      int64                  `json:"range_tokens"`
+				TodayTokens      int64                  `json:"today_tokens"`
+				CumulativeTokens int64                  `json:"cumulative_tokens"`
+				ByType           map[string]TypeSummary `json:"by_type"`
+			}](t, w.Body.Bytes()).Data
+			if data.RangeTokens != tc.want || data.ByType["openai"].RangeTokens != tc.want {
+				t.Fatalf("selected range tokens=%+v, want %d", data, tc.want)
+			}
+			if data.TodayTokens != 42 || data.CumulativeTokens != 412 || data.ByType["openai"].CumulativeTokens != 412 {
+				t.Fatalf("today/cumulative changed with range: %+v", data)
+			}
+		})
+	}
+}
 
 func TestAdminStats_PublicAndCooldownEndpoints(t *testing.T) {
 	server, store, cleanup := setupAdminTestServer(t)

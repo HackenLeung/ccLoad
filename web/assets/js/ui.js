@@ -1558,13 +1558,19 @@ window.WebAuth = window.WebAuth || {
     return `<sup class="cell-multiplier-badge">${text}</sup>`;
   }
 
-  // 格式化数字显示（通用：K/M缩写）
+  // 每千进一位；舍入后达到 1000 时也升级单位，避免出现 1000.0M。
   function formatNumber(num) {
     const n = Number(num);
     if (!Number.isFinite(n)) return '0';
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-    return n.toString();
+    const units = ['', 'K', 'M', 'B', 'T', 'Q'];
+    let value = Math.abs(n);
+    let unit = 0;
+    while (unit < units.length - 1 && (value >= 1000 || (unit > 0 && Number(value.toFixed(1)) >= 1000))) {
+      value /= 1000;
+      unit++;
+    }
+    if (unit === 0) return n.toString();
+    return `${n < 0 ? '-' : ''}${value.toFixed(1)}${units[unit]}`;
   }
 
   // RPM 颜色：低流量绿色，中等橙色，高流量红色

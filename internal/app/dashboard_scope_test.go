@@ -505,6 +505,7 @@ func TestDashboardModelsMetricsAndStatsExposeOnlyScopedChannels(t *testing.T) {
 	summary := mustParseAPIResponse[struct {
 		TotalRequests      int                    `json:"total_requests"`
 		TodayTokens        int64                  `json:"today_tokens"`
+		RangeTokens        int64                  `json:"range_tokens"`
 		CumulativeTokens   int64                  `json:"cumulative_tokens"`
 		RecentTPM          int64                  `json:"recent_tpm"`
 		AvgResponseSeconds float64                `json:"avg_response_seconds"`
@@ -513,13 +514,13 @@ func TestDashboardModelsMetricsAndStatsExposeOnlyScopedChannels(t *testing.T) {
 	if summary.TotalRequests != 2 {
 		t.Fatalf("summary total=%d, want owner total 2", summary.TotalRequests)
 	}
-	if summary.TodayTokens != 112 || summary.CumulativeTokens != 112 || summary.RecentTPM != 112 {
+	if summary.TodayTokens != 112 || summary.RangeTokens != 112 || summary.CumulativeTokens != 112 || summary.RecentTPM != 112 {
 		t.Fatalf("scoped summary tokens=%+v, want 112 without foreign usage", summary)
 	}
 	if summary.AvgResponseSeconds < 0.199 || summary.AvgResponseSeconds > 0.201 {
 		t.Fatalf("scoped avg response=%v, want 0.2", summary.AvgResponseSeconds)
 	}
-	if summary.ByType["openai"].TodayTokens != 33 || summary.ByType["anthropic"].TodayTokens != 79 {
+	if summary.ByType["openai"].RangeTokens != 33 || summary.ByType["anthropic"].RangeTokens != 79 || summary.ByType["openai"].TodayTokens != 33 || summary.ByType["anthropic"].TodayTokens != 79 {
 		t.Fatalf("scoped type tokens=%+v", summary.ByType)
 	}
 
