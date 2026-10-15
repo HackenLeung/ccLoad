@@ -30,13 +30,34 @@
     <!-- 主内容区域 -->
     <main class="main-content">
       <div class="content-area">
+        <header class="page-header-bar animate-slide-up">
+          <div class="page-header-left">
+            <div class="page-header-badge" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M7 12l3-3 3 3 4-4"/>
+                <path d="M8 21l4-4 4 4"/>
+                <path d="M3 4h18"/>
+                <path d="M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
+              </svg>
+            </div>
+            <div class="page-header-text">
+              <div class="page-header-title-wrap">
+                <h1 class="page-header-title" data-i18n="nav.trend">请求趋势</h1>
+              </div>
+              <p class="page-header-subtitle" data-i18n="trend.pageSubtitle">调用次数、首字响应、耗时、Token 与费用走势</p>
+            </div>
+          </div>
+          <div class="page-header-right">
+            <span id="trend-refresh-status" class="refresh-status" role="status" aria-live="polite"></span>
+          </div>
+        </header>
+
         <div data-page-filters="trend"></div>
-        <div id="trend-refresh-status" class="refresh-status mb-4" role="status" aria-live="polite"></div>
 
         <!-- 趋势图表 -->
-        <section class="mb-8 trend-chart-section">
+        <section class="mb-2 trend-chart-section">
           <div class="glass-card trend-chart-card">
-            <div class="flex justify-between items-center mb-6 trend-chart-header">
+            <div class="flex justify-between items-center mb-2 trend-chart-header">
               <h3 class="text-lg font-semibold trend-chart-title">
                 <svg class="inline-block w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4"/>

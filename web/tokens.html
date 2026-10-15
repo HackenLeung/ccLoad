@@ -25,26 +25,31 @@
   <div class="app-container">
     <main class="main-content">
       <div class="content-area">
-        <header class="mt-2 mb-4">
-          <div class="glass-card tokens-hero-card">
-            <div class="tokens-hero-bar">
-              <div>
-                <h1 class="page-title mb-2" data-i18n="tokens.pageTitle">API访问令牌</h1>
-                <p class="page-subtitle tokens-page-subtitle" data-i18n="tokens.pageSubtitle">管理用于 API (/v1/*) 访问的令牌</p>
+        <header class="page-header-bar animate-slide-up">
+          <div class="page-header-left">
+            <div class="page-header-badge" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+              </svg>
+            </div>
+            <div class="page-header-text">
+              <div class="page-header-title-wrap">
+                <h1 class="page-header-title" data-i18n="tokens.pageTitle">API访问令牌</h1>
               </div>
-              <button type="button" data-action="show-create-modal" class="btn btn-primary tokens-create-btn" data-i18n="tokens.createToken">
+              <p class="page-header-subtitle" data-i18n="tokens.pageSubtitle">管理用于 API (/v1/*) 访问的令牌</p>
+            </div>
+          </div>
+          <div class="page-header-right">
+            <div class="page-header-range">
+              <div id="tokens-time-range" class="time-range-selector"></div>
+            </div>
+            <div class="page-header-actions">
+              <button type="button" data-action="show-create-modal" class="btn btn-primary btn-sm" data-i18n="tokens.createToken">
                 + 创建令牌
               </button>
             </div>
           </div>
         </header>
-
-        <!-- 时间范围选择器 -->
-        <section class="mb-2">
-          <div class="time-range-container">
-            <div id="tokens-time-range" class="time-range-selector"></div>
-          </div>
-        </section>
 
         <section>
           <!-- 令牌表格 -->

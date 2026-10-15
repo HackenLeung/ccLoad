@@ -34,7 +34,24 @@
   <div class="app-container">
     <main class="main-content">
       <div class="content-area">
-        <section id="tokenModelTestCard" class="glass-card token-model-test-card mt-2 mb-2" hidden>
+        <header class="page-header-bar animate-slide-up">
+          <div class="page-header-left">
+            <div class="page-header-badge" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 12l2 2 4-4"/>
+                <circle cx="12" cy="12" r="9"/>
+              </svg>
+            </div>
+            <div class="page-header-text">
+              <div class="page-header-title-wrap">
+                <h1 class="page-header-title" data-i18n="nav.modelTest">模型测试</h1>
+              </div>
+              <p class="page-header-subtitle" data-i18n="modelTest.pageSubtitle">按对话、渠道或模型发起真实链路测试</p>
+            </div>
+          </div>
+        </header>
+
+        <section id="tokenModelTestCard" class="glass-card token-model-test-card mb-2" hidden>
           <header class="token-model-test-header">
             <div>
               <h1 data-i18n="modelTest.tokenTitle">API Token 模型测试</h1>
@@ -71,7 +88,7 @@
           </div>
           <pre id="tokenModelTestOutput" class="upstream-pre token-model-test-output" data-i18n="modelTest.tokenOutputHint">响应将显示在这里</pre>
         </section>
-        <section id="modelTestCard" class="glass-card mt-2 mb-2 overflow-visible">
+        <section id="modelTestCard" class="glass-card mb-2 overflow-visible">
           <!-- 模式切换 -->
           <div class="model-test-mode-header">
             <div class="model-test-tabs">

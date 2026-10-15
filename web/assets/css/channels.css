@@ -680,29 +680,11 @@
       font-weight: 700;
     }
 
-    .channel-page-hero {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-
-    .channel-page-actions {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    .channel-page-action-btn {
-      padding: 8px 16px;
-      font-size: 14px;
-    }
-
     .channel-filter-action-btn {
-      padding: 8px 16px;
-      font-size: 14px;
+      padding: 4px 12px;
+      font-size: 12px;
+      min-height: 28px;
+      border-radius: var(--radius-sm);
     }
 
     .channel-search-control {
@@ -1287,14 +1269,14 @@
     }
 
     .channel-table thead th {
-      height: 44px;
-      padding: 8px 10px;
+      height: 32px;
+      padding: 6px 10px;
       white-space: nowrap;
       user-select: none;
       text-align: center;
       background: var(--surface-bg-muted);
       color: var(--neutral-900);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
       border-bottom: 1px solid var(--surface-border);
     }
@@ -1322,9 +1304,10 @@
     }
 
 
+    /* 行高只做下限：内容多（健康条、失败详情、倍率角标）时按内容自然撑高 */
     .channel-table tbody tr.channel-table-row,
     .channel-table tbody tr.channel-table-row > td {
-      height: 90px;
+      height: 52px;
     }
 
     .channel-table tbody tr {
@@ -2344,11 +2327,11 @@
     .channel-type-tab-bar {
       display: flex;
       gap: 2px;
-      padding: 4px 12px;
+      padding: 3px 8px;
       margin-bottom: var(--space-2, 8px);
       background: var(--glass-bg);
       border: 1px solid var(--glass-border);
-      border-radius: 12px;
+      border-radius: var(--radius-lg);
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
       scrollbar-width: none;
@@ -2359,11 +2342,11 @@
     }
 
     .channel-type-tab {
-      padding: 8px 20px;
-      border-radius: 8px;
+      padding: 5px 14px;
+      border-radius: var(--radius-sm);
       color: var(--neutral-600);
-      font-weight: 400;
-      font-size: 14px;
+      font-weight: 500;
+      font-size: 13px;
       line-height: 1.5;
       cursor: pointer;
       user-select: none;
@@ -3794,31 +3777,18 @@
     }
 
     @media (max-width: 768px) {
-      .channel-page-hero {
-        gap: 10px;
-      }
-
-      .content-area > header .glass-card {
-        padding: var(--space-4) !important;
-      }
-
-      .channel-page-hero .page-subtitle {
-        font-size: var(--text-sm);
-        line-height: 1.5;
-      }
-
-      .channel-page-actions {
+      .page-header-actions {
         width: 100%;
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 8px;
       }
 
-      .channel-page-action-btn {
+      .page-header-actions .btn {
         width: 100%;
         padding: 6px 8px;
         font-size: var(--text-xs);
-        min-height: 36px;
+        min-height: 32px;
         white-space: nowrap;
       }
 

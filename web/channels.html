@@ -48,32 +48,45 @@
   <div class="app-container">
     <main class="main-content">
       <div class="content-area">
-        <header class="mt-2 mb-2">
-          <div class="glass-card" style="padding: var(--space-6);">
-            <div class="channel-page-hero">
-              <p class="page-subtitle" style="margin: 0;" data-i18n="channels.description">
-                配置API渠道、优先级和模型支持（<b>优先请求高优先级渠道，相同优先级按Key数量加权随机</b>）</p>
-              <div class="channel-page-actions">
-                <button id="exportCsvBtn" type="button" class="btn btn-secondary channel-page-action-btn"
-                  data-i18n-title="channels.exportCsvTitle"
-                  title="导出渠道列表为CSV">
-                  <span data-i18n="channels.exportCsv">导出 CSV</span>
-                </button>
-                <button id="importCsvBtn" type="button" class="btn btn-secondary channel-page-action-btn"
-                  data-i18n-title="channels.importCsvTitle"
-                  title="从CSV导入渠道">
-                  <span data-i18n="channels.importCsv">导入 CSV</span>
-                </button>
-                <button id="addChannelBtn" type="button" data-action="show-add-modal" class="btn btn-primary channel-page-action-btn"
-                  data-i18n-title="channels.addChannelTitle" title="添加新渠道">
-                  <span data-i18n="channels.addChannel">+ 添加渠道</span>
-                </button>
-                <button id="visionPoolBtn" type="button" class="btn btn-secondary channel-page-action-btn"
-                  data-i18n-title="channels.visionPoolTitle" title="管理视觉模型池">
-                  <span data-i18n="channels.visionPool">视觉模型池</span>
-                </button>
-                <input type="file" id="importCsvInput" accept=".csv" style="display: none;" />
+        <header class="page-header-bar animate-slide-up">
+          <div class="page-header-left">
+            <div class="page-header-badge" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="2"/>
+                <rect x="14" y="3" width="7" height="7" rx="2"/>
+                <rect x="3" y="14" width="7" height="7" rx="2"/>
+                <rect x="14" y="14" width="7" height="7" rx="2"/>
+              </svg>
+            </div>
+            <div class="page-header-text">
+              <div class="page-header-title-wrap">
+                <h1 class="page-header-title" data-i18n="nav.channels">渠道管理</h1>
               </div>
+              <p class="page-header-subtitle" data-i18n="channels.description">
+                配置API渠道、优先级和模型支持（优先请求高优先级渠道，相同优先级按Key数量加权随机）</p>
+            </div>
+          </div>
+          <div class="page-header-right">
+            <div class="page-header-actions">
+              <button id="exportCsvBtn" type="button" class="btn btn-secondary btn-sm"
+                data-i18n-title="channels.exportCsvTitle"
+                title="导出渠道列表为CSV">
+                <span data-i18n="channels.exportCsv">导出 CSV</span>
+              </button>
+              <button id="importCsvBtn" type="button" class="btn btn-secondary btn-sm"
+                data-i18n-title="channels.importCsvTitle"
+                title="从CSV导入渠道">
+                <span data-i18n="channels.importCsv">导入 CSV</span>
+              </button>
+              <button id="addChannelBtn" type="button" data-action="show-add-modal" class="btn btn-primary btn-sm"
+                data-i18n-title="channels.addChannelTitle" title="添加新渠道">
+                <span data-i18n="channels.addChannel">+ 添加渠道</span>
+              </button>
+              <button id="visionPoolBtn" type="button" class="btn btn-secondary btn-sm"
+                data-i18n-title="channels.visionPoolTitle" title="管理视觉模型池">
+                <span data-i18n="channels.visionPool">视觉模型池</span>
+              </button>
+              <input type="file" id="importCsvInput" accept=".csv" style="display: none;" />
             </div>
           </div>
         </header>

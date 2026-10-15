@@ -5,6 +5,7 @@ window.I18N_LOCALES['en'] = {
   // Common
   // ============================================================
   'common.save': 'Save',
+  'common.active': 'Healthy',
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.edit': 'Edit',
@@ -691,6 +692,7 @@ window.I18N_LOCALES['en'] = {
   // Statistics
   // ============================================================
   'stats.title': 'Statistics - Claude Code & Codex Proxy',
+  'stats.pageSubtitle': 'Per-channel requests, success rate, tokens and cost',
   'stats.channelType': 'Channel',
   'stats.timeRange': 'Time Range',
   'stats.channelId': 'Channel#',
@@ -768,6 +770,7 @@ window.I18N_LOCALES['en'] = {
   // Trends
   // ============================================================
   'trend.title': 'Trends - Claude Code & Codex Proxy',
+  'trend.pageSubtitle': 'Requests, first-byte latency, duration, tokens and cost over time',
   'trend.chartTitle': 'Request Trend Chart',
   'trend.allModels': 'All Models',
   'trend.typeCount': 'Call Count',
@@ -819,6 +822,7 @@ window.I18N_LOCALES['en'] = {
   // Logs
   // ============================================================
   'logs.title': 'Request Logs - Claude Code & Codex Proxy',
+  'logs.pageSubtitle': 'Per-request detail: channel, status, latency and cost',
   'logs.statusCode': 'Status',
   'logs.logSource': 'Source',
   'logs.statusPlaceholder': 'e.g. 200 / 403',
@@ -929,6 +933,7 @@ window.I18N_LOCALES['en'] = {
   // Model Test
   // ============================================================
   'modelTest.title': 'Model Test - Claude Code & Codex Proxy',
+  'modelTest.pageSubtitle': 'Run real-path tests by chat, channel or model',
   'modelTest.channel': 'Channel',
   'modelTest.channelName': 'Channel',
   'modelTest.priority': 'Priority',
@@ -1068,6 +1073,7 @@ window.I18N_LOCALES['en'] = {
   // Settings
   // ============================================================
   'settings.title': 'System Settings - Claude Code & Codex Proxy',
+  'settings.pageSubtitle': 'Runtime options; click save to apply changes',
   'settings.configItem': 'Configuration',
   'settings.currentValue': 'Current Value',
   'settings.saveAll': 'Save All Changes',

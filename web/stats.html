@@ -30,13 +30,31 @@
     <!-- 主内容区域 -->
     <main class="main-content">
       <div class="content-area">
+        <header class="page-header-bar animate-slide-up">
+          <div class="page-header-left">
+            <div class="page-header-badge" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+              </svg>
+            </div>
+            <div class="page-header-text">
+              <div class="page-header-title-wrap">
+                <h1 class="page-header-title" data-i18n="nav.stats">调用统计</h1>
+              </div>
+              <p class="page-header-subtitle" data-i18n="stats.pageSubtitle">按渠道汇总调用量、成功率、Token 与成本</p>
+            </div>
+          </div>
+          <div class="page-header-right">
+            <span id="stats-refresh-status" class="refresh-status" role="status" aria-live="polite"></span>
+          </div>
+        </header>
+
         <div data-page-filters="stats"></div>
-        <div id="stats-refresh-status" class="refresh-status mb-4" role="status" aria-live="polite"></div>
 
         <!-- 统计详情表格 -->
-        <section class="mb-8">
+        <section class="mb-2">
 		          <div class="glass-card stats-detail-card">
-            <h3 class="section-title stats-detail-heading mb-6">
+            <h3 class="section-title stats-detail-heading mb-2">
               <span class="stats-detail-heading-main">
                 <svg class="inline-block w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>

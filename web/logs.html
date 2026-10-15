@@ -37,13 +37,28 @@
     <!-- 主内容区域 -->
     <main class="main-content">
       <div class="content-area">
+        <header class="page-header-bar animate-slide-up">
+          <div class="page-header-left">
+            <div class="page-header-badge" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 6h16M4 12h16M4 18h10"/>
+                <circle cx="19" cy="18" r="2"/>
+              </svg>
+            </div>
+            <div class="page-header-text">
+              <div class="page-header-title-wrap">
+                <h1 class="page-header-title" data-i18n="nav.logs">日志</h1>
+              </div>
+              <p class="page-header-subtitle" data-i18n="logs.pageSubtitle">逐条请求明细：渠道、状态、耗时与成本</p>
+            </div>
+          </div>
+        </header>
+
         <div data-page-filters="logs"></div>
 
-  
         <!-- 日志列表 -->
         <section class="mb-2">
           <div class="glass-card">
-           
             
             <!-- 日志表格 -->
             <div class="table-container logs-table-container mobile-card-table-container" style="position: relative;">

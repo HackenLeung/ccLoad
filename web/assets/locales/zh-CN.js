@@ -5,6 +5,7 @@ window.I18N_LOCALES['zh-CN'] = {
   // 通用
   // ============================================================
   'common.save': '保存',
+  'common.active': '正常',
   'common.cancel': '取消',
   'common.delete': '删除',
   'common.edit': '编辑',
@@ -690,6 +691,7 @@ window.I18N_LOCALES['zh-CN'] = {
   // 调用统计
   // ============================================================
   'stats.title': '调用统计 - Claude Code & Codex Proxy',
+  'stats.pageSubtitle': '按渠道汇总调用量、成功率、Token 与成本',
   'stats.channelType': '渠道类型',
   'stats.timeRange': '范围',
   'stats.channelId': '渠道ID',
@@ -767,6 +769,7 @@ window.I18N_LOCALES['zh-CN'] = {
   // 请求趋势
   // ============================================================
   'trend.title': '请求趋势 - Claude Code & Codex Proxy',
+  'trend.pageSubtitle': '调用次数、首字响应、耗时、Token 与费用走势',
   'trend.chartTitle': '请求趋势图表',
   'trend.allModels': '全部模型',
   'trend.typeCount': '调用次数',
@@ -818,6 +821,7 @@ window.I18N_LOCALES['zh-CN'] = {
   // 日志
   // ============================================================
   'logs.title': '请求日志 - Claude Code & Codex Proxy',
+  'logs.pageSubtitle': '逐条请求明细：渠道、状态、耗时与成本',
   'logs.statusCode': '状态码',
   'logs.logSource': '来源',
   'logs.statusPlaceholder': '如 200 / 403',
@@ -928,6 +932,7 @@ window.I18N_LOCALES['zh-CN'] = {
   // 模型测试
   // ============================================================
   'modelTest.title': '模型测试 - Claude Code & Codex Proxy',
+  'modelTest.pageSubtitle': '按对话、渠道或模型发起真实链路测试',
   'modelTest.channel': '渠道',
   'modelTest.channelName': '渠道',
   'modelTest.priority': '优先级',
@@ -1067,6 +1072,7 @@ window.I18N_LOCALES['zh-CN'] = {
   // 设置
   // ============================================================
   'settings.title': '系统设置 - Claude Code & Codex Proxy',
+  'settings.pageSubtitle': '运行时配置项，修改后点击保存生效',
   'settings.configItem': '配置项',
   'settings.currentValue': '当前值',
   'settings.saveAll': '保存所有更改',

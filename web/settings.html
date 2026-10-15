@@ -23,7 +23,24 @@
   <div class="app-container">
     <main class="main-content">
       <div class="content-area">
-        <section id="settings-group-nav-section" class="mt-2 mb-2 settings-group-nav-section" hidden>
+        <header class="page-header-bar animate-slide-up">
+          <div class="page-header-left">
+            <div class="page-header-badge" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1.08-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1.08 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+              </svg>
+            </div>
+            <div class="page-header-text">
+              <div class="page-header-title-wrap">
+                <h1 class="page-header-title" data-i18n="nav.settings">设置</h1>
+              </div>
+              <p class="page-header-subtitle" data-i18n="settings.pageSubtitle">运行时配置项，修改后点击保存生效</p>
+            </div>
+          </div>
+        </header>
+
+        <section id="settings-group-nav-section" class="mb-2 settings-group-nav-section" hidden>
           <div class="time-range-container settings-group-nav-container">
             <div id="settings-group-nav" class="time-range-selector settings-group-nav">
               <!-- 动态填充：分组快捷跳转 -->
@@ -31,7 +48,7 @@
           </div>
         </section>
 
-        <section class="glass-card mb-6">
+        <section class="glass-card mb-2">
           <div class="table-container settings-table-container mobile-card-table-container">
             <table class="modern-table settings-table mobile-card-table">
               <thead>
