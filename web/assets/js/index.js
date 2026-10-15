@@ -128,7 +128,7 @@
       const value = Number(seconds);
       if (!Number.isFinite(value) || value <= 0) return '--';
       if (value < 1) return `${Math.round(value * 1000)}ms`;
-      return `${value < 10 ? value.toFixed(2) : value.toFixed(1)}s`;
+      return `${value.toFixed(2)}s`;
     }
 
     // 更新单个渠道类型的统计
@@ -164,8 +164,8 @@
 
       displayNumber(`type-${type}-input`, inputTokens);
       displayNumber(`type-${type}-output`, outputTokens);
-      document.getElementById(`type-${type}-cost`).innerHTML = buildCostStackHtml(totalCost, effectiveCost, { tone: 'warning', inline: true });
-      document.getElementById(`type-${type}-cumulative-cost`).innerHTML = buildCostStackHtml(cumulativeCost, cumulativeEffectiveCost, { tone: 'warning', inline: true });
+      document.getElementById(`type-${type}-cost`).innerHTML = buildCostStackHtml(totalCost, effectiveCost, { tone: 'warning', inline: true }) || '<span class="cost-value">$0.00</span>';
+      document.getElementById(`type-${type}-cumulative-cost`).innerHTML = buildCostStackHtml(cumulativeCost, cumulativeEffectiveCost, { tone: 'warning', inline: true }) || '<span class="cost-value">$0.00</span>';
 
       // Claude和Codex类型的缓存统计（缓存读+缓存创建）
       if (type === 'anthropic' || type === 'codex') {

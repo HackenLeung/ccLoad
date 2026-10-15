@@ -1452,8 +1452,8 @@ window.WebAuth = window.WebAuth || {
   function formatCost(cost) {
     const value = Number(cost);
     if (!Number.isFinite(value)) return '';
-    if (value === 0) return '$0';
-    return '$' + value.toFixed(3);
+    if (value === 0) return '$0.00';
+    return '$' + value.toFixed(2);
   }
 
   /**
