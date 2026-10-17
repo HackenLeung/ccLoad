@@ -1073,7 +1073,8 @@ window.WebAuth = window.WebAuth || {
   }
 
   /**
-   * 渲染渠道类型单选按钮组（用于编辑渠道界面）
+   * 渲染渠道类型下拉框（用于编辑渠道界面）
+   * 同步渲染隐藏的 radio，兼容既有按 name="channelType" 读取选中值的代码。
    * @param {string} containerId - 容器元素ID
    * @param {string} selectedValue - 选中的值（默认'anthropic'）
    */
@@ -1085,16 +1086,39 @@ window.WebAuth = window.WebAuth || {
     }
 
     const types = await getChannelTypes();
+    const selected = types.some(type => type.value === selectedValue)
+      ? selectedValue
+      : (types[0]?.value || 'anthropic');
 
-    container.innerHTML = types.map(type => `
-      <label class="channel-editor-radio-option">
-        <input type="radio"
-               name="channelType"
-               value="${escapeHtml(type.value)}"
-               ${type.value === selectedValue ? 'checked' : ''}>
-        <span title="${escapeHtml(type.description)}">${escapeHtml(type.display_name)}</span>
-      </label>
-    `).join('');
+    container.innerHTML = `
+      <select id="channelTypeSelect" name="channelType" class="channel-editor-select">
+        ${types.map(type => `
+          <option value="${escapeHtml(type.value)}"
+                  ${type.value === selected ? 'selected' : ''}
+                  title="${escapeHtml(type.description)}">
+            ${escapeHtml(type.display_name)}
+          </option>
+        `).join('')}
+      </select>
+      <span class="channel-type-radio-compat" hidden>
+        ${types.map(type => `
+          <input type="radio"
+                 name="channelType"
+                 value="${escapeHtml(type.value)}"
+                 ${type.value === selected ? 'checked' : ''}>
+        `).join('')}
+      </span>
+    `;
+
+    const select = container.querySelector('select[name="channelType"]');
+    if (!select) return;
+    const syncRadios = () => {
+      container.querySelectorAll('input[name="channelType"]').forEach(radio => {
+        radio.checked = radio.value === select.value;
+      });
+    };
+    select.addEventListener('change', syncRadios);
+    syncRadios();
   }
 
   /**

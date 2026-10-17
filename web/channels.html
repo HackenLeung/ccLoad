@@ -331,8 +331,14 @@
                 <!-- 动态加载渠道类型 -->
               </div>
             </div>
-          </div>
-          <div class="channel-editor-primary-row">
+
+            <div class="channel-editor-primary-field channel-editor-primary-field--mode">
+              <label class="form-label channel-editor-inline-label"
+                data-i18n="channels.modal.protocolTransformMode">转换方式</label>
+              <div class="channel-editor-radio-group" id="protocolTransformModeContainer">
+                <!-- 动态渲染转换方式选项 -->
+              </div>
+            </div>
             <div class="channel-editor-primary-field channel-editor-primary-field--transforms">
               <div class="channel-editor-inline-group">
                 <label class="form-label channel-editor-inline-label"
@@ -340,13 +346,6 @@
                 <div class="channel-editor-radio-group" id="protocolTransformsContainer">
                   <!-- 动态渲染协议转换选项 -->
                 </div>
-              </div>
-            </div>
-            <div class="channel-editor-primary-field channel-editor-primary-field--mode">
-              <label class="form-label channel-editor-inline-label"
-                data-i18n="channels.modal.protocolTransformMode">转换方式</label>
-              <div class="channel-editor-radio-group" id="protocolTransformModeContainer">
-                <!-- 动态渲染转换方式选项 -->
               </div>
             </div>
           </div>
@@ -361,16 +360,22 @@
           </div>
         </div>
 
+        <div class="channel-editor-connections">
         <div class="form-group channel-editor-group channel-editor-group--urls">
           <!-- API URL和Key策略在第二行 -->
           <div>
             <div class="channel-editor-section-header channel-editor-section-header--inline">
-              <label class="form-label channel-editor-section-title">
+              <div class="form-label channel-editor-section-title">
                 <span data-i18n="channels.apiUrl">API URL *</span> <span class="models-hint channel-editor-section-meta"><span data-i18n="channels.keyCountPrefix">共</span> <span
                     id="inlineUrlCount">0</span> <span data-i18n="channels.urlCountSuffix">个URL</span></span>
-                <span class="models-hint channel-editor-section-meta channel-editor-exact-url-hint"
-                  data-i18n="channels.exactUrlMarkerHint">URL 末尾 # 表示完整上游请求地址，不自动追加协议路径</span>
-              </label>
+                <details class="channel-editor-help">
+                  <summary data-i18n-aria-label="channels.urlHelp" aria-label="URL 说明">ⓘ</summary>
+                  <div class="channel-editor-help-content">
+                    <p data-i18n="channels.exactUrlMarkerHint">URL 末尾 # 表示完整上游请求地址，不自动追加协议路径</p>
+                    <p data-i18n="channels.multiUrlStrategyHint">多URL时自动启用智能调度：基于延迟加权随机分发请求，失败URL独立冷却（2min→30min指数退避），优先探索未测试的URL</p>
+                  </div>
+                </details>
+              </div>
               <div class="channel-editor-section-actions">
                 <button type="button" class="btn btn-secondary btn-sm channel-editor-action-btn" data-action="add-inline-url"
                   data-i18n-title="channels.addUrlTitle" title="添加URL">
@@ -419,7 +424,6 @@
                     <th class="inline-url-col-url">
                       <div class="inline-url-header">
                         <span data-i18n="channels.tableApiUrl">API URL</span>
-                        <span class="models-hint inline-url-header-hint" data-i18n="channels.multiUrlStrategyHint">多URL时自动启用智能调度：基于延迟加权随机分发请求，失败URL独立冷却（2min→30min指数退避），优先探索未测试的URL</span>
                       </div>
                     </th>
                     <th class="inline-url-col-exact" data-i18n="channels.fullUrl">完整URL</th>
@@ -454,7 +458,7 @@
                     <span data-i18n="channels.keyStrategyRoundRobin">轮询</span>
                   </label>
                 </div>
-                <span class="models-hint" data-i18n="channels.keyDragSortHint">拖动API Key可排序</span>
+                <span class="channel-editor-key-help" data-i18n-title="channels.keyDragSortHint" title="拖动API Key可排序">↕</span>
               </div>
             </div>
             <div class="channel-editor-section-actions channel-editor-section-actions--keys">
@@ -523,7 +527,7 @@
             <table class="inline-table mobile-inline-table inline-key-table">
               <thead>
                 <tr>
-                  <th style="width: 70px;">
+                  <th class="inline-key-heading-select">
                     <div style="display: flex; align-items: center; gap: 6px;">
                       <input type="checkbox" id="selectAllKeys" data-change-action="toggle-select-all-keys"
                         style="width: 16px; height: 16px;" data-i18n-title="common.selectAll" title="全选/取消全选">
@@ -531,8 +535,8 @@
                     </div>
                   </th>
                   <th data-i18n="channels.tableApiKey">API Key</th>
-                  <th style="width: 220px;" data-i18n="channels.tableApiKeyNote">备注</th>
-                  <th style="width: 200px;">
+                  <th class="inline-key-heading-note" data-i18n="channels.tableApiKeyNote">备注</th>
+                  <th class="inline-key-heading-status">
                     <select id="keyStatusFilter" class="modal-inline-select" data-change-action="filter-keys-by-status"
                       style="width: 100%; padding: 4px 8px; border: 1px solid var(--surface-border-strong); border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: var(--field-bg); color: var(--neutral-900);">
                       <option value="all" data-i18n="channels.keyStatusAll">全部</option>
@@ -541,7 +545,7 @@
                       <option value="disabled" data-i18n="channels.keyStatusDisabled">已禁用</option>
                     </select>
                   </th>
-                  <th style="width: 80px;"></th>
+                  <th class="inline-key-heading-actions"></th>
                 </tr>
               </thead>
               <tbody id="inlineKeyTableBody">
@@ -549,6 +553,7 @@
               </tbody>
             </table>
           </div>
+        </div>
         </div>
         <div class="form-group channel-editor-group channel-editor-group--models">
           <!-- 模型配置标签行：包含标签、添加按钮组和删除按钮 -->
@@ -584,6 +589,14 @@
                   </svg>
                   <span data-i18n="channels.addModel">添加模型</span>
                 </button>
+                <button type="button" class="btn btn-secondary btn-sm" data-action="clear-all-models"
+                  data-i18n-title="channels.clearAllModelsTitle" title="清空全部模型">
+                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M3.5 3.5L10.5 10.5M10.5 3.5L3.5 10.5" stroke="currentColor" stroke-width="1.4"
+                      stroke-linecap="round" />
+                  </svg>
+                  <span data-i18n="common.clear">清空</span>
+                </button>
               </div>
               <button type="button" id="batchLowercaseModelsBtn" data-action="batch-lowercase-models" disabled
                 data-i18n-title="channels.batchLowercaseModelsTitle" title="批量转换选中模型为小写"
@@ -609,31 +622,18 @@
             </div>
           </div>
 
-          <!-- 模型表格容器 -->
-          <div class="inline-table-container mobile-inline-table-container tall">
-            <table class="inline-table mobile-inline-table redirect-model-table">
-              <thead>
-                <tr>
-                  <th style="width: 70px;">
-                    <div style="display: flex; align-items: center; gap: 6px;">
-                      <input type="checkbox" id="selectAllModels" data-change-action="toggle-select-all-models"
-                        style="width: 16px; height: 16px;" data-i18n-title="common.selectAll" title="全选/取消全选">
-                      <span>#</span>
-                    </div>
-                  </th>
-                  <th style="width: 170px;" data-i18n="channels.modelRedirectSwitch">模型重定向</th>
-                  <th>
-                    <input type="text" id="modelFilterInput" class="table-filter-input"
-                      data-i18n-placeholder="channels.searchModelPlaceholder" placeholder="搜索模型名称..."
-                      data-input-action="filter-models-by-keyword">
-                  </th>
-                  <th style="width: 60px;"></th>
-                </tr>
-              </thead>
-              <tbody id="redirectTableBody">
-                <!-- 重定向行动态渲染 -->
-              </tbody>
-            </table>
+          <div class="model-grid-toolbar">
+            <label class="model-grid-select-all">
+              <input type="checkbox" id="selectAllModels" data-change-action="toggle-select-all-models">
+              <span data-i18n="common.selectAll">全选</span>
+            </label>
+            <input type="search" id="modelFilterInput" class="table-filter-input"
+              data-i18n-placeholder="channels.searchModelPlaceholder" placeholder="搜索模型名称..."
+              data-i18n-aria-label="channels.searchModelPlaceholder" aria-label="搜索模型名称"
+              data-input-action="filter-models-by-keyword">
+          </div>
+          <div id="redirectTableBody" class="model-grid" role="list" data-i18n-aria-label="channels.modal.modelConfig" aria-label="模型配置">
+            <!-- 模型卡片动态渲染 -->
           </div>
         </div>
         </div>
@@ -1432,34 +1432,36 @@
 
   <!-- 重定向规则行模板 -->
   <template id="tpl-redirect-row">
-    <tr class="mobile-inline-row redirect-row model-alias-row">
-      <td colspan="4">
-        <div class="model-alias-card-main">
-          <div class="redirect-row-select">
-            <input type="checkbox" class="model-checkbox redirect-row-checkbox" data-index="{{index}}">
+    <div class="redirect-row model-card" role="listitem">
+        <div class="model-card-header">
+          <label class="redirect-row-select">
+            <input type="checkbox" class="model-checkbox redirect-row-checkbox" data-index="{{index}}" aria-label="{{selectLabel}}">
             <span class="redirect-row-index">{{displayIndex}}</span>
-          </div>
+          </label>
+          <input type="text" class="redirect-from-input modal-inline-input" data-index="{{index}}" value="{{from}}"
+            aria-label="{{mobileLabelModel}} {{displayIndex}}" title="{{from}}" placeholder="grok-4.5">
+          <button type="button" class="model-config-toggle" aria-expanded="false" aria-controls="model-config-{{index}}" aria-label="{{configLabel}}">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h9m4 0h3M4 17h3m4 0h9M13 4v6M7 14v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="model-card-status"></div>
+        <div id="model-config-{{index}}" class="model-card-details" hidden>
+          <div class="model-card-options">
           <div class="model-redirect-switch-control">
             <label class="model-redirect-switch">
-              <input type="checkbox" class="redirect-enable-toggle" data-index="{{index}}">
+              <input type="checkbox" class="redirect-enable-toggle" data-index="{{index}}" aria-label="{{mobileLabelRedirect}}">
               <span class="model-redirect-switch-track"></span>
             </label>
-            <span class="model-redirect-switch-copy">{{redirectState}}</span>
+            <span class="model-redirect-switch-copy" data-i18n="channels.modelRedirectSwitch">模型重定向</span>
           </div>
           <div class="model-vision-assist-control">
             <label class="model-redirect-switch">
-              <input type="checkbox" class="vision-assist-toggle" data-index="{{index}}">
+              <input type="checkbox" class="vision-assist-toggle" data-index="{{index}}" data-i18n-aria-label="channels.visionAssist" aria-label="图片转文字辅助">
               <span class="model-redirect-switch-track"></span>
             </label>
             <span class="model-redirect-switch-copy" data-i18n="channels.visionAssist">图片转文字辅助</span>
           </div>
-          <div class="redirect-model-field model-upstream-field">
-            <span class="model-upstream-label" data-i18n="channels.upstreamModel">上游模型</span>
-            <input type="text" class="redirect-from-input modal-inline-input" data-index="{{index}}" value="{{from}}" placeholder="grok-4.5">
-            <button type="button" class="lowercase-btn redirect-lowercase-btn" data-index="{{index}}" data-i18n-title="channels.toLowercase" title="转为小写">a</button>
           </div>
-          <button type="button" class="redirect-delete-btn" data-index="{{index}}" data-i18n-title="channels.deleteThisModel" title="删除此模型">×</button>
-        </div>
         <div class="model-alias-panel" hidden>
           <div class="model-alias-panel-header">
             <span><strong data-i18n="channels.publicModels">对外模型</strong> <span data-i18n="channels.publicModelsHint">对外名称按协议生效，上游模型名始终可直接请求</span></span>
@@ -1467,17 +1469,17 @@
           </div>
           <div class="model-protocol-alias-list"></div>
         </div>
-      </td>
-    </tr>
+          <div class="model-card-actions">
+            <button type="button" class="btn btn-secondary btn-sm lowercase-btn" data-index="{{index}}" data-i18n="channels.toLowercase">转为小写</button>
+            <button type="button" class="btn btn-secondary btn-sm redirect-delete-btn" data-index="{{index}}" data-i18n="channels.deleteThisModel">删除此模型</button>
+          </div>
+        </div>
+    </div>
   </template>
 
   <!-- 重定向规则空状态模板 -->
   <template id="tpl-redirect-empty">
-    <tr>
-      <td colspan="4" class="redirect-empty-cell">
-        {{message}}
-      </td>
-    </tr>
+    <div class="model-grid-empty" role="status">{{message}}</div>
   </template>
 
   <div id="visionPoolModal" class="modal">

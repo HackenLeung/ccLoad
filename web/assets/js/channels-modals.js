@@ -1,4 +1,6 @@
 const DEFAULT_CHANNEL_PROXY_URL = 'http://127.0.0.1:7890';
+// 按模型对象记录展开状态，筛选、删除和协议切换后不会错位到其他模型。
+const expandedModelCards = new WeakSet();
 
 function syncChannelProxyInputState({ fillDefault = false } = {}) {
   const checkbox = document.getElementById('channelUseProxy');
@@ -156,6 +158,15 @@ function getSelectedProtocolTransforms(channelType) {
   return normalizeProtocolTransformSelection(channelType, selectedValues);
 }
 
+// 同步渠道类型下拉框与隐藏 radio（兼容仍按 name=channelType 读取的旧逻辑）。
+function setChannelTypeValue(value) {
+  const select = document.getElementById('channelTypeSelect');
+  if (select) select.value = value;
+  document.querySelectorAll('input[name="channelType"]').forEach(radio => {
+    radio.checked = radio.value === value;
+  });
+}
+
 function renderProtocolTransformModeOptions(selectedValue = 'upstream') {
   const container = document.getElementById('protocolTransformModeContainer');
   if (!container) return;
@@ -164,49 +175,55 @@ function renderProtocolTransformModeOptions(selectedValue = 'upstream') {
   const selectedMode = exactURL
     ? 'local'
     : window.ChannelProtocolConfig.normalizeProtocolTransformMode(selectedValue);
-  container.innerHTML = window.ChannelProtocolConfig.PROTOCOL_TRANSFORM_MODES.map((mode) => {
-    const descriptionKey = mode === 'local'
+  const descriptionKey = selectedMode === 'local'
+    ? 'channels.protocolTransformModeLocalDescription'
+    : 'channels.protocolTransformModeUpstreamDescription';
+  const description = protocolTransformModeDescription(selectedMode);
+  const escapedDescription = typeof window.escapeHtml === 'function'
+    ? window.escapeHtml(description)
+    : description;
+
+  container.innerHTML = `
+    <select id="protocolTransformModeSelect" name="protocolTransformMode" class="channel-editor-select">
+      ${window.ChannelProtocolConfig.PROTOCOL_TRANSFORM_MODES.map((mode) => `
+        <option value="${mode}"
+                ${exactURL && mode === 'upstream' ? 'disabled' : ''}
+                ${mode === selectedMode ? 'selected' : ''}>
+          ${protocolTransformModeLabel(mode)}
+        </option>
+      `).join('')}
+    </select>
+    <span class="protocol-transform-mode-help"
+          role="img"
+          tabindex="0"
+          data-i18n-aria-label="${descriptionKey}"
+          data-tooltip="${escapedDescription}"
+          aria-label="${escapedDescription}">i</span>
+  `;
+
+  const select = container.querySelector('select[name="protocolTransformMode"]');
+  const help = container.querySelector('.protocol-transform-mode-help');
+  if (!select || !help) return;
+  const syncHelp = () => {
+    const key = select.value === 'local'
       ? 'channels.protocolTransformModeLocalDescription'
       : 'channels.protocolTransformModeUpstreamDescription';
-    const description = protocolTransformModeDescription(mode);
-    const escapedDescription = typeof window.escapeHtml === 'function'
-      ? window.escapeHtml(description)
-      : description;
-    return `
-      <span class="channel-editor-radio-option-with-help">
-        <label class="channel-editor-radio-option">
-          <input type="radio"
-                 name="protocolTransformMode"
-                 value="${mode}"
-                 ${exactURL && mode === 'upstream' ? 'disabled' : ''}
-                 ${mode === selectedMode ? 'checked' : ''}
-          >
-          <span>${protocolTransformModeLabel(mode)}</span>
-        </label>
-        <span class="protocol-transform-mode-help"
-              role="img"
-              tabindex="0"
-              data-i18n-aria-label="${descriptionKey}"
-              data-tooltip="${escapedDescription}"
-              aria-label="${escapedDescription}">i</span>
-      </span>
-    `;
-  }).join('');
+    const text = protocolTransformModeDescription(select.value);
+    help.dataset.i18nAriaLabel = key;
+    help.dataset.tooltip = text;
+    help.setAttribute('aria-label', text);
+  };
+  select.addEventListener('change', syncHelp);
+  syncHelp();
 }
 
 function syncProtocolTransformModeForURLs() {
   const exactURL = hasExactURLInEditor();
-  const localInput = document.querySelector('input[name="protocolTransformMode"][value="local"]');
-  const upstreamInput = document.querySelector('input[name="protocolTransformMode"][value="upstream"]');
-
-  if (upstreamInput) {
-    upstreamInput.disabled = exactURL;
-  }
-  if (exactURL && upstreamInput && upstreamInput.checked) {
-    upstreamInput.checked = false;
-  }
-  if (exactURL && localInput) {
-    localInput.checked = true;
+  const select = document.getElementById('protocolTransformModeSelect');
+  if (select) {
+    const upstreamOption = select.querySelector('option[value="upstream"]');
+    if (upstreamOption) upstreamOption.disabled = exactURL;
+    if (exactURL) select.value = 'local';
   }
   syncProtocolCapabilityVisibility();
 }
@@ -215,7 +232,10 @@ function getSelectedProtocolTransformMode() {
   if (hasExactURLInEditor()) {
     return 'local';
   }
-  const selected = document.querySelector('input[name="protocolTransformMode"]:checked')?.value;
+  const select = document.getElementById('protocolTransformModeSelect');
+  const selected = select
+    ? select.value
+    : document.querySelector('input[name="protocolTransformMode"]:checked')?.value;
   return window.ChannelProtocolConfig.normalizeProtocolTransformMode(selected);
 }
 
@@ -464,6 +484,7 @@ function initChannelEditorActions() {
         'add-common-models': () => invokeChannelEditorAction('addCommonModels'),
         'fetch-models-from-api': () => invokeChannelEditorAction('fetchModelsFromAPI'),
         'add-redirect-row': () => invokeChannelEditorAction('addRedirectRow'),
+        'clear-all-models': () => invokeChannelEditorAction('clearAllModels'),
         'batch-lowercase-models': () => invokeChannelEditorAction('batchLowercaseSelectedModels'),
         'batch-delete-models': () => invokeChannelEditorAction('batchDeleteSelectedModels'),
         'close-delete-modal': () => invokeChannelEditorAction('closeDeleteModal'),
@@ -554,7 +575,7 @@ async function showAddModal() {
   document.getElementById('channelEnabled').checked = true;
   document.getElementById('channelScheduledCheckEnabled').checked = false;
   document.getElementById('channelScheduledCheckModel').value = '';
-  document.querySelector('input[name="channelType"][value="anthropic"]').checked = true;
+  setChannelTypeValue('anthropic');
   renderProtocolTransformOptions('anthropic', []);
   renderProtocolTransformModeOptions('upstream');
   renderProtocolCapabilityOptions(null);
@@ -1599,10 +1620,7 @@ async function copyChannel(id, name) {
   renderInlineKeyTable();
 
   const channelType = channel.channel_type || 'anthropic';
-  const radioButton = document.querySelector(`input[name="channelType"][value="${channelType}"]`);
-  if (radioButton) {
-    radioButton.checked = true;
-  }
+  setChannelTypeValue(channelType);
   scheduleChannelDuplicateHintCheck();
   const keyStrategy = channel.key_strategy || 'sequential';
   const strategyRadio = document.querySelector(`input[name="keyStrategy"][value="${keyStrategy}"]`);
@@ -2139,9 +2157,8 @@ function createRedirectRow(redirect, index) {
     index: index,
     displayIndex: index + 1,
     from: modelName,
-    redirectState: redirect.redirect_enabled
-      ? window.t('channels.redirectEnabled')
-      : window.t('channels.redirectDisabled'),
+    selectLabel: `${window.t('channels.selectModel')} ${modelName || index + 1}`,
+    configLabel: `${window.t('channels.modal.modelConfig')}: ${modelName || index + 1}`,
     mobileLabelModel: window.t('channels.upstreamModel'),
     mobileLabelRedirect: window.t('channels.modelRedirectSwitch'),
     mobileLabelActions: window.t('common.actions')
@@ -2159,12 +2176,49 @@ function createRedirectRow(redirect, index) {
     checkbox.checked = selectedModelIndices.has(index);
   }
 
+  const details = row.querySelector('.model-card-details');
+  const configButton = row.querySelector('.model-config-toggle');
+  if (details && configButton) {
+    const expanded = expandedModelCards.has(redirect);
+    details.hidden = !expanded;
+    configButton.setAttribute('aria-expanded', String(expanded));
+    configButton.addEventListener('click', () => {
+      const open = details.hidden;
+      details.hidden = !open;
+      configButton.setAttribute('aria-expanded', String(open));
+      if (open) {
+        expandedModelCards.add(redirect);
+        renderProtocolAliases(row, redirect, index);
+      } else {
+        expandedModelCards.delete(redirect);
+      }
+    });
+  }
+
+  const updateStatus = () => {
+    const status = row.querySelector('.model-card-status');
+    if (!status) return;
+    const labels = [];
+    if (redirect.redirect_enabled) labels.push('channels.modelRedirectSwitch');
+    if (redirect.vision_assist_enabled) labels.push('channels.visionAssistEnabledShort');
+    status.classList.toggle('model-card-status--active', labels.length > 0);
+    if (!labels.length) labels.push('channels.modelDirect');
+    status.replaceChildren(...labels.map(key => {
+      const label = document.createElement('span');
+      label.dataset.i18n = key;
+      label.textContent = window.t(key);
+      return label;
+    }));
+  };
+  updateStatus();
+
   const toggle = row.querySelector('.redirect-enable-toggle');
   if (toggle) {
     toggle.checked = !!redirect.redirect_enabled;
     toggle.addEventListener('change', () => {
       setModelRedirectEnabled(redirect, toggle.checked);
-      renderRedirectTable();
+      renderProtocolAliases(row, redirect, index);
+      updateStatus();
       markChannelFormDirty();
     });
   }
@@ -2173,6 +2227,7 @@ function createRedirectRow(redirect, index) {
     visionAssistToggle.checked = !!redirect.vision_assist_enabled;
     visionAssistToggle.addEventListener('change', () => {
       redirect.vision_assist_enabled = visionAssistToggle.checked;
+      updateStatus();
       markChannelFormDirty();
     });
   }
@@ -2182,11 +2237,12 @@ function createRedirectRow(redirect, index) {
       getModelEditorProtocols().forEach(protocolName => {
         redirect.protocol_aliases[protocolName] = redirect.model ? [redirect.model] : [];
       });
-      renderRedirectTable();
+      renderProtocolAliases(row, redirect, index);
       markChannelFormDirty();
     });
   }
-  renderProtocolAliases(row, redirect, index);
+  if (redirect.redirect_enabled) ensureModelAliasesForVisibleProtocols(redirect);
+  if (expandedModelCards.has(redirect)) renderProtocolAliases(row, redirect, index);
 
   return row;
 }
@@ -2230,7 +2286,7 @@ function initRedirectTableEventDelegation() {
     const lowercaseBtn = e.target.closest('.lowercase-btn');
     if (lowercaseBtn) {
       const index = parseInt(lowercaseBtn.dataset.index, 10);
-      const row = lowercaseBtn.closest('tr');
+      const row = lowercaseBtn.closest('.redirect-row');
       const fromInput = row?.querySelector('.redirect-from-input');
       if (fromInput && fromInput.value) {
         const lowercased = fromInput.value.toLowerCase();
@@ -2280,6 +2336,8 @@ function renderRedirectTable() {
 
   // 初始化事件委托（仅一次）
   initRedirectTableEventDelegation();
+  updateSelectAllModelsCheckbox();
+  updateModelBatchDeleteButton();
 
   if (redirectTableData.length === 0) {
     const emptyRow = TemplateEngine.render('tpl-redirect-empty', {
@@ -2290,7 +2348,7 @@ function renderRedirectTable() {
       tbody.appendChild(emptyRow);
     } else {
       // 降级：模板不存在时使用简单HTML
-      tbody.innerHTML = `<tr><td colspan="4" style="padding: 20px; text-align: center; color: var(--neutral-500);">${window.t('channels.noModelConfig')}</td></tr>`;
+      tbody.innerHTML = `<div class="model-grid-empty" role="status">${window.t('channels.noModelConfig')}</div>`;
     }
     return;
   }
@@ -2299,7 +2357,7 @@ function renderRedirectTable() {
   const visibleIndices = getVisibleModelIndices();
 
   if (visibleIndices.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="padding: 20px; text-align: center; color: var(--neutral-500);">${window.t('channels.noMatchingModels')}</td></tr>`;
+    tbody.innerHTML = `<div class="model-grid-empty" role="status">${window.t('channels.noMatchingModels')}</div>`;
     return;
   }
 
@@ -2312,10 +2370,6 @@ function renderRedirectTable() {
 
   tbody.innerHTML = '';
   tbody.appendChild(fragment);
-
-  // 更新全选复选框和批量删除按钮状态
-  updateSelectAllModelsCheckbox();
-  updateModelBatchDeleteButton();
 
   // Translate dynamically rendered elements
   if (window.i18n && window.i18n.translatePage) {
@@ -2459,6 +2513,30 @@ function updateSelectAllModelsCheckbox() {
     checkbox.checked = false;
     checkbox.indeterminate = false;
   }
+}
+
+/**
+ * 清空全部模型配置
+ */
+async function clearAllModels() {
+  if (redirectTableData.length === 0) return;
+
+  const confirmed = await window.showConfirmDialog({
+    title: window.t('common.confirm'),
+    message: window.t('channels.confirmClearAllModels'),
+    danger: true
+  });
+  if (!confirmed) return;
+
+  redirectTableData = [];
+  selectedModelIndices.clear();
+  currentModelFilter = '';
+  const modelFilterInput = document.getElementById('modelFilterInput');
+  if (modelFilterInput) modelFilterInput.value = '';
+
+  updateModelBatchDeleteButton();
+  renderRedirectTable();
+  markChannelFormDirty();
 }
 
 /**
